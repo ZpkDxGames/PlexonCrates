@@ -65,26 +65,33 @@ public final class KeyService {
 
     public boolean matches(ItemStack candidate, String keyId) {
         if (candidate == null || candidate.getType().isAir()) return false;
-        return template(keyId).map(template -> ItemCodec.one(candidate).isSimilar(template)).orElse(false);
+        return template(keyId).map(template -> matches(candidate, template)).orElse(false);
     }
 
     public int count(Player player, String keyId) {
+        ItemStack template = template(keyId).orElse(null);
+        if (template == null) return 0;
+        return count(player, template);
+    }
+
+    private int count(Player player, ItemStack template) {
         int amount = 0;
         for (ItemStack item : player.getInventory().getStorageContents()) {
-            if (matches(item, keyId)) amount += item.getAmount();
+            if (matches(item, template)) amount += item.getAmount();
         }
         ItemStack offhand = player.getInventory().getItemInOffHand();
-        if (matches(offhand, keyId)) amount += offhand.getAmount();
+        if (matches(offhand, template)) amount += offhand.getAmount();
         return amount;
     }
 
     public boolean consume(Player player, String keyId, int requested) {
-        if (requested < 1 || count(player, keyId) < requested) return false;
+        ItemStack template = template(keyId).orElse(null);
+        if (template == null || requested < 1 || count(player, template) < requested) return false;
         int remaining = requested;
         ItemStack[] storage = player.getInventory().getStorageContents();
         for (int slot = 0; slot < storage.length && remaining > 0; slot++) {
             ItemStack item = storage[slot];
-            if (!matches(item, keyId)) continue;
+            if (!matches(item, template)) continue;
             int removed = Math.min(item.getAmount(), remaining);
             remaining -= removed;
             if (removed == item.getAmount()) storage[slot] = null;
@@ -99,6 +106,10 @@ public final class KeyService {
             else item.setAmount(item.getAmount() - removed);
         }
         return remaining == 0;
+    }
+
+    private static boolean matches(ItemStack candidate, ItemStack template) {
+        return candidate != null && !candidate.getType().isAir() && ItemCodec.one(candidate).isSimilar(template);
     }
 
     public void give(Player player, String keyId, int amount) {

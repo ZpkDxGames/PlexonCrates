@@ -48,10 +48,10 @@ jobs:
         run: |
           TAG="v${VERSION}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$JAR" "${JAR}.sha256" --clobber
-          else
-            gh release create "$TAG" "$JAR" "${JAR}.sha256" \
-              --target "$GITHUB_SHA" \
-              --title "PlexonCrates ${VERSION}" \
-              --notes-file "releases/${VERSION}.md"
+            echo "Release $TAG already exists; keeping its tag and assets immutable."
+            exit 0
           fi
+          gh release create "$TAG" "$JAR" "${JAR}.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "PlexonCrates ${VERSION}" \
+            --notes-file "releases/${VERSION}.md"

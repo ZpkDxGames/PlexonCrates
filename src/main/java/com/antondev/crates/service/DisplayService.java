@@ -83,6 +83,8 @@ public final class DisplayService {
             entity.setBillboard(Display.Billboard.CENTER);
             entity.setAlignment(TextDisplay.TextAlignment.CENTER);
             entity.setLineWidth(plugin.settings().hologramLineWidth());
+            // Display entities store this as a 64-block multiplier; config stays in blocks.
+            entity.setViewRange((float) Math.max(0.1, plugin.settings().hologramViewRange() / 64.0));
             entity.setShadowed(plugin.settings().hologramShadowed());
             entity.setSeeThrough(plugin.settings().hologramSeeThrough());
             entity.setPersistent(false);

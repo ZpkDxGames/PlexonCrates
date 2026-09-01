@@ -30,6 +30,10 @@ public final class OpeningService {
     }
 
     public boolean open(Player player, Crate crate, int amount, boolean forced) {
+        if (!forced && !player.hasPermission("plexoncrates.use")) {
+            plugin.messages().send(player, "no-permission");
+            return false;
+        }
         if (!plugin.settings().enabled() || !crate.enabled()) {
             plugin.messages().send(player, "disabled");
             return false;

@@ -38,6 +38,9 @@ class PluginIntegrationTest {
             assertEquals(100.0, crate.rewards().values().stream().mapToDouble(reward -> reward.weight()).sum(), 0.00001);
             assertTrue(plugin.keys().template(crate.keyId()).isPresent());
         }
+        var shulkers = plugin.crates().find("epic").orElseThrow().rewards().get("shulker_pack").itemCopies();
+        assertEquals(4, shulkers.stream().mapToInt(item -> item.getAmount()).sum());
+        assertTrue(shulkers.stream().allMatch(item -> item.getAmount() <= item.getMaxStackSize()));
     }
 
     @Test

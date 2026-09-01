@@ -150,7 +150,7 @@ public final class MenuService implements Listener {
         inventory.setItem(menus.slot("opening.marker-top-slot"), menus.item("opening.marker"));
         inventory.setItem(menus.slot("opening.marker-bottom-slot"), menus.item("opening.marker"));
         List<Integer> rail = menus.slots("opening.rail-slots");
-        List<CrateReward> visuals = crate.orderedRewards().stream().filter(CrateReward::enabled).toList();
+        List<CrateReward> visuals = crate.orderedRewards().stream().filter(reward -> reward.eligible(player)).toList();
         if (visuals.isEmpty()) visuals = List.of(selected);
         for (int slot : rail) inventory.setItem(slot, randomDisplay(visuals));
         player.openInventory(inventory);

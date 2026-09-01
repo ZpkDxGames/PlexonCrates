@@ -29,6 +29,11 @@ public final class CrateListener implements Listener {
         if (event.getHand() != EquipmentSlot.HAND || event.getClickedBlock() == null) return;
         var link = plugin.locations().at(event.getClickedBlock()).orElse(null);
         if (link == null) return;
+        if (!event.getPlayer().hasPermission("plexoncrates.use")) {
+            if (plugin.settings().cancelVanillaUse()) event.setCancelled(true);
+            plugin.messages().send(event.getPlayer(), "no-permission");
+            return;
+        }
         Crate crate = plugin.crates().find(link.crateId()).orElse(null);
         if (crate == null) return;
         switch (event.getAction()) {

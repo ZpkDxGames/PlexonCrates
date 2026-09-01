@@ -204,7 +204,7 @@ public final class CrateRegistry {
             ConfigurationSection itemSection = yaml.getConfigurationSection(path + ".items");
             if (itemSection != null) {
                 for (String itemId : itemSection.getKeys(false)) {
-                    items.add(ItemCodec.read(itemSection.getConfigurationSection(itemId)));
+                    items.addAll(ItemCodec.readMany(itemSection.getConfigurationSection(itemId)));
                 }
             }
             List<String> commands = yaml.getStringList(path + ".commands").stream()

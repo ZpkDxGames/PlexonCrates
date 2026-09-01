@@ -27,6 +27,27 @@ public final class ItemCodec {
     }
 
     public static ItemStack read(ConfigurationSection section, TagResolver... tags) {
+        return read(section, null, tags);
+    }
+
+    public static java.util.List<ItemStack> readMany(ConfigurationSection section, TagResolver... tags) {
+        if (section == null) throw new IllegalArgumentException("Missing item section");
+        if (!section.contains("amount")) return java.util.List.of(read(section, tags));
+        int total = section.getInt("amount");
+        if (total < 1 || total > 6_400) throw new IllegalArgumentException("Reward item amount must be between 1 and 6400");
+        ItemStack template = read(section, 1, tags);
+        var stacks = new ArrayList<ItemStack>();
+        int remaining = total;
+        while (remaining > 0) {
+            ItemStack stack = template.clone();
+            stack.setAmount(Math.min(remaining, stack.getMaxStackSize()));
+            remaining -= stack.getAmount();
+            stacks.add(stack);
+        }
+        return java.util.List.copyOf(stacks);
+    }
+
+    private static ItemStack read(ConfigurationSection section, Integer amountOverride, TagResolver... tags) {
         if (section == null) throw new IllegalArgumentException("Missing item section");
         ItemStack item;
         String encoded = section.getString("base64", "");
@@ -42,7 +63,7 @@ public final class ItemCodec {
             item = new ItemStack(material(section.getString("material", "PAPER")));
         }
 
-        int amount = section.contains("amount") ? section.getInt("amount") : item.getAmount();
+        int amount = amountOverride != null ? amountOverride : section.contains("amount") ? section.getInt("amount") : item.getAmount();
         if (amount < 1 || amount > item.getMaxStackSize()) {
             throw new IllegalArgumentException("Item amount must be between 1 and " + item.getMaxStackSize());
         }

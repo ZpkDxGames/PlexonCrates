@@ -1,0 +1,107 @@
+config-version: 1
+id: epic
+enabled: true
+display-name: <gradient:#B883F5:#E2B3FF><bold>Epic Crate</bold></gradient>
+key-id: epic
+permission: ''
+open-cooldown-seconds: 2
+icon:
+  material: RESPAWN_ANCHOR
+  name: <gradient:#B883F5:#E2B3FF><bold>Epic Crate</bold></gradient>
+  lore:
+  - ''
+  - <gray>Powerful equipment and exceptional materials.</gray>
+  - <gray>Key:</gray> <gradient:#A96AF2:#E8B8FF><bold>Epic</bold></gradient>
+  - ''
+  - <white>Left-click</white> <gray>to preview.</gray>
+  - <green>Right-click</green> <gray>to open.</gray>
+  glow: true
+hologram:
+  lines:
+  - <gradient:#B883F5:#E2B3FF><bold>EPIC CRATE</bold></gradient>
+  - <gray>Left-click to preview</gray>
+  - <light_purple>Right-click with an Epic Key</light_purple>
+broadcast: ''
+rewards:
+  diamond_reserve:
+    enabled: true
+    display-name: <aqua><bold>Diamond Reserve</bold></aqua>
+    weight: 27
+    items:
+      diamonds:
+        material: DIAMOND
+        amount: 18
+    commands: []
+  emerald_treasury:
+    enabled: true
+    display-name: <green><bold>Emerald Treasury</bold></green>
+    weight: 22
+    items:
+      emeralds:
+        material: EMERALD
+        amount: 36
+    commands: []
+  experience_wave:
+    enabled: true
+    display-name: <green><bold>1,500 Experience</bold></green>
+    weight: 18
+    display:
+      material: EXPERIENCE_BOTTLE
+      amount: 1
+    items: {}
+    commands:
+    - experience add %player% 1500 points
+  ancient_haul:
+    enabled: true
+    display-name: <dark_purple><bold>Ancient Haul</bold></dark_purple>
+    weight: 14
+    items:
+      debris:
+        material: ANCIENT_DEBRIS
+        amount: 7
+    commands: []
+  shulker_pack:
+    enabled: true
+    display-name: <light_purple><bold>Shulker Pack</bold></light_purple>
+    weight: 9
+    items:
+      shulkers:
+        material: SHULKER_BOX
+        amount: 4
+    commands: []
+  master_pickaxe:
+    enabled: true
+    display-name: <light_purple><bold>Master Pickaxe</bold></light_purple>
+    weight: 6
+    items:
+      pickaxe:
+        material: DIAMOND_PICKAXE
+        amount: 1
+        name: <gradient:#A96AF2:#E8B8FF><bold>Epic Master Pickaxe</bold></gradient>
+        lore:
+        - <gray>Forged for ambitious miners.</gray>
+        enchantments:
+          efficiency: 5
+          fortune: 3
+          unbreaking: 3
+          mending: 1
+    commands: []
+  enchanted_apples:
+    enabled: true
+    display-name: <light_purple><bold>Enchanted Apples</bold></light_purple>
+    weight: 3
+    items:
+      apples:
+        material: ENCHANTED_GOLDEN_APPLE
+        amount: 3
+    commands: []
+  beacon_core:
+    enabled: true
+    display-name: <aqua><bold>Beacon Core</bold></aqua>
+    weight: 1
+    broadcast: <gray><player> awakened a <aqua><bold>Beacon Core</bold></aqua> <gray>inside <crate><gray>!</gray>
+    items:
+      beacon:
+        material: BEACON
+        amount: 1
+    commands: []

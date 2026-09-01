@@ -1,0 +1,60 @@
+# Fallback physical keys. These intentionally mirror PlexonKeys 1.1.0 defaults.
+# LIVE_FIRST normally reads the live PlexonKeys template, including captured NBT.
+config-version: 1
+keys:
+  basic:
+    material: TRIPWIRE_HOOK
+    name: <gradient:#B9C2CF:#F4F6F8><bold>✦ BASIC KEY</bold></gradient>
+    lore:
+    - ''
+    - <gradient:#B9C2CF:#F4F6F8><bold>COMMON DISCOVERY</bold></gradient>
+    - <gray>A modest key shaped by everyday adventure.</gray>
+    - <dark_gray>Simple beginnings can still unlock something worthwhile.</dark_gray>
+    - ''
+    - <dark_gray>◆</dark_gray> <gray>Rarity</gray> <dark_gray>»</dark_gray> <white>Basic</white>
+    - <dark_gray>◆</dark_gray> <gray>Earned from</gray> <dark_gray>»</dark_gray> <white>Adventuring</white>
+    - ''
+    - <dark_gray>✦ PlexonCraft • Survival</dark_gray>
+    glow: false
+  rare:
+    material: TRIPWIRE_HOOK
+    name: <gradient:#3CAFF0:#A4E9FF><bold>✦ RARE KEY</bold></gradient>
+    lore:
+    - ''
+    - <gradient:#3CAFF0:#A4E9FF><bold>FORTUNATE DISCOVERY</bold></gradient>
+    - <gray>A glimmering key found by those favored by chance.</gray>
+    - <dark_gray>Its lock may hide rewards beyond the ordinary.</dark_gray>
+    - ''
+    - <aqua>◆</aqua> <gray>Rarity</gray> <dark_gray>»</dark_gray> <aqua>Rare</aqua>
+    - <aqua>◆</aqua> <gray>Earned from</gray> <dark_gray>»</dark_gray> <white>Adventuring</white>
+    - ''
+    - <dark_gray>✦ PlexonCraft • Survival</dark_gray>
+    glow: true
+  epic:
+    material: TRIPWIRE_HOOK
+    name: <gradient:#A96AF2:#E8B8FF><bold>✦ EPIC KEY</bold></gradient>
+    lore:
+    - ''
+    - <gradient:#A96AF2:#E8B8FF><bold>EXTRAORDINARY DISCOVERY</bold></gradient>
+    - <gray>A radiant key carrying the mark of exceptional fortune.</gray>
+    - <dark_gray>Only a fortunate few will see one fall into their hands.</dark_gray>
+    - ''
+    - <light_purple>◆</light_purple> <gray>Rarity</gray> <dark_gray>»</dark_gray> <light_purple>Epic</light_purple>
+    - <light_purple>◆</light_purple> <gray>Earned from</gray> <dark_gray>»</dark_gray> <white>Adventuring</white>
+    - ''
+    - <dark_gray>✦ PlexonCraft • Survival</dark_gray>
+    glow: true
+  legendary:
+    material: TRIPWIRE_HOOK
+    name: <gradient:#FF9F2E:#FFD76A:#FFF0B2><bold>★ LEGENDARY KEY ★</bold></gradient>
+    lore:
+    - ''
+    - <gradient:#FF9F2E:#FFD76A:#FFF0B2><bold>MYTHIC DISCOVERY</bold></gradient>
+    - <gray>A gilded key reserved for the rarest moments of fortune.</gray>
+    - <dark_gray>Its presence alone marks an adventure worth remembering.</dark_gray>
+    - ''
+    - <gold>◆</gold> <gray>Rarity</gray> <dark_gray>»</dark_gray> <gradient:#FFB347:#FFE59A><bold>Legendary</bold></gradient>
+    - <gold>◆</gold> <gray>Earned from</gray> <dark_gray>»</dark_gray> <white>Adventuring</white>
+    - ''
+    - <dark_gray>★ PlexonCraft • Survival ★</dark_gray>
+    glow: true

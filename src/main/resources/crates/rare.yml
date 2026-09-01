@@ -1,0 +1,105 @@
+config-version: 1
+id: rare
+enabled: true
+display-name: <gradient:#56B9F2:#92E1FF><bold>Rare Crate</bold></gradient>
+key-id: rare
+permission: ''
+open-cooldown-seconds: 1
+icon:
+  material: ENDER_CHEST
+  name: <gradient:#56B9F2:#92E1FF><bold>Rare Crate</bold></gradient>
+  lore:
+  - ''
+  - <gray>Valuable finds with a brighter edge.</gray>
+  - <gray>Key:</gray> <gradient:#3CAFF0:#A4E9FF><bold>Rare</bold></gradient>
+  - ''
+  - <white>Left-click</white> <gray>to preview.</gray>
+  - <green>Right-click</green> <gray>to open.</gray>
+  glow: true
+hologram:
+  lines:
+  - <gradient:#56B9F2:#92E1FF><bold>RARE CRATE</bold></gradient>
+  - <gray>Left-click to preview</gray>
+  - <aqua>Right-click with a Rare Key</aqua>
+broadcast: ''
+rewards:
+  iron_reserve:
+    enabled: true
+    display-name: <white><bold>Iron Reserve</bold></white>
+    weight: 27
+    items:
+      iron:
+        material: IRON_INGOT
+        amount: 40
+    commands: []
+  golden_cache:
+    enabled: true
+    display-name: <gold><bold>Golden Cache</bold></gold>
+    weight: 22
+    items:
+      gold:
+        material: GOLD_INGOT
+        amount: 24
+    commands: []
+  emerald_bundle:
+    enabled: true
+    display-name: <green><bold>Emerald Bundle</bold></green>
+    weight: 17
+    items:
+      emeralds:
+        material: EMERALD
+        amount: 16
+    commands: []
+  experience_surge:
+    enabled: true
+    display-name: <green><bold>500 Experience</bold></green>
+    weight: 14
+    display:
+      material: EXPERIENCE_BOTTLE
+      amount: 1
+    items: {}
+    commands:
+    - experience add %player% 500 points
+  diamond_bundle:
+    enabled: true
+    display-name: <aqua><bold>Diamond Bundle</bold></aqua>
+    weight: 10
+    items:
+      diamonds:
+        material: DIAMOND
+        amount: 7
+    commands: []
+  gilded_apples:
+    enabled: true
+    display-name: <gold><bold>Gilded Apples</bold></gold>
+    weight: 6
+    items:
+      apples:
+        material: GOLDEN_APPLE
+        amount: 5
+    commands: []
+  miners_pickaxe:
+    enabled: true
+    display-name: <aqua><bold>Miner's Pickaxe</bold></aqua>
+    weight: 3
+    items:
+      pickaxe:
+        material: DIAMOND_PICKAXE
+        amount: 1
+        name: <gradient:#56B9F2:#BCEEFF><bold>Rare Miner's Pickaxe</bold></gradient>
+        lore:
+        - <gray>A dependable prize from the Rare Crate.</gray>
+        enchantments:
+          efficiency: 3
+          unbreaking: 2
+    commands: []
+  ancient_fragments:
+    enabled: true
+    display-name: <dark_purple><bold>Ancient Fragments</bold></dark_purple>
+    weight: 1
+    broadcast: <gray><player> recovered <dark_purple><bold>Ancient Fragments</bold></dark_purple> <gray>from <crate><gray>!</gray>
+    items:
+      debris:
+        material: ANCIENT_DEBRIS
+        amount: 3
+    commands: []

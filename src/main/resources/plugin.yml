@@ -1,0 +1,30 @@
+name: PlexonCrates
+version: '${project.version}'
+main: com.antondev.crates.PlexonCrates
+api-version: '26.2'
+description: Direct, modern crates with native PlexonKeys compatibility.
+author: Tonim (ZpkDxGames)
+website: https://github.com/ZpkDxGames/PlexonCrates
+softdepend: [PlexonKeys]
+commands:
+  crates:
+    description: Browse crates, preview rewards, or open a crate.
+    usage: /crates [preview|open] [crate] [amount]
+    aliases: [crate, plexoncrates]
+  cratesadmin:
+    description: Configure PlexonCrates in game.
+    usage: /cratesadmin help
+    aliases: [pcrates, pca]
+permissions:
+  plexoncrates.use:
+    description: Browse, preview, and open crates.
+    default: true
+  plexoncrates.admin:
+    description: Configure crates, locations, rewards, and keys.
+    default: op
+  plexoncrates.bypass.key:
+    description: Open crates without consuming a key.
+    default: op
+  plexoncrates.bypass.cooldown:
+    description: Ignore crate opening cooldowns.
+    default: op

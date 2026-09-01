@@ -1,0 +1,61 @@
+# PlexonCrates 1.0.0 | Created by Tonim (ZpkDxGames)
+# Paper 26.2 / Java 25. All text uses MiniMessage, never legacy & colors.
+config-version: 1
+
+settings:
+  enabled: true
+  # [] allows every world. Exclusions always take priority.
+  worlds: [Survival_World, Survival_World_nether, Survival_World_the_end]
+  excluded-worlds: []
+  # Reward items that do not fit are safely dropped at the player's feet.
+  drop-overflow-items: true
+  # Maximum number of keys consumed by one sneak-right-click or command.
+  maximum-bulk-open: 64
+  # Save dirty statistics on a lightweight interval and again on shutdown.
+  statistics-save-seconds: 300
+
+plexonkeys:
+  enabled: true
+  plugin-name: PlexonKeys
+  # LIVE_FIRST reads PlexonKeys' current CONFIG or CAPTURED templates directly.
+  # If PlexonKeys is absent or unavailable, keys.yml is used automatically.
+  mode: LIVE_FIRST
+  fallback-file: keys.yml
+
+interaction:
+  left-click-preview: true
+  right-click-open: true
+  sneak-right-click-bulk: true
+  cancel-vanilla-block-use: true
+  maximum-target-distance: 8
+
+opening:
+  animation-enabled: true
+  animation-duration-ticks: 54
+  animation-period-ticks: 2
+  opening-sound: minecraft:block.note_block.hat
+  finish-sound: minecraft:entity.player.levelup
+  sound-volume: 0.8
+  sound-pitch: 1.1
+
+holograms:
+  enabled: true
+  vertical-offset: 1.65
+  view-range: 32.0
+  line-width: 240
+  shadowed: true
+  see-through: false
+
+particles:
+  enabled: true
+  type: END_ROD
+  interval-ticks: 20
+  count: 3
+  horizontal-spread: 0.32
+  vertical-spread: 0.18
+  view-range: 32.0
+
+logging:
+  console: true
+  file: true
+  date-format: dd/MM/yyyy HH:mm:ss

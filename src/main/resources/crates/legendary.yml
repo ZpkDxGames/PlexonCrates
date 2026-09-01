@@ -1,0 +1,116 @@
+config-version: 1
+id: legendary
+enabled: true
+display-name: <gradient:#FFB347:#FFE59A><bold>Legendary Crate</bold></gradient>
+key-id: legendary
+permission: ''
+open-cooldown-seconds: 3
+icon:
+  material: END_CRYSTAL
+  name: <gradient:#FF9F2E:#FFD76A:#FFF0B2><bold>★ LEGENDARY CRATE ★</bold></gradient>
+  lore:
+  - ''
+  - <gray>The rarest treasures in the Plexon vault.</gray>
+  - <gray>Key:</gray> <gradient:#FFB347:#FFE59A><bold>Legendary</bold></gradient>
+  - ''
+  - <white>Left-click</white> <gray>to preview.</gray>
+  - <green>Right-click</green> <gray>to open.</gray>
+  glow: true
+hologram:
+  lines:
+  - <gradient:#FF9F2E:#FFD76A:#FFF0B2><bold>★ LEGENDARY CRATE ★</bold></gradient>
+  - <gray>Left-click to preview</gray>
+  - <gold>Right-click with a Legendary Key</gold>
+broadcast: <gold>★</gold> <white><player></white> <gray>opened <crate><gray>!</gray>
+rewards:
+  diamond_vault:
+    enabled: true
+    display-name: <aqua><bold>Diamond Vault</bold></aqua>
+    weight: 28
+    items:
+      diamonds:
+        material: DIAMOND
+        amount: 64
+    commands: []
+  netherite_forge:
+    enabled: true
+    display-name: <dark_gray><bold>Netherite Forge</bold></dark_gray>
+    weight: 22
+    items:
+      ingots:
+        material: NETHERITE_INGOT
+        amount: 5
+    commands: []
+  experience_torrent:
+    enabled: true
+    display-name: <green><bold>5,000 Experience</bold></green>
+    weight: 17
+    display:
+      material: EXPERIENCE_BOTTLE
+      amount: 1
+    items: {}
+    commands:
+    - experience add %player% 5000 points
+  smithing_archive:
+    enabled: true
+    display-name: <gold><bold>Smithing Archive</bold></gold>
+    weight: 13
+    items:
+      templates:
+        material: NETHERITE_UPGRADE_SMITHING_TEMPLATE
+        amount: 8
+    commands: []
+  enchanted_feast:
+    enabled: true
+    display-name: <light_purple><bold>Enchanted Feast</bold></light_purple>
+    weight: 9
+    items:
+      apples:
+        material: ENCHANTED_GOLDEN_APPLE
+        amount: 16
+    commands: []
+  mythic_pickaxe:
+    enabled: true
+    display-name: <gradient:#FF9F2E:#FFF0B2><bold>Mythic Pickaxe</bold></gradient>
+    weight: 6
+    items:
+      pickaxe:
+        material: NETHERITE_PICKAXE
+        amount: 1
+        name: <gradient:#FF9F2E:#FFD76A:#FFF0B2><bold>★ MYTHIC PICKAXE ★</bold></gradient>
+        lore:
+        - ''
+        - <gray>A legendary tool recovered from the Plexon vault.</gray>
+        - <dark_gray>Its enchantments exceed ordinary limits.</dark_gray>
+        enchantments:
+          efficiency: 7
+          fortune: 5
+          unbreaking: 5
+          mending: 1
+    commands: []
+  twin_beacons:
+    enabled: true
+    display-name: <aqua><bold>Twin Beacons</bold></aqua>
+    weight: 4
+    items:
+      beacons:
+        material: BEACON
+        amount: 2
+    commands: []
+  sky_relic:
+    enabled: true
+    display-name: <gradient:#9FE7FF:#FFFFFF><bold>Sky Relic</bold></gradient>
+    weight: 1
+    broadcast: <gold>★</gold> <white><player></white> <gray>found the <gradient:#9FE7FF:#FFFFFF><bold>Sky Relic</bold></gradient> <gray>inside <crate><gray>!</gray>
+    items:
+      elytra:
+        material: ELYTRA
+        amount: 1
+        name: <gradient:#9FE7FF:#FFFFFF><bold>Sky Relic</bold></gradient>
+        lore:
+        - ''
+        - <gray>A pristine relic from the Legendary Crate.</gray>
+        enchantments:
+          unbreaking: 5
+          mending: 1
+    commands: []

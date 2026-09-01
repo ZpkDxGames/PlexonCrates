@@ -1,0 +1,99 @@
+config-version: 1
+id: basic
+enabled: true
+display-name: <gradient:#C7CDD8:#F3F5F7><bold>Basic Crate</bold></gradient>
+key-id: basic
+permission: ''
+open-cooldown-seconds: 1
+icon:
+  material: CHEST
+  name: <gradient:#C7CDD8:#F3F5F7><bold>Basic Crate</bold></gradient>
+  lore:
+  - ''
+  - <gray>Reliable supplies for a growing adventure.</gray>
+  - <gray>Key:</gray> <gradient:#B9C2CF:#F4F6F8><bold>Basic</bold></gradient>
+  - ''
+  - <white>Left-click</white> <gray>to preview.</gray>
+  - <green>Right-click</green> <gray>to open.</gray>
+  glow: false
+hologram:
+  lines:
+  - <gradient:#C7CDD8:#F3F5F7><bold>BASIC CRATE</bold></gradient>
+  - <gray>Left-click to preview</gray>
+  - <white>Right-click with a Basic Key</white>
+broadcast: ''
+rewards:
+  coal_cache:
+    enabled: true
+    display-name: <white><bold>Coal Cache</bold></white>
+    weight: 28
+    items:
+      coal:
+        material: COAL
+        amount: 24
+    commands: []
+  iron_supplies:
+    enabled: true
+    display-name: <white><bold>Iron Supplies</bold></white>
+    weight: 24
+    items:
+      iron:
+        material: IRON_INGOT
+        amount: 12
+    commands: []
+  explorers_meal:
+    enabled: true
+    display-name: <gold><bold>Explorer's Meal</bold></gold>
+    weight: 18
+    items:
+      food:
+        material: COOKED_BEEF
+        amount: 24
+    commands: []
+  redstone_parts:
+    enabled: true
+    display-name: <red><bold>Redstone Parts</bold></red>
+    weight: 12
+    items:
+      redstone:
+        material: REDSTONE
+        amount: 32
+    commands: []
+  lapis_pouch:
+    enabled: true
+    display-name: <blue><bold>Lapis Pouch</bold></blue>
+    weight: 8
+    items:
+      lapis:
+        material: LAPIS_LAZULI
+        amount: 24
+    commands: []
+  experience_boost:
+    enabled: true
+    display-name: <green><bold>150 Experience</bold></green>
+    weight: 6
+    display:
+      material: EXPERIENCE_BOTTLE
+      amount: 1
+    items: {}
+    commands:
+    - experience add %player% 150 points
+  emerald_find:
+    enabled: true
+    display-name: <green><bold>Emerald Find</bold></green>
+    weight: 3
+    items:
+      emeralds:
+        material: EMERALD
+        amount: 6
+    commands: []
+  diamond_spark:
+    enabled: true
+    display-name: <aqua><bold>Diamond Spark</bold></aqua>
+    weight: 1
+    broadcast: <gray><player> uncovered a <aqua><bold>Diamond Spark</bold></aqua> <gray>from <crate><gray>!</gray>
+    items:
+      diamonds:
+        material: DIAMOND
+        amount: 3
+    commands: []

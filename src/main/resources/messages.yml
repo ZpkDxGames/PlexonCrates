@@ -1,0 +1,37 @@
+prefix: '<dark_gray>[</dark_gray><gradient:#CAD5E5:#FFFFFF><bold>PlexonCrates</bold></gradient><dark_gray>]</dark_gray> '
+no-permission: <red>You do not have permission to do that.</red>
+players-only: <red>This command must be used by a player.</red>
+disabled: <yellow>Crates are temporarily disabled.</yellow>
+invalid-world: <yellow>Crates cannot be opened in this world.</yellow>
+invalid-crate: <red>Unknown crate.</red> <gray>Choose:</gray> <white><crates></white>
+invalid-amount: <red>Enter a whole amount between 1 and <maximum>.</red>
+no-key: <yellow>You need a <key> <yellow>to open this crate.</yellow> <click:run_command:/keys><aqua>[/keys]</aqua></click>
+no-eligible-rewards: <red>This crate has no rewards you are eligible to receive. Your key was not consumed.</red>
+inventory-full: <yellow>Your inventory does not have enough space for this reward. Your key was not consumed.</yellow>
+already-opening: <yellow>Finish your current crate animation first.</yellow>
+cooldown: <yellow>Please wait <seconds>s before opening this crate again.</yellow>
+opened: <gray>You opened <crate> <gray>and received</gray> <reward><gray>!</gray>
+bulk-opened: <gray>You opened <yellow><amount>x</yellow> <crate> <gray>and received <yellow><rewards></yellow> rewards.</gray>
+reward-overflow: <yellow>Your inventory was full, so overflow rewards were dropped safely at your feet.</yellow>
+preview-hint: <dark_gray>Left-click previews • Right-click opens • Sneak-right-click opens in bulk</dark_gray>
+reloaded: <green>Configuration, crates, keys, menus, locations, and displays reloaded.</green>
+config-error: <red>Reload rejected:</red> <gray><error></gray> <yellow>The previous valid state is still active.</yellow>
+target-required: <yellow>Look directly at a block within <distance> blocks.</yellow>
+location-set: <green>Linked this block to <crate><green>.</green>
+location-removed: <green>Removed the crate link from this block.</green>
+location-not-found: <yellow>That block is not linked to a crate.</yellow>
+location-protected: <yellow>This crate block is protected. Use <white>/pcrates unset</white> before breaking it.</yellow>
+reward-added: <green>Captured reward</green> <white><reward></white> <green>for <crate><green> with weight <yellow><weight></yellow>.</green>
+command-reward-added: <green>Added command reward</green> <white><reward></white> <green>to <crate><green>.</green>
+reward-removed: <green>Removed reward</green> <white><reward></white> <green>from <crate><green>.</green>
+weight-updated: <green>Updated</green> <white><reward></white> <green>in <crate><green> to weight <yellow><weight></yellow>.</green>
+reward-not-found: <red>That reward does not exist in this crate.</red>
+reward-exists: <red>That reward ID already exists.</red>
+invalid-reward-id: <red>Reward IDs may contain lowercase letters, numbers, underscores, and hyphens only.</red>
+invalid-weight: <red>Weight must be a finite number greater than zero.</red>
+hold-item: <yellow>Hold the exact reward item in your main hand first.</yellow>
+key-given: <green>Delivered <amount>x <key> <green>to <player><green>.</green>
+forced-open: <green>Opened <amount>x <crate> <green>for <player><green> without consuming keys.</green>
+player-not-found: <red>That player is not online.</red>
+statistics-saved: <green>Statistics saved.</green>
+status: '<gray>Crates:</gray> <white><crates></white> <dark_gray>•</dark_gray> <gray>Rewards:</gray> <white><rewards></white> <dark_gray>•</dark_gray> <gray>Locations:</gray> <white><locations></white> <dark_gray>•</dark_gray> <gray>Key source:</gray> <white><key_source></white>'

@@ -69,20 +69,22 @@ public final class ItemCodec {
         }
         item.setAmount(amount);
 
-        item.editMeta(meta -> {
-            if (section.contains("name")) {
-                meta.displayName(Text.parse(section.getString("name", ""), tags).decoration(TextDecoration.ITALIC, false));
-            }
-            if (section.contains("lore")) {
-                var lore = new ArrayList<net.kyori.adventure.text.Component>();
-                for (String line : section.getStringList("lore")) {
-                    lore.add(Text.parse(line, tags).decoration(TextDecoration.ITALIC, false));
+        if (section.contains("name") || section.contains("lore") || section.contains("glow") || section.contains("unbreakable")) {
+            item.editMeta(meta -> {
+                if (section.contains("name")) {
+                    meta.displayName(Text.parse(section.getString("name", ""), tags).decoration(TextDecoration.ITALIC, false));
                 }
-                meta.lore(lore);
-            }
-            if (section.contains("glow")) meta.setEnchantmentGlintOverride(section.getBoolean("glow"));
-            if (section.contains("unbreakable")) meta.setUnbreakable(section.getBoolean("unbreakable"));
-        });
+                if (section.contains("lore")) {
+                    var lore = new ArrayList<net.kyori.adventure.text.Component>();
+                    for (String line : section.getStringList("lore")) {
+                        lore.add(Text.parse(line, tags).decoration(TextDecoration.ITALIC, false));
+                    }
+                    meta.lore(lore);
+                }
+                if (section.contains("glow")) meta.setEnchantmentGlintOverride(section.getBoolean("glow"));
+                if (section.contains("unbreakable")) meta.setUnbreakable(section.getBoolean("unbreakable"));
+            });
+        }
 
         ConfigurationSection enchantments = section.getConfigurationSection("enchantments");
         if (enchantments != null) {

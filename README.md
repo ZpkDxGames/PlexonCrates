@@ -7,7 +7,7 @@
 
 PlexonCrates is a direct, modern crate system created by **Tonim (ZpkDxGames)** for the Plexon plugin family. It keeps the familiar crate workflow—blocks, previews, weighted rewards, animations, holograms, and admin editing—without a framework dependency or a maze of files.
 
-This is an independent implementation inspired by the usability goals of established crate plugins. No ExcellentCrates source code is included or modified.
+This is an independent implementation inspired by the usability goals and feature concepts of [ExcellentCrates](https://github.com/nulli0n/ExcellentCrates-spigot). No ExcellentCrates source code is included or modified.
 
 ## What ships in 1.0.0
 
@@ -30,7 +30,7 @@ This is an independent implementation inspired by the usability goals of establi
 
 - Paper `26.2`
 - Java `25`
-- PlexonKeys `1.1.0+` is recommended, but not required because exact fallback keys are bundled.
+- [PlexonKeys](https://github.com/ZpkDxGames/PlexonKeys) `1.1.0+` is recommended, but not required because exact fallback keys are bundled.
 
 There are no hard plugin dependencies.
 

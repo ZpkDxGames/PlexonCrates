@@ -5,7 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import net.kyori.adventure.text.Component;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.World;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.persistence.PersistentDataType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -62,5 +67,22 @@ class PluginIntegrationTest {
         assertFalse(plugin.openings().open(player, crate, 2, false));
         assertEquals(2, plugin.keys().count(player, crate.keyId()));
         assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+    }
+
+    @Test
+    void capturedRewardRoundTripsCompleteItemData() throws Exception {
+        ItemStack original = new ItemStack(Material.DIAMOND, 7);
+        original.editMeta(meta -> {
+            meta.displayName(Component.text("External custom reward"));
+            meta.getPersistentDataContainer().set(new NamespacedKey(plugin, "capture_test"),
+                    PersistentDataType.STRING, "preserved");
+        });
+
+        plugin.crates().addCapturedReward("basic", "external_reward", 10, original);
+
+        var stored = plugin.crates().find("basic").orElseThrow().rewards().get("external_reward").itemCopies();
+        assertEquals(1, stored.size());
+        assertEquals(7, stored.getFirst().getAmount());
+        assertTrue(stored.getFirst().isSimilar(original));
     }
 }

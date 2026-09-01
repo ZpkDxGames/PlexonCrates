@@ -10,13 +10,14 @@ Run `mvn clean verify` on Java 25. The suite checks:
 - loading all four bundled crates and all 32 default rewards;
 - every default reward pool totaling exactly 100 weight;
 - fallback key availability for all four crate IDs;
+- complete custom item/PDC capture and base64 round-trip preservation;
 - a complete key-consumption/opening/statistics flow in MockBukkit.
 
 ## Paper smoke test
 
 1. Start Paper 26.2 on Java 25 with PlexonKeys 1.1.0 and PlexonCrates 1.0.0.
 2. Confirm startup reports `PlexonKeys live templates`.
-3. Run `/keysadmin set basic 1`, claim it in `/keys`, link a chest with `/pcrates set basic`, and right-click it.
+3. Run `/keysadmin give <player> basic 1`, claim it with `/keys claim basic`, link a chest with `/pcrates set basic`, and right-click it.
 4. Confirm exactly one key is consumed and exactly one reward is delivered even if the animation GUI is closed.
 5. Capture a custom-NBT key with `/keysadmin setitem basic`, claim a fresh copy, and repeat the opening.
 6. Sneak-right-click with multiple keys and confirm bulk consumption and reward counts match.

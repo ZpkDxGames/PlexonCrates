@@ -51,7 +51,7 @@ public final class OpeningService {
             return false;
         }
         boolean animate = amount == 1 && plugin.settings().animationEnabled();
-        if (animate && animating.contains(player.getUniqueId())) {
+        if (animating.contains(player.getUniqueId())) {
             plugin.messages().send(player, "already-opening");
             return false;
         }
@@ -117,7 +117,9 @@ public final class OpeningService {
     }
 
     public int bulkAmount(Player player, Crate crate) {
-        if (player.hasPermission("plexoncrates.bypass.key")) return plugin.settings().maximumBulk();
+        // Prevent an operator's default bypass permission from accidentally producing
+        // a maximum-size free bulk opening on every sneak-click.
+        if (player.hasPermission("plexoncrates.bypass.key")) return 1;
         return Math.min(plugin.settings().maximumBulk(), plugin.keys().count(player, crate.keyId()));
     }
 

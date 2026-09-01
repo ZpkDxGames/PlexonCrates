@@ -1,6 +1,7 @@
 package com.antondev.crates;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -51,12 +52,15 @@ class PluginIntegrationTest {
         assertTrue(world != null);
         player.teleport(world.getSpawnLocation());
         var crate = plugin.crates().find("basic").orElseThrow();
-        plugin.keys().give(player, crate.keyId(), 1);
-        assertEquals(1, plugin.keys().count(player, crate.keyId()));
+        plugin.keys().give(player, crate.keyId(), 3);
+        assertEquals(3, plugin.keys().count(player, crate.keyId()));
 
         assertTrue(plugin.openings().open(player, crate, 1, false));
 
-        assertEquals(0, plugin.keys().count(player, crate.keyId()));
+        assertEquals(2, plugin.keys().count(player, crate.keyId()));
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertFalse(plugin.openings().open(player, crate, 2, false));
+        assertEquals(2, plugin.keys().count(player, crate.keyId()));
         assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
     }
 }

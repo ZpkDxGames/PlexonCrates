@@ -31,7 +31,9 @@
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.build.outputTimestamp>2026-09-01T00:00:00Z</project.build.outputTimestamp>
-    <paper.version>26.2.build.121-stable</paper.version>
+    <!-- Current MockBukkit 26.2 is compiled against build 111; the resulting
+         plugin remains API-compatible with newer Paper 26.2 builds. -->
+    <paper.version>26.2.build.111-stable</paper.version>
   </properties>
 
   <repositories>

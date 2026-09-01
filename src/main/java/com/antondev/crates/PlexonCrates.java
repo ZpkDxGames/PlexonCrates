@@ -24,7 +24,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
-public final class PlexonCrates extends JavaPlugin {
+public class PlexonCrates extends JavaPlugin {
     private PluginSettings settings;
     private Messages messages;
     private MenuConfig menusConfig;

@@ -1,10 +1,23 @@
-config-version: 1
+config-version: 2
 id: rare
-enabled: true
+state: PUBLISHED
+display-order: 20
 display-name: <gradient:#56B9F2:#92E1FF><bold>Rare Crate</bold></gradient>
-key-id: rare
-permission: ''
-open-cooldown-seconds: 1
+description:
+- <gray>Valuable finds with a brighter edge.</gray>
+access:
+  permission: ''
+  worlds: []
+  excluded-worlds: []
+keys:
+  cost: 1
+  accepted: [rare]
+opening:
+  cooldown-seconds: 1
+  bulk-enabled: true
+  bulk-maximum: 64
+  animation: ROULETTE
+  broadcast: ''
 icon:
   material: ENDER_CHEST
   name: <gradient:#56B9F2:#92E1FF><bold>Rare Crate</bold></gradient>
@@ -21,7 +34,10 @@ hologram:
   - <gradient:#56B9F2:#92E1FF><bold>RARE CRATE</bold></gradient>
   - <gray>Left-click to preview</gray>
   - <aqua>Right-click with a Rare Key</aqua>
-broadcast: ''
+pity:
+  enabled: false
+  threshold: 0
+  reward-ids: []
 rewards:
   iron_reserve:
     enabled: true

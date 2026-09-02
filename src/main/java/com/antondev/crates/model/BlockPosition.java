@@ -1,22 +1,36 @@
 package com.antondev.crates.model;
 
 import java.util.Locale;
+import java.util.UUID;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
-public record BlockPosition(String world, int x, int y, int z) {
-    public static BlockPosition of(Block block) {
-        return new BlockPosition(block.getWorld().getName(), block.getX(), block.getY(), block.getZ());
+public record BlockPosition(UUID worldUuid, String worldName, int x, int y, int z) {
+    public BlockPosition {
+        if (worldName == null || worldName.isBlank()) throw new IllegalArgumentException("World name cannot be empty");
     }
 
+    public BlockPosition(String worldName, int x, int y, int z) {
+        this(null, worldName, x, y, z);
+    }
+
+    public static BlockPosition of(Block block) {
+        return new BlockPosition(block.getWorld().getUID(), block.getWorld().getName(), block.getX(), block.getY(), block.getZ());
+    }
+
+    /** Compatibility alias retained for the 1.0 public model. */
+    public String world() { return worldName; }
+
     public String key() {
-        return world.toLowerCase(Locale.ROOT) + ":" + x + ":" + y + ":" + z;
+        String worldIdentity = worldUuid == null ? worldName.toLowerCase(Locale.ROOT) : worldUuid.toString();
+        return worldIdentity + ":" + x + ":" + y + ":" + z;
     }
 
     public World loadedWorld() {
-        return Bukkit.getWorld(world);
+        World byUuid = worldUuid == null ? null : Bukkit.getWorld(worldUuid);
+        return byUuid != null ? byUuid : Bukkit.getWorld(worldName);
     }
 
     public Block loadedBlock() {
@@ -30,6 +44,8 @@ public record BlockPosition(String world, int x, int y, int z) {
     }
 
     public boolean inChunk(World candidate, int chunkX, int chunkZ) {
-        return candidate.getName().equalsIgnoreCase(world) && (x >> 4) == chunkX && (z >> 4) == chunkZ;
+        boolean sameWorld = worldUuid != null ? candidate.getUID().equals(worldUuid)
+                : candidate.getName().equalsIgnoreCase(worldName);
+        return sameWorld && (x >> 4) == chunkX && (z >> 4) == chunkZ;
     }
 }

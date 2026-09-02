@@ -1,6 +1,12 @@
-# PlexonCrates 1.0.0 | Created by Tonim (ZpkDxGames)
+# PlexonCrates 2.0.0 | Created by Tonim (ZpkDxGames)
 # Paper 26.2 / Java 25. All text uses MiniMessage, never legacy & colors.
-config-version: 1
+config-version: 2
+
+database:
+  # Mutable links, statistics, limits, pity, history, journals, drafts, and audit data.
+  file: data/plexoncrates.db
+  maximum-queued-writes: 4096
+  shutdown-timeout-seconds: 8
 
 settings:
   enabled: true
@@ -23,6 +29,8 @@ plexonkeys:
   fallback-file: keys.yml
 
 interaction:
+  # Offhand keys are ignored by default to prevent surprising consumption.
+  consume-offhand-keys: false
   left-click-preview: true
   right-click-open: true
   sneak-right-click-bulk: true
@@ -31,6 +39,10 @@ interaction:
 
 opening:
   animation-enabled: true
+  default-animation: ROULETTE
+  bulk-summary-threshold: 5
+  # MANUAL_REVIEW never blindly reruns command rewards after a crash.
+  recovery-policy: MANUAL_REVIEW
   animation-duration-ticks: 54
   animation-period-ticks: 2
   opening-sound: minecraft:block.note_block.hat
@@ -54,6 +66,29 @@ particles:
   horizontal-spread: 0.32
   vertical-spread: 0.18
   view-range: 32.0
+
+editing:
+  input-timeout-seconds: 60
+  session-timeout-minutes: 30
+
+locations:
+  # [] inherits settings.worlds. Unsafe or temporary block types are rejected.
+  allowed-worlds: []
+  denied-materials:
+  - AIR
+  - CAVE_AIR
+  - VOID_AIR
+  - WATER
+  - LAVA
+  - FIRE
+  - SOUL_FIRE
+  - NETHER_PORTAL
+  - END_PORTAL
+  - END_GATEWAY
+
+integrations:
+  placeholderapi: true
+  vault: true
 
 logging:
   console: true

@@ -18,9 +18,26 @@ public final class MenuConfig {
         validateMenu("browser", List.of("info", "close"));
         validateMenu("preview", List.of("open", "previous", "back", "next"));
         validateMenu("opening", List.of("marker"));
-        validateMenu("admin", List.of("status", "reload"));
-        validateMenu("editor", List.of("preview", "location", "capture", "rewards", "key", "back"));
+        validateMenu("admin", List.of("crates", "keys", "locations", "rewards", "statistics", "system", "close"));
+        validateMenu("editor", List.of("preview", "rename", "key", "rewards", "description", "order",
+                "create-reward", "wand", "opening", "display", "access", "disable",
+                "publish", "archive", "clone", "back", "delete"));
         validateMenu("confirm-delete", List.of("confirm", "cancel"));
+        validateMenu("summary", List.of("close"));
+        validateMenu("crate-list", List.of("create", "previous", "back", "next"));
+        validateMenu("key-list", List.of("create", "sync", "previous", "back", "next"));
+        validateMenu("key-template", List.of("name", "previous", "legacy", "confirm", "cancel", "input-placeholder"));
+        validateMenu("key-select", List.of("back", "previous", "next"));
+        validateMenu("reward-builder", List.of("name", "weight", "command", "experience", "money", "rarity",
+                "clear", "permissions", "limits", "messages", "effects", "enabled", "order", "confirm", "cancel", "input-placeholder"));
+        validateMenu("locations", List.of("wand", "previous", "back", "next"));
+        validateMenu("statistics", List.of("summary", "back"));
+        validateMenu("system", List.of("validate", "reload", "backup", "diagnose", "back"));
+        validateMenu("global-rewards", List.of("previous", "back", "next"));
+        validateMenu("wand-select", List.of("previous", "back", "next"));
+        validateMenu("confirm-unlink", List.of("confirm", "cancel"));
+        validateMenu("confirm-crate-delete", List.of("confirm", "cancel"));
+        validateMenu("confirm-key-delete", List.of("confirm", "cancel"));
         item("filler");
         for (String line : yaml.getStringList("preview.reward-lore")) Text.parse(line);
     }
@@ -70,7 +87,8 @@ public final class MenuConfig {
             this.item(itemPath);
             if (yaml.contains(itemPath + ".slot")) validateSlot(itemPath + ".slot", size, used);
         }
-        for (String list : List.of("crate-slots", "reward-slots", "rail-slots")) {
+        for (String list : List.of("crate-slots", "reward-slots", "rail-slots", "entry-slots", "key-slots",
+                "item-slots", "location-slots")) {
             String listPath = path + "." + list;
             if (!yaml.contains(listPath)) continue;
             for (int slot : slots(listPath)) validateSlot(slot, listPath, size, used);

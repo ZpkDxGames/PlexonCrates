@@ -5,26 +5,83 @@ api-version: '26.2'
 description: Direct, modern crates with native PlexonKeys compatibility.
 author: Tonim (ZpkDxGames)
 website: https://github.com/ZpkDxGames/PlexonCrates
-softdepend: [PlexonKeys]
+softdepend: [PlexonKeys, PlaceholderAPI, Vault]
 commands:
   crates:
     description: Browse crates, preview rewards, or open a crate.
-    usage: /crates [preview|open] [crate] [amount]
+    usage: /crates [crate|preview|open|history] [crate|page] [amount]
     aliases: [crate, plexoncrates]
   cratesadmin:
     description: Configure PlexonCrates in game.
-    usage: /cratesadmin help
+    usage: /pcrates [create|edit|clone|import|export|delete|keys|wand|link|unlink|givekey|open|validate|reload|backup|status|diagnose]
     aliases: [pcrates, pca]
 permissions:
   plexoncrates.use:
-    description: Browse, preview, and open crates.
+    description: Broad compatibility permission for player crate features.
+    default: true
+    children:
+      plexoncrates.preview: true
+      plexoncrates.open: true
+      plexoncrates.history: true
+  plexoncrates.preview:
+    description: Browse crates and preview eligible rewards.
+    default: true
+  plexoncrates.open:
+    description: Open crates using physical inventory keys.
+    default: true
+  plexoncrates.history:
+    description: Review personal opening history.
     default: true
   plexoncrates.admin:
-    description: Configure crates, locations, rewards, and keys.
+    description: All PlexonCrates administration features.
+    default: op
+    children:
+      plexoncrates.admin.gui: true
+      plexoncrates.admin.crates: true
+      plexoncrates.admin.keys: true
+      plexoncrates.admin.rewards: true
+      plexoncrates.admin.locations: true
+      plexoncrates.admin.give: true
+      plexoncrates.admin.reload: true
+      plexoncrates.admin.backup: true
+      plexoncrates.admin.diagnose: true
+      plexoncrates.admin.protection-bypass: true
+  plexoncrates.admin.gui:
+    description: Open the administrative dashboard.
+    default: op
+  plexoncrates.admin.crates:
+    description: Create, edit, clone, archive, and delete crate definitions.
+    default: op
+  plexoncrates.admin.keys:
+    description: Manage exact physical key definitions and provider discovery.
+    default: op
+  plexoncrates.admin.rewards:
+    description: Create and edit crate rewards.
+    default: op
+  plexoncrates.admin.locations:
+    description: Use the Link Wand and manage physical crate locations.
+    default: op
+  plexoncrates.admin.give:
+    description: Give exact keys and run explicit administrative openings.
+    default: op
+  plexoncrates.admin.reload:
+    description: Validate and atomically reload configuration.
+    default: op
+  plexoncrates.admin.backup:
+    description: Create consistent YAML and SQLite backups.
+    default: op
+  plexoncrates.admin.diagnose:
+    description: View detailed configuration and integration diagnostics.
+    default: op
+  plexoncrates.admin.protection-bypass:
+    description: Explicitly allow breaking protected linked crate blocks.
     default: op
   plexoncrates.bypass.key:
     description: Open crates without consuming a key.
     default: op
   plexoncrates.bypass.cooldown:
     description: Ignore crate opening cooldowns.
+    default: op
+  plexoncrates.bypass.limit:
+    description: Ignore per-player and global reward limits.
     default: op

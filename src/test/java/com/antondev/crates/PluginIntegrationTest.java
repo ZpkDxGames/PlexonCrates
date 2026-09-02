@@ -2,8 +2,11 @@ package com.antondev.crates;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.antondev.crates.domain.crate.CrateState;
+import java.nio.file.Files;
 import java.util.List;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Material;
@@ -38,7 +41,7 @@ class PluginIntegrationTest {
         assertEquals(List.of("basic", "rare", "epic", "legendary"),
                 plugin.crates().ordered().stream().map(crate -> crate.id()).toList());
         assertEquals(32, plugin.crates().rewardCount());
-        assertEquals("keys.yml fallback", plugin.keys().sourceLabel());
+        assertEquals("exact cached/configured templates", plugin.keys().sourceLabel());
         for (var crate : plugin.crates().ordered()) {
             assertTrue(crate.enabled());
             assertEquals(100.0, crate.rewards().values().stream().mapToDouble(reward -> reward.weight()).sum(), 0.00001);
@@ -61,6 +64,7 @@ class PluginIntegrationTest {
         assertEquals(3, plugin.keys().count(player, crate.keyId()));
 
         assertTrue(plugin.openings().open(player, crate, 1, false));
+        awaitOpeningCommit();
 
         assertEquals(2, plugin.keys().count(player, crate.keyId()));
         assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
@@ -84,5 +88,28 @@ class PluginIntegrationTest {
         assertEquals(1, stored.size());
         assertEquals(7, stored.getFirst().getAmount());
         assertTrue(stored.getFirst().isSimilar(original));
+    }
+
+    @Test
+    void crateExportImportsAsAValidatedDraftWithoutChangingTheSource() throws Exception {
+        var exportDirectory = plugin.getDataFolder().toPath().resolve("exports");
+        var exported = plugin.crates().exportDefinition("basic", exportDirectory);
+
+        assertTrue(Files.isRegularFile(exported));
+        var imported = plugin.crates().importAsDraft(exported, "basic_copy", "TEST");
+
+        assertEquals("basic_copy", imported.id());
+        assertEquals(CrateState.DRAFT, imported.state());
+        assertEquals(8, imported.rewards().size());
+        assertEquals(CrateState.PUBLISHED, plugin.crates().find("basic").orElseThrow().state());
+        assertThrows(IllegalArgumentException.class,
+                () -> plugin.crates().importAsDraft(exported, "../unsafe", "TEST"));
+    }
+
+    private void awaitOpeningCommit() {
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
     }
 }

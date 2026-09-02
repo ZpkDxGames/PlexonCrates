@@ -1,0 +1,182 @@
+package com.antondev.crates;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.antondev.crates.domain.reward.RewardPresentation;
+import com.antondev.crates.gui.MenuHolder;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
+import net.kyori.adventure.text.Component;
+import org.bukkit.ExplosionResult;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.block.BlockFace;
+import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.block.BlockPistonExtendEvent;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.persistence.PersistentDataType;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockbukkit.mockbukkit.MockBukkit;
+import org.mockbukkit.mockbukkit.ServerMock;
+
+class AdministrationIntegrationTest {
+    private ServerMock server;
+    private PlexonCrates plugin;
+
+    @BeforeEach
+    void setUp() {
+        server = MockBukkit.mock();
+        server.addSimpleWorld("Survival_World");
+        plugin = MockBukkit.load(PlexonCrates.class);
+    }
+
+    @AfterEach
+    void tearDown() {
+        MockBukkit.unmock();
+    }
+
+    @Test
+    void exactDragCaptureIsNonDestructiveAndBlocksEditorItemsAndDistributions() {
+        var player = server.addPlayer("Editor");
+        player.setOp(true);
+        ItemStack original = new ItemStack(Material.NETHER_STAR, 7);
+        original.editMeta(meta -> {
+            meta.displayName(Component.text("Custom exact key"));
+            meta.getPersistentDataContainer().set(new NamespacedKey(plugin, "custom_data"),
+                    PersistentDataType.STRING, "preserve-me");
+        });
+
+        plugin.editSessions().beginKey(player, "dragged_key");
+        plugin.adminMenus().openKeyTemplate(player);
+        MenuHolder holder = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+        int input = plugin.menusConfig().slot("key-template.input-placeholder");
+
+        var spread = new LinkedHashMap<Integer, ItemStack>();
+        spread.put(input, original.clone());
+        spread.put(input + 1, original.clone());
+        InventoryDragEvent distributed = new InventoryDragEvent(player.getOpenInventory(), null,
+                original, false, spread);
+        plugin.adminMenus().handleDrag(distributed, holder);
+        assertTrue(distributed.isCancelled());
+        assertNull(plugin.editSessions().key(player).template());
+
+        ItemStack editorItem = player.getOpenInventory().getTopInventory().getItem(0).clone();
+        InventoryDragEvent rejected = new InventoryDragEvent(player.getOpenInventory(), null,
+                editorItem, false, java.util.Map.of(input, editorItem));
+        plugin.adminMenus().handleDrag(rejected, holder);
+        assertNull(plugin.editSessions().key(player).template());
+
+        InventoryDragEvent accepted = new InventoryDragEvent(player.getOpenInventory(), null,
+                original, false, java.util.Map.of(input, original.clone()));
+        plugin.adminMenus().handleDrag(accepted, holder);
+
+        ItemStack captured = plugin.editSessions().key(player).template();
+        assertTrue(accepted.isCancelled());
+        assertEquals(7, original.getAmount());
+        assertEquals(1, captured.getAmount());
+        ItemStack normalizedOriginal = original.clone();
+        normalizedOriginal.setAmount(1);
+        assertTrue(captured.isSimilar(normalizedOriginal));
+    }
+
+    @Test
+    void existingRewardCanBeFullyEditedAndReorderedThroughTheBuilder() throws Exception {
+        var player = server.addPlayer("RewardEditor");
+        player.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+        var original = crate.orderedRewards().getFirst();
+        plugin.adminMenus().editReward(player, crate, original);
+        var draft = plugin.editSessions().reward(player);
+        draft.weight(42.5);
+        draft.toggleEnabled();
+        draft.addCommand("say reward-editor-test");
+        draft.presentation(new RewardPresentation("<gold>Winner</gold>", "<gray>Well done</gray>",
+                "minecraft:entity.player.levelup", 0.75f, 1.25f, true));
+        draft.orderIndex(crate.rewards().size() - 1);
+
+        int confirm = plugin.menusConfig().slot("reward-builder.confirm");
+        player.simulateInventoryClick(player.getOpenInventory(), ClickType.LEFT, confirm);
+
+        var updatedCrate = plugin.crates().find("basic").orElseThrow();
+        var updated = updatedCrate.rewards().get(original.id());
+        assertFalse(updated.enabled());
+        assertEquals(42.5, updated.weight());
+        assertTrue(updated.commands().contains("say reward-editor-test"));
+        assertEquals("minecraft:entity.player.levelup", updated.presentation().sound());
+        assertTrue(updated.presentation().firework());
+        assertEquals(original.id(), updatedCrate.orderedRewards().getLast().id());
+        assertEquals(original.itemCopies().size(), updated.itemCopies().size());
+    }
+
+    @Test
+    void invalidReloadLeavesThePublishedRuntimeSnapshotUntouched() throws Exception {
+        var player = server.addPlayer("ReloadEditor");
+        player.setOp(true);
+        double originalWeight = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").weight();
+        Path file = plugin.getDataFolder().toPath().resolve("crates/basic.yml");
+        String valid = Files.readString(file);
+        String invalid = valid.replaceFirst("weight: 28(?:\\.0)?", "weight: 0");
+        assertFalse(valid.equals(invalid));
+        Files.writeString(file, invalid);
+        try {
+            assertFalse(plugin.reloadFor(player));
+            assertEquals(originalWeight,
+                    plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").weight());
+            assertTrue(plugin.crates().find("basic").orElseThrow().enabled());
+        } finally {
+            Files.writeString(file, valid);
+        }
+    }
+
+    @Test
+    void wandLinkPersistsAndProtectsTheBlockFromWorldMutations() throws Exception {
+        var player = server.addPlayer("Builder");
+        player.setOp(true);
+        var configFile = new java.io.File(plugin.getDataFolder(), "config.yml");
+        var config = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(configFile);
+        config.set("holograms.enabled", false); // MockBukkit does not implement TextDisplay spawning.
+        config.save(configFile);
+        assertTrue(plugin.reloadFor(player));
+        var world = server.getWorld("Survival_World");
+        world.getChunkAt(0, 0).load();
+        var linked = world.getBlockAt(8, 70, 8);
+        linked.setType(Material.CHEST);
+
+        assertTrue(plugin.wand().link(player, linked, plugin.crates().find("basic").orElseThrow()));
+        plugin.database().awaitIdle().join();
+
+        assertEquals(1, plugin.locations().count("basic"));
+        assertEquals(1, plugin.database().loadLocations().size());
+        plugin.displays().refresh();
+
+        player.setOp(false);
+        BlockBreakEvent breaking = new BlockBreakEvent(linked, player);
+        server.getPluginManager().callEvent(breaking);
+        assertTrue(breaking.isCancelled());
+
+        var other = world.getBlockAt(9, 70, 8);
+        other.setType(Material.STONE);
+        var affected = new java.util.ArrayList<>(List.of(linked, other));
+        BlockExplodeEvent explosion = new BlockExplodeEvent(other, other.getState(), affected, 1.0f,
+                ExplosionResult.DESTROY);
+        server.getPluginManager().callEvent(explosion);
+        assertFalse(affected.contains(linked));
+        assertTrue(affected.contains(other));
+
+        var piston = world.getBlockAt(7, 70, 8);
+        piston.setType(Material.PISTON);
+        BlockPistonExtendEvent extend = new BlockPistonExtendEvent(piston, List.of(linked), BlockFace.EAST);
+        server.getPluginManager().callEvent(extend);
+        assertTrue(extend.isCancelled());
+    }
+}

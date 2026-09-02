@@ -15,6 +15,10 @@ public final class Text {
         return MINI.deserialize(Objects.requireNonNullElse(input, ""), tags);
     }
 
+    public static String serialize(Component component) {
+        return MINI.serialize(Objects.requireNonNull(component));
+    }
+
     public static TagResolver value(String name, Object value) {
         return Placeholder.unparsed(name, String.valueOf(value));
     }

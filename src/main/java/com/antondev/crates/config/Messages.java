@@ -16,6 +16,11 @@ public final class Messages {
             "target-required", "location-set", "location-removed", "location-not-found", "location-protected",
             "reward-added", "command-reward-added", "reward-removed", "weight-updated", "hold-item",
             "key-given", "forced-open", "player-not-found", "statistics-saved", "status");
+    private static final List<String> REQUIRED_2 = List.of(
+            "opening-cancelled", "opening-state-changed", "opening-failed", "database-error",
+            "input-cancelled", "input-timeout", "input-invalid");
+    private static final List<String> REQUIRED_SYSTEM = List.of(
+            "validation-passed", "validation-failed", "backup-started", "backup-created", "backup-failed");
     private final YamlConfiguration yaml;
     private final String prefix;
 
@@ -23,6 +28,12 @@ public final class Messages {
         this.yaml = yaml;
         this.prefix = yaml.getString("prefix", "");
         for (String key : REQUIRED) {
+            if (!(yaml.get(key) instanceof String)) throw new IllegalArgumentException("Missing text in messages.yml: " + key);
+        }
+        for (String key : REQUIRED_2) {
+            if (!(yaml.get(key) instanceof String)) throw new IllegalArgumentException("Missing text in messages.yml: " + key);
+        }
+        for (String key : REQUIRED_SYSTEM) {
             if (!(yaml.get(key) instanceof String)) throw new IllegalArgumentException("Missing text in messages.yml: " + key);
         }
         for (String key : yaml.getKeys(false)) {

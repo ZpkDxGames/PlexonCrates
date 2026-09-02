@@ -72,65 +72,253 @@ opening:
 
 admin:
   title: <gold><bold>PLEXONCRATES</bold></gold> <dark_gray>•</dark_gray> <gray>Admin</gray>
-  size: 27
-  crate-slots: [10, 12, 14, 16]
-  status:
-    slot: 4
-    material: MAP
-    name: <white><bold>System status</bold></white>
+  size: 54
+  crates:
+    slot: 10
+    material: CHEST
+    name: <gold><bold>Crates</bold></gold>
     lore:
     - ''
-    - <gray>Crates</gray> <dark_gray>»</dark_gray> <white><crates></white>
-    - <gray>Rewards</gray> <dark_gray>»</dark_gray> <white><rewards></white>
-    - <gray>Locations</gray> <dark_gray>»</dark_gray> <white><locations></white>
-    - <gray>Key source</gray> <dark_gray>»</dark_gray> <white><key_source></white>
-  reload:
-    slot: 22
-    material: CLOCK
-    name: <aqua>Reload everything</aqua>
-    lore:
-    - <gray>Validates files before replacing live settings.</gray>
+    - <gray>Create, clone, publish, archive, and delete crates.</gray>
+  keys:
+    slot: 12
+    material: TRIPWIRE_HOOK
+    name: <aqua><bold>Physical Keys</bold></aqua>
+    lore: [<gray>Discover PlexonKeys and capture exact custom keys.</gray>]
+  locations:
+    slot: 14
+    material: LODESTONE
+    name: <green><bold>World Locations</bold></green>
+    lore: [<gray>Inspect links and obtain the protected Link Wand.</gray>]
+  rewards:
+    slot: 28
+    material: NETHER_STAR
+    name: <light_purple><bold>All Rewards</bold></light_purple>
+    lore: [<gray>Browse every configured crate reward.</gray>]
+  statistics:
+    slot: 30
+    material: FILLED_MAP
+    name: <yellow><bold>Statistics</bold></yellow>
+    lore: [<gray>Review openings and current totals.</gray>]
+  system:
+    slot: 32
+    material: COMPARATOR
+    name: <white><bold>System</bold></white>
+    lore: [<gray>Validate, reload, back up, and diagnose.</gray>]
+  close:
+    slot: 49
+    material: BARRIER
+    name: <red>Close</red>
+    lore: []
 
 editor:
   title: <gold>Configure</gold> <dark_gray>•</dark_gray> <crate>
-  size: 27
+  size: 54
   preview:
     slot: 10
     material: ENDER_EYE
     name: <aqua>Preview rewards</aqua>
     lore: []
-  location:
+  rename:
     slot: 12
-    material: LODESTONE
-    name: <green>Link target block</green>
-    lore:
-    - <gray>Look at a block and click.</gray>
-    - <dark_gray>Existing crate blocks stay linked.</dark_gray>
-  capture:
+    material: NAME_TAG
+    name: <white>Rename crate</white>
+    lore: [<gray>Enter a MiniMessage display name in chat.</gray>]
+  key:
     slot: 14
-    material: HOPPER
-    name: <light_purple>Capture held reward</light_purple>
-    lore:
-    - ''
-    - <gray>Stores the complete item, including custom NBT.</gray>
-    - <gray>New rewards begin with weight <white>10</white>.</gray>
+    material: TRIPWIRE_HOOK
+    name: <yellow>Select physical key</yellow>
+    lore: [<gray>Choose PlexonKeys-backed or captured keys.</gray>]
   rewards:
     slot: 16
     material: CHEST
     name: <yellow>Manage rewards</yellow>
-    lore:
-    - <gray>Browse rewards and remove them with confirmation.</gray>
-  key:
-    slot: 22
-    material: TRIPWIRE_HOOK
-    name: <white>Give yourself a key</white>
-    lore:
-    - <gray>Uses the current live PlexonKeys template.</gray>
-  back:
+    lore: [<gray>Browse current rewards and delete with confirmation.</gray>]
+  description:
     slot: 18
+    material: WRITABLE_BOOK
+    name: <white>Edit description</white>
+    lore: [<gray>Set MiniMessage lines with | separators.</gray>]
+  order:
+    slot: 20
+    material: HOPPER
+    name: <yellow>Display order</yellow>
+    lore: ['<gray>Current:</gray> <white><order></white>']
+  create-reward:
+    slot: 28
+    material: HOPPER
+    name: <light_purple>Create reward bundle</light_purple>
+    lore: [<gray>Capture items, commands, XP, and money.</gray>]
+  wand:
+    slot: 30
+    material: BLAZE_ROD
+    name: <green>Get selected Link Wand</green>
+    lore: [<gray>Link unlimited blocks to this crate.</gray>]
+  opening:
+    slot: 32
+    material: CLOCK
+    name: <aqua>Opening behavior</aqua>
+    lore: ['<gray>Animation:</gray> <white><animation></white>', '<gray>Cooldown:</gray> <white><cooldown>s</white>', '<gray>Bulk:</gray> <white><bulk></white> <dark_gray>(max <bulk_max>)</dark_gray>', <dark_gray>Left cycle • Right edit • Shift-left toggle</dark_gray>]
+  display:
+    slot: 34
+    material: GLOW_INK_SAC
+    name: <light_purple>World display</light_purple>
+    lore: [<gray>Edit multiline TextDisplay hologram text.</gray>]
+  access:
+    slot: 36
+    material: IRON_DOOR
+    name: <gold>Access rules</gold>
+    lore: ['<gray>Permission:</gray> <white><permission></white>', <gray>Edit allowed and excluded worlds.</gray>]
+  disable:
+    slot: 42
+    material: LEVER
+    name: <yellow>Disable crate</yellow>
+    lore: [<gray>Stops openings while preserving the definition.</gray>]
+  publish:
+    slot: 45
+    material: LIME_CONCRETE
+    name: <green><bold>Publish crate</bold></green>
+    lore: [<gray>Runs complete validation before activation.</gray>]
+  archive:
+    slot: 46
+    material: CLOCK
+    name: <yellow>Archive crate</yellow>
+    lore: [<gray>Hide the crate while preserving its definition.</gray>]
+  clone:
+    slot: 48
+    material: MAP
+    name: <aqua>Clone as draft</aqua>
+    lore: []
+  back:
+    slot: 49
     material: ARROW
     name: <gray>Back</gray>
     lore: []
+  delete:
+    slot: 53
+    material: RED_CONCRETE
+    name: <red>Delete crate</red>
+    lore: [<dark_red>Requires confirmation and no linked blocks.</dark_red>]
+
+crate-list:
+  title: <gold><bold>CRATES</bold></gold> <dark_gray>•</dark_gray> <gray>Page <page></gray>
+  size: 54
+  entry-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34]
+  create: {slot: 45, material: LIME_CONCRETE, name: <green>Create Crate</green>, lore: [<gray>Start a persistent guided draft.</gray>]}
+  search: {slot: 46, material: COMPASS, name: <aqua>Search Crates</aqua>, lore: [<gray>Filter this list by crate ID or name.</gray>]}
+  previous: {slot: 47, material: ARROW, name: <gray>Previous</gray>, lore: []}
+  back: {slot: 49, material: OAK_DOOR, name: <gray>Dashboard</gray>, lore: []}
+  next: {slot: 51, material: ARROW, name: <gray>Next</gray>, lore: []}
+  import: {slot: 53, material: WRITABLE_BOOK, name: <yellow>Import Crate</yellow>, lore: [<gray>Import a validated YAML definition as a draft.</gray>]}
+
+key-list:
+  title: <aqua><bold>PHYSICAL KEYS</bold></aqua> <dark_gray>•</dark_gray> <gray>Page <page></gray>
+  size: 54
+  key-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34]
+  create: {slot: 45, material: LIME_CONCRETE, name: <green>Capture Custom Key</green>, lore: []}
+  sync: {slot: 46, material: CLOCK, name: <aqua>Sync PlexonKeys</aqua>, lore: []}
+  previous: {slot: 47, material: ARROW, name: <gray>Previous</gray>, lore: []}
+  back: {slot: 49, material: OAK_DOOR, name: <gray>Dashboard</gray>, lore: []}
+  next: {slot: 51, material: ARROW, name: <gray>Next</gray>, lore: []}
+  duplicate-key: {slot: 52, material: MAP, name: <aqua>Duplicate Key</aqua>, lore: [<gray>Start an exact captured-key draft from a resolved template.</gray>]}
+  import-keys: {slot: 53, material: WRITABLE_BOOK, name: <yellow>Import Keys</yellow>, lore: [<gray>Import a validated version 2 key registry.</gray>]}
+
+key-template:
+  title: <aqua>Capture Key</aqua> <dark_gray>•</dark_gray> <white><key_id></white>
+  size: 54
+  input-placeholder: {slot: 22, material: HOPPER, name: <yellow><bold>Key Template</bold></yellow>, lore: [<gray>Drag, cursor-click, or shift-click the exact item.</gray>, <dark_gray>Your original stack is never moved.</dark_gray>]}
+  previous: {slot: 20, material: BARRIER, name: <gray>Previous Template</gray>, lore: [<dark_gray>Shown here during a confirmed template rotation.</dark_gray>]}
+  name: {slot: 12, material: NAME_TAG, name: <white>Display Name</white>, lore: [<gray>Click to edit with MiniMessage.</gray>]}
+  legacy: {slot: 30, material: CLOCK, name: <yellow>Keep Previous as Legacy</yellow>, lore: ['<gray>Enabled:</gray> <white><legacy></white>', <dark_gray>Click to toggle before confirming.</dark_gray>]}
+  confirm: {slot: 45, material: LIME_CONCRETE, name: <green>Publish Exact Key</green>, lore: []}
+  cancel: {slot: 53, material: RED_CONCRETE, name: <red>Cancel</red>, lore: []}
+
+key-select:
+  title: <yellow>Select Key for <crate></yellow>
+  size: 54
+  key-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34]
+  previous: {slot: 47, material: ARROW, name: <gray>Previous</gray>, lore: []}
+  back: {slot: 49, material: OAK_DOOR, name: <gray>Back</gray>, lore: []}
+  next: {slot: 51, material: ARROW, name: <gray>Next</gray>, lore: []}
+
+reward-builder:
+  title: <light_purple>Reward Builder</light_purple> <dark_gray>•</dark_gray> <white><reward_id></white>
+  size: 54
+  item-slots: [10, 11, 12, 13, 14, 15, 16]
+  input-placeholder: {slot: 4, material: HOPPER, name: <yellow>Drop Exact Reward Items Here</yellow>, lore: [<gray>Drag, cursor-click, or shift-click.</gray>, <dark_gray>Original items remain untouched.</dark_gray>]}
+  name: {slot: 19, material: NAME_TAG, name: <white>Display Name</white>, lore: []}
+  weight: {slot: 21, material: HEAVY_WEIGHTED_PRESSURE_PLATE, name: <yellow>Weight</yellow>, lore: ['<gray>Current:</gray> <white><weight></white>', '<gray>Base chance:</gray> <white><chance>%</white>', <dark_gray>Left +1 • Right -1 • Shift direct</dark_gray>]}
+  command: {slot: 23, material: COMMAND_BLOCK, name: <gold>Console Commands</gold>, lore: ['<gray>Commands:</gray> <white><commands></white>', <dark_gray>Left add • Right remove • Shift-left edit</dark_gray>, <dark_gray>Shift-right reorder</dark_gray>]}
+  experience: {slot: 25, material: EXPERIENCE_BOTTLE, name: <green>Experience</green>, lore: ['<gray>Left: points • Right: levels</gray>', '<gray>Points:</gray> <white><points></white> <gray>Levels:</gray> <white><levels></white>']}
+  money: {slot: 29, material: GOLD_INGOT, name: <gold>Vault Money</gold>, lore: ['<gray>Amount:</gray> <white><money></white>']}
+  rarity: {slot: 31, material: AMETHYST_SHARD, name: <light_purple>Rarity</light_purple>, lore: ['<gray>Current:</gray> <white><rarity></white>']}
+  clear: {slot: 33, material: CAULDRON, name: <red>Clear Captured Items</red>, lore: []}
+  permissions: {slot: 35, material: PLAYER_HEAD, name: <gold>Permission Filters</gold>, lore: ['<gray>Required:</gray> <white><required></white>', '<gray>Blocked:</gray> <white><blocked></white>']}
+  limits: {slot: 37, material: REPEATER, name: <yellow>Limits & Cooldown</yellow>, lore: [<gray>Configure player/global lifetime and window limits.</gray>]}
+  messages: {slot: 39, material: OAK_SIGN, name: <aqua>Messages & Broadcast</aqua>, lore: [<gray>Configure personal and server MiniMessage text.</gray>]}
+  enabled: {slot: 41, material: LEVER, name: <yellow>Reward Enabled</yellow>, lore: ['<gray>Enabled:</gray> <white><enabled></white>', <dark_gray>Click to toggle.</dark_gray>]}
+  effects: {slot: 42, material: FIREWORK_ROCKET, name: <light_purple>Title, Sound & Firework</light_purple>, lore: ['<gray>Title:</gray> <white><title></white>', '<gray>Sound:</gray> <white><sound></white>', '<gray>Firework:</gray> <white><firework></white>']}
+  order: {slot: 43, material: HOPPER, name: <aqua>Reward Order</aqua>, lore: ['<gray>Position:</gray> <white><position></white>', <dark_gray>Available while editing an existing reward.</dark_gray>]}
+  confirm: {slot: 45, material: LIME_CONCRETE, name: <green>Save Reward Bundle</green>, lore: []}
+  cancel: {slot: 53, material: RED_CONCRETE, name: <red>Cancel</red>, lore: []}
+
+locations:
+  title: <green><bold>WORLD LOCATIONS</bold></green> <dark_gray>•</dark_gray> <gray>Page <page></gray>
+  size: 54
+  location-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34]
+  wand: {slot: 45, material: BLAZE_ROD, name: <green>Get Link Wand</green>, lore: []}
+  previous: {slot: 47, material: ARROW, name: <gray>Previous</gray>, lore: []}
+  back: {slot: 49, material: OAK_DOOR, name: <gray>Dashboard</gray>, lore: []}
+  next: {slot: 51, material: ARROW, name: <gray>Next</gray>, lore: []}
+
+statistics:
+  title: <yellow><bold>CRATE STATISTICS</bold></yellow>
+  size: 27
+  summary: {slot: 13, material: FILLED_MAP, name: <yellow>Opening Totals</yellow>, lore: ['<gray>Global openings:</gray> <white><openings></white>', '<gray>Loaded crates:</gray> <white><crates></white>']}
+  back: {slot: 22, material: OAK_DOOR, name: <gray>Dashboard</gray>, lore: []}
+
+system:
+  title: <white><bold>PLEXONCRATES SYSTEM</bold></white>
+  size: 27
+  validate: {slot: 10, material: LIME_DYE, name: <green>Validate</green>, lore: [<gray>Check every definition without applying it.</gray>]}
+  reload: {slot: 12, material: CLOCK, name: <aqua>Atomic Reload</aqua>, lore: []}
+  backup: {slot: 14, material: CHEST, name: <yellow>Create Backup</yellow>, lore: []}
+  diagnose: {slot: 16, material: SPYGLASS, name: <light_purple>Diagnose</light_purple>, lore: []}
+  back: {slot: 22, material: OAK_DOOR, name: <gray>Dashboard</gray>, lore: []}
+
+global-rewards:
+  title: <light_purple><bold>ALL REWARDS</bold></light_purple> <dark_gray>•</dark_gray> <gray>Page <page></gray>
+  size: 54
+  reward-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34]
+  previous: {slot: 47, material: ARROW, name: <gray>Previous</gray>, lore: []}
+  back: {slot: 49, material: OAK_DOOR, name: <gray>Dashboard</gray>, lore: []}
+  next: {slot: 51, material: ARROW, name: <gray>Next</gray>, lore: []}
+
+wand-select:
+  title: <green>Select Crate for Link Wand</green>
+  size: 54
+  entry-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34]
+  previous: {slot: 47, material: ARROW, name: <gray>Previous</gray>, lore: []}
+  back: {slot: 49, material: OAK_DOOR, name: <gray>Back</gray>, lore: []}
+  next: {slot: 51, material: ARROW, name: <gray>Next</gray>, lore: []}
+
+confirm-unlink:
+  title: <red>Unlink crate block?</red>
+  size: 27
+  confirm: {slot: 11, material: LIME_CONCRETE, name: <green>Confirm Unlink</green>, lore: []}
+  cancel: {slot: 15, material: RED_CONCRETE, name: <red>Keep Link</red>, lore: []}
+
+confirm-crate-delete:
+  title: <red>Confirm <action>?</red>
+  size: 27
+  confirm: {slot: 11, material: LIME_CONCRETE, name: <green>Confirm</green>, lore: []}
+  cancel: {slot: 15, material: RED_CONCRETE, name: <red>Cancel</red>, lore: []}
+
+confirm-key-delete:
+  title: <red>Delete physical key <key_id>?</red>
+  size: 27
+  confirm: {slot: 11, material: LIME_CONCRETE, name: <green>Confirm Delete</green>, lore: []}
+  cancel: {slot: 15, material: RED_CONCRETE, name: <red>Keep Key</red>, lore: []}
 
 confirm-delete:
   title: <red>Remove reward?</red>
@@ -144,4 +332,14 @@ confirm-delete:
     slot: 15
     material: RED_CONCRETE
     name: <red>Keep reward</red>
+    lore: []
+
+summary:
+  title: <crate> <dark_gray>•</dark_gray> <yellow><amount>x Summary</yellow>
+  size: 54
+  reward-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34]
+  close:
+    slot: 49
+    material: BARRIER
+    name: <red>Close summary</red>
     lore: []

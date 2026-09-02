@@ -5,12 +5,16 @@ import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
+import com.antondev.crates.domain.crate.AnimationType;
+import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Particle;
 import org.bukkit.World;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 public record PluginSettings(
+        String databaseFile,
+        int maximumQueuedWrites,
         boolean enabled,
         Set<String> worlds,
         Set<String> excludedWorlds,
@@ -21,12 +25,16 @@ public record PluginSettings(
         String plexonKeysPlugin,
         String plexonKeysMode,
         String fallbackFile,
+        boolean consumeOffhandKeys,
         boolean leftPreview,
         boolean rightOpen,
         boolean sneakBulk,
         boolean cancelVanillaUse,
         int targetDistance,
         boolean animationEnabled,
+        AnimationType defaultAnimation,
+        int bulkSummaryThreshold,
+        String recoveryPolicy,
         int animationDuration,
         int animationPeriod,
         String openingSound,
@@ -46,13 +54,24 @@ public record PluginSettings(
         double particleHorizontalSpread,
         double particleVerticalSpread,
         double particleViewRange,
+        int inputTimeoutSeconds,
+        int sessionTimeoutMinutes,
+        Set<Material> deniedLocationMaterials,
+        Set<String> allowedLocationWorlds,
+        boolean placeholderApiEnabled,
+        boolean vaultEnabled,
         boolean consoleLogging,
         boolean fileLogging,
         String logDateFormat) {
 
     public static PluginSettings load(File file) {
         YamlConfiguration c = YamlConfiguration.loadConfiguration(file);
-        if (c.getInt("config-version") != 1) throw new IllegalArgumentException("Unsupported config.yml config-version");
+        if (c.getInt("config-version") != 2) throw new IllegalArgumentException("Unsupported config.yml config-version; expected 2");
+        String databaseFile = required(c, "database.file");
+        if (!databaseFile.matches("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\\.db") || databaseFile.contains("..")) {
+            throw new IllegalArgumentException("database.file must be a safe relative data/*.db path");
+        }
+        int maximumQueuedWrites = integer(c, "database.maximum-queued-writes", 64, 100_000);
         int bulk = integer(c, "settings.maximum-bulk-open", 1, 10_000);
         int save = integer(c, "settings.statistics-save-seconds", 30, 86_400);
         int target = integer(c, "interaction.maximum-target-distance", 1, 64);
@@ -82,19 +101,37 @@ public record PluginSettings(
         String dateFormat = required(c, "logging.date-format");
         try { DateTimeFormatter.ofPattern(dateFormat); }
         catch (IllegalArgumentException error) { throw new IllegalArgumentException("logging.date-format is invalid", error); }
+        AnimationType defaultAnimation;
+        try { defaultAnimation = AnimationType.valueOf(c.getString("opening.default-animation", "ROULETTE").toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException error) { throw new IllegalArgumentException("opening.default-animation is invalid", error); }
+        String recoveryPolicy = c.getString("opening.recovery-policy", "MANUAL_REVIEW").toUpperCase(Locale.ROOT);
+        if (!recoveryPolicy.equals("MANUAL_REVIEW")) {
+            throw new IllegalArgumentException("opening.recovery-policy currently supports only MANUAL_REVIEW; arbitrary rewards are never replayed automatically");
+        }
+        Set<Material> deniedMaterials = c.getStringList("locations.denied-materials").stream().map(value -> {
+            Material material = Material.matchMaterial(value);
+            if (material == null) throw new IllegalArgumentException("Unknown locations.denied-materials entry: " + value);
+            return material;
+        }).collect(Collectors.toUnmodifiableSet());
         return new PluginSettings(
+                databaseFile, maximumQueuedWrites,
                 c.getBoolean("settings.enabled"), lower(c.getStringList("settings.worlds")),
                 lower(c.getStringList("settings.excluded-worlds")), c.getBoolean("settings.drop-overflow-items"),
                 bulk, save, c.getBoolean("plexonkeys.enabled"), required(c, "plexonkeys.plugin-name"), mode,
-                fallback, c.getBoolean("interaction.left-click-preview"),
+                fallback, c.getBoolean("interaction.consume-offhand-keys"), c.getBoolean("interaction.left-click-preview"),
                 c.getBoolean("interaction.right-click-open"), c.getBoolean("interaction.sneak-right-click-bulk"),
                 c.getBoolean("interaction.cancel-vanilla-block-use"), target, c.getBoolean("opening.animation-enabled"),
+                defaultAnimation, integer(c, "opening.bulk-summary-threshold", 1, 64), recoveryPolicy,
                 duration, period, openingSound, finishSound, volume, pitch,
                 c.getBoolean("holograms.enabled"), number(c, "holograms.vertical-offset", -10, 10),
                 number(c, "holograms.view-range", 1, 256), lineWidth, c.getBoolean("holograms.shadowed"),
                 c.getBoolean("holograms.see-through"), c.getBoolean("particles.enabled"), particle, particleInterval,
                 particleCount, number(c, "particles.horizontal-spread", 0, 10),
                 number(c, "particles.vertical-spread", 0, 10), number(c, "particles.view-range", 1, 256),
+                integer(c, "editing.input-timeout-seconds", 10, 300),
+                integer(c, "editing.session-timeout-minutes", 1, 240), deniedMaterials,
+                lower(c.getStringList("locations.allowed-worlds")), c.getBoolean("integrations.placeholderapi"),
+                c.getBoolean("integrations.vault"),
                 c.getBoolean("logging.console"), c.getBoolean("logging.file"), dateFormat);
     }
 

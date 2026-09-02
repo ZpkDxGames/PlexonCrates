@@ -2,6 +2,41 @@
 
 All notable PlexonCrates changes are documented here.
 
+## 2.0.0 — 2026-09-02
+
+### Added
+
+- SQLite schema for world links, statistics, opening history/journals, reward limits, pity counters, persistent drafts, cached provider templates, migration markers, and administrative audit records.
+- Provider-backed physical-key registry with live PlexonKeys discovery, last-known-good cache, exact fallback templates, captured custom keys, collision diagnostics, and optional legacy-template rotation.
+- Persistent crate lifecycle (`DRAFT`, `PUBLISHED`, `DISABLED`, and `ARCHIVED`) with guided creation, search, clone, import/export, validation, and destructive confirmations.
+- Full reward-bundle editor for exact items, console commands, experience, levels, Vault money, rarity, display item, permissions, messages, broadcasts, limits, ordering, test delivery, and presentation effects.
+- Per-player/global lifetime and rolling-window limits, reward cooldowns, and deterministic pity policies.
+- Protected persistent-data-tagged Link Wand with block inspection, duplicate-link prevention, confirmations, and break/explosion/piston protection.
+- Journal-first opening coordinator with immutable plans, immediate revalidation, per-player locks, bounded bulk behavior, atomic history/state completion, and manual crash-review diagnostics.
+- `INSTANT`, `ROULETTE`, `REVEAL`, and `SUMMARY` opening modes, native TextDisplay holograms, centralized particles, and per-reward titles/sounds/firework effects.
+- Optional Vault and PlaceholderAPI integrations, personal history command, consistent backups, grouped diagnostics, granular permissions, public services API, and Bukkit lifecycle events.
+- Automatic, idempotent, reversible 1.0 migration with a timestamped YAML backup and one transaction spanning SQLite import plus converted-file commit.
+
+### Changed
+
+- Upgraded every bundled configuration file to `config-version: 2` while preserving the four default crates and their 32 rewards.
+- Reworked exact key handling so a transaction freezes one resolved template and scans deterministic inventory slots only once per validation/consumption stage.
+- Reward previews now use the same permission, dependency, limit, and pity-aware pool as selection.
+- Configuration reload now validates a complete immutable snapshot and rolls back settings, messages, menus, crates, keys, and displays if activation fails.
+- Administrative GUI permissions now enforce the relevant granular node on each action.
+- Opening logs and diagnostics now include transaction/provider/schema context without serializing private item data.
+
+### Security
+
+- Rejected forged key lookalikes that differ in PDC or custom metadata.
+- Prevented double-click races, distributed GUI drag capture, editor-item recapture, unbounded bypass bulk opening, path traversal IDs/imports, unsafe reward commands, and implicit OP protection bypass.
+- Ensured cancellation, missing permissions, exhausted limits, changed keys, invalid worlds, and insufficient inventory capacity consume zero keys.
+
+### Testing and release
+
+- Expanded unit and MockBukkit coverage for provider resolution, exact matching, key consumption, SQLite atomicity, migration rollback/idempotency, limits, pity, journaled openings, import/export, GUI capture, full reward editing, reload rollback, and Link Wand persistence/protection.
+- Retained Java 25 CI and immutable GitHub release packaging with a shaded JAR and SHA-256 checksum.
+
 ## 1.0.0 — 2026-09-01
 
 ### Added

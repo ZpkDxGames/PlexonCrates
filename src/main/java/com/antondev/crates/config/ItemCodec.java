@@ -118,6 +118,20 @@ public final class ItemCodec {
         return encoded;
     }
 
+    public static ItemStack decode(String encoded, boolean normalizeAmount) {
+        if (encoded == null || encoded.isBlank() || encoded.length() > MAX_CAPTURE_LENGTH) {
+            throw new IllegalArgumentException("Invalid captured item data");
+        }
+        try {
+            ItemStack item = ItemStack.deserializeBytes(Base64.getDecoder().decode(encoded));
+            if (item == null || item.getType().isAir()) throw new IllegalArgumentException("Captured item is empty");
+            if (normalizeAmount) item.setAmount(1);
+            return item;
+        } catch (RuntimeException error) {
+            throw new IllegalArgumentException("Invalid captured item data", error);
+        }
+    }
+
     public static ItemStack one(ItemStack source) {
         ItemStack copy = source.clone();
         copy.setAmount(1);

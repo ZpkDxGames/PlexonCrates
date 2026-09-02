@@ -1,10 +1,23 @@
-config-version: 1
+config-version: 2
 id: legendary
-enabled: true
+state: PUBLISHED
+display-order: 40
 display-name: <gradient:#FFB347:#FFE59A><bold>Legendary Crate</bold></gradient>
-key-id: legendary
-permission: ''
-open-cooldown-seconds: 3
+description:
+- <gray>The rarest treasures in the Plexon vault.</gray>
+access:
+  permission: ''
+  worlds: []
+  excluded-worlds: []
+keys:
+  cost: 1
+  accepted: [legendary]
+opening:
+  cooldown-seconds: 3
+  bulk-enabled: true
+  bulk-maximum: 64
+  animation: ROULETTE
+  broadcast: <gold>★</gold> <white><player></white> <gray>opened <crate><gray>!</gray>
 icon:
   material: END_CRYSTAL
   name: <gradient:#FF9F2E:#FFD76A:#FFF0B2><bold>★ LEGENDARY CRATE ★</bold></gradient>
@@ -21,7 +34,10 @@ hologram:
   - <gradient:#FF9F2E:#FFD76A:#FFF0B2><bold>★ LEGENDARY CRATE ★</bold></gradient>
   - <gray>Left-click to preview</gray>
   - <gold>Right-click with a Legendary Key</gold>
-broadcast: <gold>★</gold> <white><player></white> <gray>opened <crate><gray>!</gray>
+pity:
+  enabled: false
+  threshold: 0
+  reward-ids: []
 rewards:
   diamond_vault:
     enabled: true

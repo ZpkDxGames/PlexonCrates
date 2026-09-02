@@ -1,161 +1,351 @@
 package com.antondev.crates.service;
 
 import com.antondev.crates.PlexonCrates;
+import com.antondev.crates.api.event.CrateKeyConsumeEvent;
+import com.antondev.crates.api.event.CrateOpenEvent;
+import com.antondev.crates.api.event.CratePreOpenEvent;
+import com.antondev.crates.api.event.CrateRewardSelectEvent;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.database.DatabaseService;
+import com.antondev.crates.domain.crate.AnimationType;
+import com.antondev.crates.domain.crate.CrateState;
+import com.antondev.crates.domain.opening.OpenSource;
+import com.antondev.crates.domain.opening.OpeningPlan;
+import com.antondev.crates.domain.opening.RewardDelivery;
+import com.antondev.crates.domain.reward.RewardPresentation;
+import com.antondev.crates.integration.PlaceholderBridge;
+import com.antondev.crates.integration.VaultEconomyBridge;
+import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
+import java.time.Instant;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+import net.kyori.adventure.title.Title;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
+/** Validated, journaled opening coordinator. Selection and delivery precede cosmetics. */
 public final class OpeningService {
     private final PlexonCrates plugin;
     private final OpeningLog log;
-    private final Set<UUID> animating = new HashSet<>();
+    private final VaultEconomyBridge economy;
+    private final PlaceholderBridge placeholders;
+    private final Set<UUID> locks = new HashSet<>();
+    private final Map<UUID, PendingOpening> pending = new HashMap<>();
     private final Map<UUID, Map<String, Long>> cooldowns = new HashMap<>();
 
     public OpeningService(PlexonCrates plugin, OpeningLog log) {
         this.plugin = plugin;
         this.log = log;
+        this.economy = new VaultEconomyBridge(plugin);
+        this.placeholders = new PlaceholderBridge(plugin);
     }
 
+    /** Compatibility entry point retained from 1.0. */
     public boolean open(Player player, Crate crate, int amount, boolean forced) {
-        if (!forced && !player.hasPermission("plexoncrates.use")) {
-            plugin.messages().send(player, "no-permission");
-            return false;
-        }
-        if (!plugin.settings().enabled() || !crate.enabled()) {
-            plugin.messages().send(player, "disabled");
-            return false;
-        }
-        if (!plugin.settings().allows(player.getWorld())) {
-            plugin.messages().send(player, "invalid-world");
-            return false;
-        }
-        if (!crate.permission().isBlank() && !player.hasPermission(crate.permission())) {
-            plugin.messages().send(player, "no-permission");
-            return false;
-        }
-        if (amount < 1 || amount > plugin.settings().maximumBulk()) {
-            plugin.messages().send(player, "invalid-amount", Text.value("maximum", plugin.settings().maximumBulk()));
-            return false;
-        }
-        boolean animate = amount == 1 && plugin.settings().animationEnabled();
-        if (animating.contains(player.getUniqueId())) {
+        return open(player, crate, amount, forced ? OpenSource.ADMIN_FORCE : OpenSource.GUI, null);
+    }
+
+    public boolean open(Player player, Crate crate, int amount, OpenSource source, BlockPosition location) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Crate openings must begin on the primary server thread");
+        if (!locks.add(player.getUniqueId())) {
             plugin.messages().send(player, "already-opening");
             return false;
         }
-        if (!forced && !player.hasPermission("plexoncrates.bypass.cooldown")) {
-            long remaining = cooldownRemaining(player, crate);
-            if (remaining > 0) {
-                plugin.messages().send(player, "cooldown", Text.value("seconds", Math.max(1, (remaining + 999) / 1000)));
-                return false;
+        try {
+            boolean forced = source == OpenSource.ADMIN_FORCE;
+            if (!forced && !player.hasPermission("plexoncrates.open") && !player.hasPermission("plexoncrates.use")) {
+                return reject(player, "no-permission");
             }
-        }
-
-        boolean consumeKey = !forced && !player.hasPermission("plexoncrates.bypass.key");
-        if (consumeKey && plugin.keys().count(player, crate.keyId()) < amount) {
-            plugin.messages().send(player, "no-key", Text.component("key", keyName(crate)));
-            return false;
-        }
-
-        var selected = new ArrayList<CrateReward>(amount);
-        for (int index = 0; index < amount; index++) {
-            var reward = RewardSelector.select(crate.orderedRewards(), player);
-            if (reward.isEmpty()) {
-                plugin.messages().send(player, "no-eligible-rewards");
-                return false;
+            if (!plugin.settings().enabled() || crate.state() != CrateState.PUBLISHED) return reject(player, "disabled");
+            if (!plugin.settings().allows(player.getWorld()) || !crate.allows(player.getWorld())) return reject(player, "invalid-world");
+            if (!crate.permission().isBlank() && !player.hasPermission(crate.permission())) return reject(player, "no-permission");
+            int maximum = Math.min(plugin.settings().maximumBulk(), crate.bulkMaximum());
+            if (amount < 1 || amount > maximum || (amount > 1 && !crate.bulkEnabled())) {
+                plugin.messages().send(player, "invalid-amount", Text.value("maximum", maximum));
+                return rejectSilently(player);
             }
-            selected.add(reward.get());
-        }
+            if (!forced && !player.hasPermission("plexoncrates.bypass.cooldown")) {
+                long remaining = cooldownRemaining(player, crate);
+                if (remaining > 0) {
+                    plugin.messages().send(player, "cooldown", Text.value("seconds", Math.max(1, (remaining + 999) / 1000)));
+                    return rejectSilently(player);
+                }
+            }
 
-        List<ItemStack> items = selected.stream().flatMap(reward -> reward.itemCopies().stream()).toList();
-        if (!plugin.settings().dropOverflow()
-                && !InventoryPlanner.fits(player.getInventory().getStorageContents(), items)) {
-            plugin.messages().send(player, "inventory-full");
-            return false;
-        }
-        if (consumeKey && !plugin.keys().consume(player, crate.keyId(), amount)) {
-            plugin.messages().send(player, "no-key", Text.component("key", keyName(crate)));
-            return false;
-        }
+            boolean bypassingKey = !forced && crate.keyCost() > 0 && player.hasPermission("plexoncrates.bypass.key");
+            if (bypassingKey && amount > 1) amount = 1;
+            boolean consumeKey = !forced && !bypassingKey && crate.keyCost() > 0;
+            KeyChoice keyChoice = chooseKey(player, crate, amount, consumeKey);
+            if (consumeKey && (keyChoice.transaction() == null || keyChoice.maximumOpenings() < 1)) {
+                plugin.messages().send(player, "no-key", Text.component("key", keyName(crate)));
+                return rejectSilently(player);
+            }
 
-        if (animate) animating.add(player.getUniqueId());
-        setCooldown(player, crate);
-        boolean overflow = deliver(player, crate, selected);
-        if (overflow) plugin.messages().send(player, "reward-overflow");
+            int requested = Math.min(amount, keyChoice.maximumOpenings());
+            boolean bypassLimits = forced || player.hasPermission("plexoncrates.bypass.limit");
+            RewardStateService.Plan rewardPlan = plugin.rewardStates().plan(player.getUniqueId(), crate, requested,
+                    source, baseEligibility(player), bypassLimits, System.currentTimeMillis());
+            var selected = new ArrayList<>(rewardPlan.rewards());
+            if (selected.isEmpty()) return reject(player, "no-eligible-rewards");
 
-        if (animate) {
-            try {
-                plugin.menus().animate(player, crate, selected.getFirst(), () -> {
-                    animating.remove(player.getUniqueId());
-                    announceSingle(player, crate, selected.getFirst());
+            if (!plugin.settings().dropOverflow()) {
+                while (!selected.isEmpty()) {
+                    List<ItemStack> candidateItems = selected.stream().flatMap(reward -> reward.itemCopies().stream()).toList();
+                    if (InventoryPlanner.fits(player.getInventory().getStorageContents(), candidateItems)) break;
+                    selected.removeLast();
+                }
+                if (selected.isEmpty()) return reject(player, "inventory-full");
+            }
+
+            int openingCount = selected.size();
+            int keyAmount = consumeKey ? Math.multiplyExact(openingCount, crate.keyCost()) : 0;
+            List<RewardDelivery> deliveries = selected.stream().map(OpeningService::delivery).toList();
+
+            UUID transactionId = UUID.randomUUID();
+            OpeningPlan plan = new OpeningPlan(transactionId, player.getUniqueId(), player.getName(), crate.id(),
+                    keyChoice.keyId(), keyAmount, openingCount, source, location, deliveries, Instant.now());
+            for (RewardDelivery reward : deliveries) {
+                Bukkit.getPluginManager().callEvent(new CrateRewardSelectEvent(player, plan, reward));
+            }
+            CratePreOpenEvent event = new CratePreOpenEvent(player, plan);
+            Bukkit.getPluginManager().callEvent(event);
+            if (event.isCancelled()) {
+                plugin.messages().send(player, "opening-cancelled");
+                return rejectSilently(player);
+            }
+
+            PendingOpening opening = new PendingOpening(plan, crate, selected, keyChoice.transaction(), consumeKey);
+            pending.put(transactionId, opening);
+            DatabaseService.JournalRecord journal = new DatabaseService.JournalRecord(transactionId,
+                    player.getUniqueId(), player.getName(), crate.id(), keyChoice.keyId(), keyAmount,
+                    openingCount, source.name(), String.join(",", plan.rewardIds()), plan.createdAt());
+            plugin.database().prepareJournal(journal).whenComplete((ignored, error) -> {
+                if (!plugin.isEnabled()) return;
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (error != null) abortPrepared(transactionId, "Database journal preparation failed", true);
+                    else commitPrepared(transactionId);
                 });
-            } catch (RuntimeException error) {
-                animating.remove(player.getUniqueId());
-                plugin.getLogger().log(Level.WARNING, "Could not show the crate animation; the selected reward was still delivered safely.", error);
-                announceSingle(player, crate, selected.getFirst());
-            }
-        } else if (amount == 1) {
-            announceSingle(player, crate, selected.getFirst());
-        } else {
-            plugin.messages().send(player, "bulk-opened", Text.value("amount", amount),
-                    Text.component("crate", crate.displayName()), Text.value("rewards", selected.size()));
-            announceBroadcasts(player, crate, selected);
+            });
+            return true;
+        } catch (RuntimeException error) {
+            locks.remove(player.getUniqueId());
+            throw error;
         }
-        return true;
     }
 
     public int bulkAmount(Player player, Crate crate) {
-        // Prevent an operator's default bypass permission from accidentally producing
-        // a maximum-size free bulk opening on every sneak-click.
         if (player.hasPermission("plexoncrates.bypass.key")) return 1;
-        return Math.min(plugin.settings().maximumBulk(), plugin.keys().count(player, crate.keyId()));
+        int maximum = Math.min(plugin.settings().maximumBulk(), crate.bulkMaximum());
+        if (!crate.bulkEnabled() || crate.keyCost() <= 0) return 1;
+        int available = 0;
+        for (String keyId : crate.acceptedKeyIds()) available = Math.max(available, plugin.keys().count(player, keyId));
+        return Math.max(1, Math.min(maximum, available / crate.keyCost()));
+    }
+
+    public boolean isOpening(UUID playerId) { return locks.contains(playerId); }
+    public int pendingCount() { return pending.size(); }
+    public boolean economyAvailable() { return economy.available(); }
+    public String economyDiagnostic() { return economy.diagnostic(); }
+
+    public boolean testDeliver(Player player, Crate crate, CrateReward reward) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Reward tests must run on the primary server thread");
+        if (!player.hasPermission("plexoncrates.admin.rewards")) return reject(player, "no-permission");
+        if (!reward.hasDelivery() || (reward.money() > 0 && (!plugin.settings().vaultEnabled() || !economy.available()))) {
+            return reject(player, "no-eligible-rewards");
+        }
+        if (!plugin.settings().dropOverflow()
+                && !InventoryPlanner.fits(player.getInventory().getStorageContents(), reward.itemCopies())) {
+            return reject(player, "inventory-full");
+        }
+        UUID transaction = UUID.randomUUID();
+        OpeningPlan plan = new OpeningPlan(transaction, player.getUniqueId(), player.getName(), crate.id(), "TEST", 0,
+                1, OpenSource.ADMIN_FORCE, null, List.of(delivery(reward)), Instant.now());
+        DeliveryResult result = deliver(player, crate, List.of(reward), plan, false);
+        plugin.database().audit(new DatabaseService.AuditRecord(player.getUniqueId(), player.getName(), "TEST_DELIVER",
+                "REWARD", crate.id() + ":" + reward.id(), "Test-delivered without key, limits, pity, or statistics", Instant.now()));
+        player.sendMessage(Text.parse("<green>Test-delivered</green> ").append(reward.displayName())
+                .append(Text.parse("<green>; no key, statistics, limit, or pity state changed.</green>")));
+        if (result.overflowCount() > 0) plugin.messages().send(player, "reward-overflow");
+        return true;
     }
 
     public void clear() {
-        animating.clear();
+        for (UUID transaction : List.copyOf(pending.keySet())) {
+            plugin.database().updateJournal(transaction, "CANCELLED", "Plugin disabled before inventory mutation");
+        }
+        pending.clear();
+        locks.clear();
         cooldowns.clear();
     }
 
-    private boolean deliver(Player player, Crate crate, List<CrateReward> selected) {
-        boolean overflow = false;
+    private void commitPrepared(UUID transactionId) {
+        PendingOpening opening = pending.get(transactionId);
+        if (opening == null) return;
+        OpeningPlan plan = opening.plan();
+        Player player = Bukkit.getPlayer(plan.playerId());
+        try {
+            if (player == null || !player.isOnline()) {
+                abortPrepared(transactionId, "Player disconnected before key consumption", false);
+                return;
+            }
+            Crate current = plugin.crates().find(plan.crateId()).orElse(null);
+            if (current == null || current.state() != CrateState.PUBLISHED
+                    || !plugin.settings().enabled() || !plugin.settings().allows(player.getWorld())
+                    || !current.allows(player.getWorld())) {
+                abortPrepared(transactionId, "Crate or world state changed before consumption", false);
+                plugin.messages().send(player, "opening-state-changed");
+                return;
+            }
+            if (!current.permission().isBlank() && !player.hasPermission(current.permission())) {
+                abortPrepared(transactionId, "Permission changed before consumption", false);
+                plugin.messages().send(player, "no-permission");
+                return;
+            }
+            boolean bypassLimits = plan.source() == OpenSource.ADMIN_FORCE || player.hasPermission("plexoncrates.bypass.limit");
+            Predicate<CrateReward> eligibility = baseEligibility(player);
+            if (!plugin.rewardStates().canApply(player.getUniqueId(), current, opening.selected(), plan.source(),
+                    eligibility, bypassLimits, System.currentTimeMillis())) {
+                abortPrepared(transactionId, "Reward limits or pity state changed before consumption", false);
+                plugin.messages().send(player, "no-eligible-rewards");
+                return;
+            }
+            if (opening.consumeKey()
+                    && (opening.keyTransaction() == null
+                    || plugin.keys().count(player, opening.keyTransaction()) < plan.keyAmount())) {
+                abortPrepared(transactionId, "Exact key count changed before consumption", false);
+                plugin.messages().send(player, "no-key", Text.component("key", keyName(current)));
+                return;
+            }
+            List<ItemStack> items = plan.deliveries().stream().flatMap(delivery -> delivery.items().stream()).toList();
+            if (!plugin.settings().dropOverflow()
+                    && !InventoryPlanner.fits(player.getInventory().getStorageContents(), items)) {
+                abortPrepared(transactionId, "Inventory capacity changed before consumption", false);
+                plugin.messages().send(player, "inventory-full");
+                return;
+            }
+            if (opening.consumeKey() && !plugin.keys().consume(player, opening.keyTransaction(), plan.keyAmount())) {
+                abortPrepared(transactionId, "Exact key revalidation failed", false);
+                plugin.messages().send(player, "no-key", Text.component("key", keyName(current)));
+                return;
+            }
+            if (opening.consumeKey()) Bukkit.getPluginManager().callEvent(new CrateKeyConsumeEvent(player, plan));
+            plugin.database().updateJournal(transactionId, "CONSUMED", "");
+
+            DeliveryResult delivered = deliver(player, current, opening.selected(), plan, true);
+            DatabaseService.RewardStateCommit rewardState = plugin.rewardStates().apply(player.getUniqueId(), current,
+                    opening.selected(), plan.source(), eligibility, bypassLimits, System.currentTimeMillis());
+            plugin.statistics().record(player.getUniqueId(), current.id(), plan.openingCount());
+            setCooldown(player, current);
+            DatabaseService.OpeningRecord record = new DatabaseService.OpeningRecord(transactionId,
+                    player.getUniqueId(), player.getName(), current.id(), plan.keyId(), plan.keyAmount(),
+                    plan.openingCount(), plan.source().name(), String.join(",", plan.rewardIds()),
+                    locationText(plan.location()), delivered.overflowCount(), Instant.now());
+            plugin.database().completeOpening(record, rewardState);
+            Bukkit.getPluginManager().callEvent(new CrateOpenEvent(player, plan, delivered.overflowCount()));
+            if (delivered.overflowCount() > 0) plugin.messages().send(player, "reward-overflow");
+            showResult(player, current, opening.selected(), plan);
+        } catch (RuntimeException error) {
+            plugin.getLogger().log(Level.SEVERE, "Opening " + transactionId + " failed during the main-thread commit", error);
+            plugin.database().updateJournal(transactionId, "FAILED", concise(error));
+            if (player != null) plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+        } finally {
+            pending.remove(transactionId);
+            locks.remove(plan.playerId());
+        }
+    }
+
+    private DeliveryResult deliver(Player player, Crate crate, List<CrateReward> selected, OpeningPlan plan,
+                                   boolean recordOpeningLog) {
+        int overflow = 0;
         for (CrateReward reward : selected) {
             for (ItemStack item : reward.itemCopies()) {
                 var leftovers = player.getInventory().addItem(item).values();
-                if (!leftovers.isEmpty()) overflow = true;
                 for (ItemStack leftover : leftovers) {
-                    player.getWorld().dropItemNaturally(player.getLocation(), leftover);
-                }
-            }
-            for (String command : reward.commands()) {
-                String rendered = command
-                        .replace("%player%", player.getName())
-                        .replace("%uuid%", player.getUniqueId().toString())
-                        .replace("%crate%", crate.id())
-                        .replace("%reward%", reward.id());
-                try {
-                    if (!Bukkit.dispatchCommand(Bukkit.getConsoleSender(), rendered)) {
-                        plugin.getLogger().warning("Reward command returned false: " + rendered);
+                    overflow += leftover.getAmount();
+                    if (plugin.settings().dropOverflow()) {
+                        player.getWorld().dropItemNaturally(player.getLocation(), leftover);
                     }
-                } catch (RuntimeException error) {
-                    plugin.getLogger().log(Level.SEVERE, "Reward command failed after a valid key was consumed: " + rendered, error);
                 }
             }
-            plugin.statistics().record(player.getUniqueId(), crate.id());
-            log.record(player, crate, reward);
+            if (reward.experiencePoints() > 0) player.giveExp(reward.experiencePoints(), true);
+            if (reward.experienceLevels() > 0) player.giveExpLevels(reward.experienceLevels());
+            if (reward.money() > 0 && !economy.deposit(player, reward.money())) {
+                plugin.getLogger().severe("Vault rejected money reward " + reward.id() + " in transaction " + plan.transactionId());
+                plugin.database().updateJournal(plan.transactionId(), "DELIVERY_WARNING", "Vault rejected money reward " + reward.id());
+            }
+            for (String command : reward.commands()) dispatchRewardCommand(player, crate, reward, command, plan.location());
+            if (!reward.personalMessage().isBlank()) player.sendMessage(plugin.messages().parseRaw(reward.personalMessage(), tags(player, crate, reward)));
+            present(player, crate, reward);
+            if (recordOpeningLog) log.record(player, crate, reward);
         }
-        return overflow;
+        return new DeliveryResult(overflow);
+    }
+
+    private void dispatchRewardCommand(Player player, Crate crate, CrateReward reward, String command, BlockPosition location) {
+        String rendered = command
+                .replace("%player%", player.getName())
+                .replace("%display_name%", PlainTextComponentSerializer.plainText().serialize(player.displayName()))
+                .replace("%uuid%", player.getUniqueId().toString())
+                .replace("%crate%", crate.id())
+                .replace("%crate_id%", crate.id())
+                .replace("%reward%", reward.id())
+                .replace("%reward_id%", reward.id())
+                .replace("%world%", location == null ? player.getWorld().getName() : location.worldName())
+                .replace("%x%", Integer.toString(location == null ? player.getLocation().getBlockX() : location.x()))
+                .replace("%y%", Integer.toString(location == null ? player.getLocation().getBlockY() : location.y()))
+                .replace("%z%", Integer.toString(location == null ? player.getLocation().getBlockZ() : location.z()));
+        if (plugin.settings().placeholderApiEnabled()) rendered = placeholders.expand(player, rendered);
+        try {
+            if (!Bukkit.dispatchCommand(Bukkit.getConsoleSender(), rendered)) {
+                plugin.getLogger().warning("Reward command returned false: " + rendered);
+            }
+        } catch (RuntimeException error) {
+            plugin.getLogger().log(Level.SEVERE, "Reward command failed in a delivered transaction: " + rendered, error);
+        }
+    }
+
+    private void showResult(Player player, Crate crate, List<CrateReward> selected, OpeningPlan plan) {
+        if (plan.openingCount() == 1) {
+            CrateReward reward = selected.getFirst();
+            if (!plugin.settings().animationEnabled() || crate.animation() == AnimationType.INSTANT) {
+                announceSingle(player, crate, reward);
+                return;
+            }
+            try {
+                switch (crate.animation()) {
+                    case ROULETTE -> plugin.menus().animate(player, crate, reward, () -> announceSingle(player, crate, reward));
+                    case REVEAL -> plugin.menus().reveal(player, crate, reward, () -> announceSingle(player, crate, reward));
+                    case SUMMARY -> { announceSingle(player, crate, reward); plugin.menus().openSummary(player, crate, selected); }
+                    case INSTANT -> announceSingle(player, crate, reward);
+                }
+            } catch (RuntimeException error) {
+                plugin.getLogger().log(Level.WARNING, "Could not show the crate animation; delivery is already complete.", error);
+                announceSingle(player, crate, reward);
+            }
+        } else {
+            plugin.messages().send(player, "bulk-opened", Text.value("amount", plan.openingCount()),
+                    Text.component("crate", crate.displayName()), Text.value("rewards", selected.size()));
+            announceBroadcasts(player, crate, selected);
+            if (crate.animation() == AnimationType.SUMMARY
+                    || plan.openingCount() > plugin.settings().bulkSummaryThreshold()) {
+                plugin.menus().openSummary(player, crate, selected);
+            }
+        }
     }
 
     private void announceSingle(Player player, Crate crate, CrateReward reward) {
@@ -167,11 +357,8 @@ public final class OpeningService {
     }
 
     private void announceBroadcasts(Player player, Crate crate, List<CrateReward> rewards) {
-        TagResolver[] crateTags = tags(player, crate, null);
-        plugin.messages().broadcastRaw(crate.broadcast(), crateTags);
-        for (CrateReward reward : rewards) {
-            plugin.messages().broadcastRaw(reward.broadcast(), tags(player, crate, reward));
-        }
+        plugin.messages().broadcastRaw(crate.broadcast(), tags(player, crate, null));
+        for (CrateReward reward : rewards) plugin.messages().broadcastRaw(reward.broadcast(), tags(player, crate, reward));
     }
 
     private TagResolver[] tags(Player player, Crate crate, CrateReward reward) {
@@ -181,11 +368,75 @@ public final class OpeningService {
                 Text.value("reward_id", reward == null ? "" : reward.id())};
     }
 
+    private void present(Player player, Crate crate, CrateReward reward) {
+        RewardPresentation presentation = reward.presentation();
+        try {
+            TagResolver[] tags = tags(player, crate, reward);
+            if (!presentation.title().isBlank() || !presentation.subtitle().isBlank()) {
+                player.showTitle(Title.title(plugin.messages().parseRaw(presentation.title(), tags),
+                        plugin.messages().parseRaw(presentation.subtitle(), tags),
+                        Title.Times.times(Duration.ofMillis(250), Duration.ofSeconds(2), Duration.ofMillis(500))));
+            }
+            if (!presentation.sound().isBlank()) {
+                player.playSound(player.getLocation(), presentation.sound(), presentation.soundVolume(), presentation.soundPitch());
+            }
+            if (presentation.firework()) {
+                player.getWorld().spawnParticle(org.bukkit.Particle.FIREWORK, player.getLocation().add(0, 1, 0),
+                        24, 0.45, 0.65, 0.45, 0.02);
+            }
+        } catch (RuntimeException error) {
+            plugin.getLogger().log(Level.WARNING, "Could not show cosmetic presentation for reward " + reward.id(), error);
+        }
+    }
+
+    private KeyChoice chooseKey(Player player, Crate crate, int amount, boolean consumeKey) {
+        if (!consumeKey) return new KeyChoice(null, crate.keyId().isBlank() ? "BYPASS" : crate.keyId(), amount);
+        KeyService.KeyTransaction best = null;
+        String bestId = crate.keyId();
+        int bestOpenings = 0;
+        for (String keyId : crate.acceptedKeyIds()) {
+            Optional<KeyService.KeyTransaction> transaction = plugin.keys().begin(keyId);
+            if (transaction.isEmpty()) continue;
+            int available = plugin.keys().count(player, transaction.get()) / crate.keyCost();
+            if (available > bestOpenings) {
+                best = transaction.get();
+                bestId = keyId;
+                bestOpenings = available;
+            }
+        }
+        return new KeyChoice(best, bestId, Math.min(amount, bestOpenings));
+    }
+
+    private Predicate<CrateReward> baseEligibility(Player player) {
+        return reward -> reward.eligible(player) && reward.hasDelivery()
+                && (reward.money() <= 0 || (plugin.settings().vaultEnabled() && economy.available()));
+    }
+
+    private void abortPrepared(UUID transactionId, String reason, boolean databaseError) {
+        PendingOpening opening = pending.remove(transactionId);
+        if (opening == null) return;
+        locks.remove(opening.plan().playerId());
+        plugin.database().updateJournal(transactionId, "CANCELLED", reason);
+        Player player = Bukkit.getPlayer(opening.plan().playerId());
+        if (player != null && databaseError) plugin.messages().send(player, "database-error");
+    }
+
+    private boolean reject(Player player, String message) {
+        plugin.messages().send(player, message);
+        return rejectSilently(player);
+    }
+
+    private boolean rejectSilently(Player player) {
+        locks.remove(player.getUniqueId());
+        return false;
+    }
+
     private Component keyName(Crate crate) {
-        return plugin.keys().template(crate.keyId()).map(item -> {
-            Component name = item.getItemMeta().displayName();
-            return name == null ? Text.parse("<white>" + crate.keyId() + " key</white>") : name;
-        }).orElseGet(() -> Text.parse("<white>" + crate.keyId() + " key</white>"));
+        for (String keyId : crate.acceptedKeyIds()) {
+            Optional<Component> name = plugin.keys().definition(keyId).map(definition -> definition.displayName());
+            if (name.isPresent()) return name.get();
+        }
+        return Text.parse("<white>" + (crate.keyId().isBlank() ? "crate" : crate.keyId()) + " key</white>");
     }
 
     private long cooldownRemaining(Player player, Crate crate) {
@@ -198,4 +449,27 @@ public final class OpeningService {
         cooldowns.computeIfAbsent(player.getUniqueId(), ignored -> new HashMap<>())
                 .put(crate.id(), System.currentTimeMillis() + crate.cooldownSeconds() * 1000L);
     }
+
+    private static RewardDelivery delivery(CrateReward reward) {
+        return new RewardDelivery(reward.id(), reward.displayName(), reward.itemCopies(), reward.commands(),
+                reward.experiencePoints(), reward.experienceLevels(), reward.money(),
+                reward.presentation(), reward.personalMessage(), reward.broadcast());
+    }
+
+    private static String locationText(BlockPosition location) {
+        return location == null ? "" : location.worldName() + ":" + location.x() + ":" + location.y() + ":" + location.z();
+    }
+
+    private static String concise(Throwable error) {
+        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+    }
+
+    private record PendingOpening(OpeningPlan plan, Crate crate, List<CrateReward> selected,
+                                  KeyService.KeyTransaction keyTransaction, boolean consumeKey) {
+        private PendingOpening {
+            selected = List.copyOf(selected);
+        }
+    }
+    private record KeyChoice(KeyService.KeyTransaction transaction, String keyId, int maximumOpenings) {}
+    private record DeliveryResult(int overflowCount) {}
 }

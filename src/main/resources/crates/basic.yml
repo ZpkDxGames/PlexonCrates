@@ -1,10 +1,23 @@
-config-version: 1
+config-version: 2
 id: basic
-enabled: true
+state: PUBLISHED
+display-order: 10
 display-name: <gradient:#C7CDD8:#F3F5F7><bold>Basic Crate</bold></gradient>
-key-id: basic
-permission: ''
-open-cooldown-seconds: 1
+description:
+- <gray>Reliable supplies for a growing adventure.</gray>
+access:
+  permission: ''
+  worlds: []
+  excluded-worlds: []
+keys:
+  cost: 1
+  accepted: [basic]
+opening:
+  cooldown-seconds: 1
+  bulk-enabled: true
+  bulk-maximum: 64
+  animation: ROULETTE
+  broadcast: ''
 icon:
   material: CHEST
   name: <gradient:#C7CDD8:#F3F5F7><bold>Basic Crate</bold></gradient>
@@ -21,7 +34,10 @@ hologram:
   - <gradient:#C7CDD8:#F3F5F7><bold>BASIC CRATE</bold></gradient>
   - <gray>Left-click to preview</gray>
   - <white>Right-click with a Basic Key</white>
-broadcast: ''
+pity:
+  enabled: false
+  threshold: 0
+  reward-ids: []
 rewards:
   coal_cache:
     enabled: true

@@ -1,10 +1,23 @@
-config-version: 1
+config-version: 2
 id: epic
-enabled: true
+state: PUBLISHED
+display-order: 30
 display-name: <gradient:#B883F5:#E2B3FF><bold>Epic Crate</bold></gradient>
-key-id: epic
-permission: ''
-open-cooldown-seconds: 2
+description:
+- <gray>Powerful equipment and exceptional materials.</gray>
+access:
+  permission: ''
+  worlds: []
+  excluded-worlds: []
+keys:
+  cost: 1
+  accepted: [epic]
+opening:
+  cooldown-seconds: 2
+  bulk-enabled: true
+  bulk-maximum: 64
+  animation: ROULETTE
+  broadcast: ''
 icon:
   material: RESPAWN_ANCHOR
   name: <gradient:#B883F5:#E2B3FF><bold>Epic Crate</bold></gradient>
@@ -21,7 +34,10 @@ hologram:
   - <gradient:#B883F5:#E2B3FF><bold>EPIC CRATE</bold></gradient>
   - <gray>Left-click to preview</gray>
   - <light_purple>Right-click with an Epic Key</light_purple>
-broadcast: ''
+pity:
+  enabled: false
+  threshold: 0
+  reward-ids: []
 rewards:
   diamond_reserve:
     enabled: true

@@ -390,9 +390,15 @@ public final class MenuService implements Listener {
         MenuConfig menus = plugin.menusConfig();
         Crate crate = plugin.crates().find(holder.crateId()).orElse(null);
         if (crate == null) return;
-        if (event.isShiftClick() && event.getClickedInventory() == event.getView().getBottomInventory()) {
+        int topSize = event.getView().getTopInventory().getSize();
+        if (event.isShiftClick() && event.getRawSlot() >= topSize
+                && event.getRawSlot() < event.getView().countSlots()) {
             if (event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
-                capturePoolReward(player, crate, event.getCurrentItem());
+                ItemStack source = event.getCurrentItem();
+                if (source == null || source.getType().isAir()) {
+                    source = event.getView().getBottomInventory().getItem(event.getView().convertSlot(event.getRawSlot()));
+                }
+                capturePoolReward(player, crate, source);
             }
             return;
         }

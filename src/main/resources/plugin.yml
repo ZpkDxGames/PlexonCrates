@@ -2,7 +2,7 @@ name: PlexonCrates
 version: '${project.version}'
 main: com.antondev.crates.PlexonCrates
 api-version: '26.2'
-description: Direct, modern crates with native PlexonKeys compatibility.
+description: Exact-item, percentage-first crates with native PlexonKeys compatibility.
 author: Tonim (ZpkDxGames)
 website: https://github.com/ZpkDxGames/PlexonCrates
 softdepend: [PlexonKeys, PlaceholderAPI, Vault]

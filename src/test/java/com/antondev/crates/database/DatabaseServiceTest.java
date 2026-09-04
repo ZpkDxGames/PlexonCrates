@@ -1,15 +1,19 @@
 package com.antondev.crates.database;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.antondev.crates.domain.draft.DraftMutation;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
 import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -17,6 +21,66 @@ import org.junit.jupiter.api.io.TempDir;
 class DatabaseServiceTest {
     @TempDir
     Path temporary;
+
+    @Test
+    void schemaThreeInstallsNormalizedDefinitionDraftAndValueTables() throws Exception {
+        try (DatabaseService database = database()) {
+            assertEquals(3, database.schemaVersion());
+            for (String table : List.of("crate_definition", "reward_definition", "reward_item",
+                    "reward_action", "key_definition_v3", "key_template_v3", "crate_key_link",
+                    "effect_profile", "rarity_profile", "milestone_definition", "milestone_state",
+                    "reroll_policy", "reroll_balance", "virtual_key_balance", "ledger_entry",
+                    "claim_entry", "portable_crate_issue", "plugin_secret", "definition_draft",
+                    "draft_revision", "schema_migration")) {
+                assertTrue(database.schemaObjectExists("table", table), table);
+            }
+            for (String index : List.of("crate_collection_page", "reward_collection_page",
+                    "key_collection_page", "claim_player_state_page", "draft_revision_undo")) {
+                assertTrue(database.schemaObjectExists("index", index), index);
+            }
+        }
+    }
+
+    @Test
+    void durableDraftRejectsStaleWritesSupportsTakeoverUndoAndBoundedHistory() throws Exception {
+        UUID firstEditor = UUID.randomUUID();
+        UUID secondEditor = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-04T12:00:00Z");
+        try (DatabaseService database = database()) {
+            var draft = database.createOrResumeDefinitionDraft("crate", "basic", firstEditor, "First", 4,
+                    bytes("zero")).join();
+            assertEquals(0, draft.revision());
+            assertEquals(1, draft.leaseToken());
+            assertTrue(draft.writableBy(firstEditor, 1));
+
+            var saved = database.saveDefinitionDraft(draft.draftId(), mutation(draft, firstEditor, "one", now)).join();
+            assertEquals(1, saved.revision());
+            assertEquals("one", text(saved.payload()));
+            assertThrows(CompletionException.class, () -> database.saveDefinitionDraft(draft.draftId(),
+                    mutation(draft, firstEditor, "stale", now.plusSeconds(1))).join());
+
+            var taken = database.takeoverDefinitionDraft(draft.draftId(), saved.leaseToken(), secondEditor, "Second").join();
+            assertEquals(secondEditor, taken.ownerId());
+            assertEquals(2, taken.leaseToken());
+            assertFalse(taken.writableBy(firstEditor, 1));
+            assertThrows(CompletionException.class, () -> database.saveDefinitionDraft(taken.draftId(),
+                    new DraftMutation(taken.revision(), 1, firstEditor, "EDIT", "Stale lease", bytes("bad"),
+                            "UNVALIDATED", now.plusSeconds(2))).join());
+
+            var current = database.saveDefinitionDraft(taken.draftId(),
+                    mutation(taken, secondEditor, "two", now.plusSeconds(3))).join();
+            current = database.undoDefinitionDraft(current.draftId(), current.revision(), current.leaseToken(),
+                    secondEditor, now.plusSeconds(4)).join();
+            assertEquals("one", text(current.payload()));
+
+            for (int index = 0; index < 25; index++) {
+                current = database.saveDefinitionDraft(current.draftId(),
+                        mutation(current, secondEditor, "value-" + index, now.plusSeconds(10 + index))).join();
+            }
+            assertEquals(20, database.draftRevisionCount(current.draftId()).join());
+            assertEquals(current.draftId(), database.loadDefinitionDraft("CRATE", "basic").join().orElseThrow().draftId());
+        }
+    }
 
     @Test
     void journalCompletionAtomicallyPersistsHistoryStatisticsLimitsAndPity() throws Exception {
@@ -111,5 +175,19 @@ class DatabaseServiceTest {
 
     private DatabaseService database() throws Exception {
         return new DatabaseService(Logger.getLogger("DatabaseServiceTest"), temporary.resolve("data/test.db"), 64);
+    }
+
+    private static DraftMutation mutation(
+            com.antondev.crates.domain.draft.DefinitionDraft draft, UUID actor, String payload, Instant now) {
+        return new DraftMutation(draft.revision(), draft.leaseToken(), actor, "EDIT", "Edit " + payload,
+                bytes(payload), "UNVALIDATED", now);
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String text(byte[] value) {
+        return new String(value, StandardCharsets.UTF_8);
     }
 }

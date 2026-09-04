@@ -2,6 +2,20 @@
 
 All notable PlexonCrates changes are documented here.
 
+## 3.0.0 — In development
+
+### Foundation
+
+- Began the 3.0 runtime from the released `v2.0.0` baseline without removing its opening, key, migration, or exact-item safety tests.
+- Added the normalized schema-3 definition graph for crates, rewards, exact item BLOBs, typed actions, keys, profiles, milestones, ledgers, claims, portable issuances, versioned drafts, and migrations.
+- Added versioned durable drafts with ordered compare-and-update saves, writable leases, audited takeover, bounded revision history, stale-action rejection, and forward undo revisions.
+- Added the integer `ChanceAllocator` with exact basis-point totals, stable largest-remainder migration/normalization, predictable new-reward allocation, locked edits, balancing tools, and integer ticket boundaries.
+- Added `ItemSnapshotCodec` for non-destructive amount-one Paper byte snapshots, SHA-256 verification, diagnostic metadata, payload bounds, and exact maximum-stack-size delivery splitting.
+
+### Documentation
+
+- Adopted the expanded 3.0 implementation specification, including the one-edition/unlimited-definition contract and the original PhoenixCrates-benchmarked GUI usability boundary.
+
 ## 2.0.0 — 2026-09-02
 
 ### Added

@@ -5,9 +5,9 @@
 
   <groupId>com.antondev</groupId>
   <artifactId>PlexonCrates</artifactId>
-  <version>2.0.0</version>
+  <version>3.0.0-SNAPSHOT</version>
   <name>PlexonCrates</name>
-  <description>Direct, modern crates for Paper with native PlexonKeys compatibility.</description>
+  <description>Exact-item, percentage-first crates for Paper with native PlexonKeys compatibility.</description>
   <url>https://github.com/ZpkDxGames/PlexonCrates</url>
 
   <developers>

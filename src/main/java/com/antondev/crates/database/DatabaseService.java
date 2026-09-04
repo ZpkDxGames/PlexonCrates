@@ -1,6 +1,9 @@
 package com.antondev.crates.database;
 
 import com.antondev.crates.config.ItemCodec;
+import com.antondev.crates.domain.draft.DefinitionDraft;
+import com.antondev.crates.domain.draft.DraftMutation;
+import com.antondev.crates.domain.draft.DraftSaveState;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -34,7 +37,7 @@ import org.bukkit.inventory.ItemStack;
  * Bukkit objects never cross into this class; runtime calls use immutable DTOs.
  */
 public final class DatabaseService implements AutoCloseable {
-    public static final int SCHEMA_VERSION = 2;
+    public static final int SCHEMA_VERSION = 3;
 
     public record StoredLocation(
             UUID worldUuid, String worldName, int x, int y, int z, String crateId, Instant updatedAt) {}
@@ -258,6 +261,7 @@ public final class DatabaseService implements AutoCloseable {
                         updated_at INTEGER NOT NULL
                     )
                     """);
+            initializeDefinitionSchema(statement);
             statement.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS migration_history (
                         marker TEXT PRIMARY KEY,
@@ -270,6 +274,320 @@ public final class DatabaseService implements AutoCloseable {
                 upsert.executeUpdate();
             }
         }
+    }
+
+    /**
+     * Creates the normalized 3.0 definition, draft, ledger, and recovery schema.
+     * Runtime adoption is intentionally staged: these additive tables can be
+     * installed over a healthy 2.0 database before any live definition moves.
+     */
+    private static void initializeDefinitionSchema(Statement statement) throws SQLException {
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS crate_definition (
+                    crate_id TEXT PRIMARY KEY,
+                    lifecycle TEXT NOT NULL CHECK(lifecycle IN ('DRAFT','PUBLISHED','DISABLED','ARCHIVED')),
+                    published_revision INTEGER NOT NULL DEFAULT 0 CHECK(published_revision >= 0),
+                    display_order INTEGER NOT NULL DEFAULT 0,
+                    display_name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    icon_bytes BLOB,
+                    settings_payload BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS crate_collection_page "
+                + "ON crate_definition(lifecycle, display_name COLLATE NOCASE, crate_id)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS reward_definition (
+                    crate_id TEXT NOT NULL,
+                    reward_id TEXT NOT NULL,
+                    position INTEGER NOT NULL CHECK(position >= 0),
+                    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+                    display_name TEXT NOT NULL,
+                    rarity_id TEXT NOT NULL DEFAULT 'common',
+                    chance_basis_points INTEGER NOT NULL CHECK(chance_basis_points BETWEEN 0 AND 10000),
+                    locked INTEGER NOT NULL DEFAULT 0 CHECK(locked IN (0,1)),
+                    settings_payload BLOB NOT NULL,
+                    PRIMARY KEY(crate_id, reward_id),
+                    UNIQUE(crate_id, position),
+                    FOREIGN KEY(crate_id) REFERENCES crate_definition(crate_id) ON DELETE CASCADE
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS reward_collection_page "
+                + "ON reward_definition(crate_id, position, reward_id)");
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS reward_rarity_filter "
+                + "ON reward_definition(crate_id, rarity_id, enabled, position)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS reward_item (
+                    crate_id TEXT NOT NULL,
+                    reward_id TEXT NOT NULL,
+                    action_index INTEGER NOT NULL CHECK(action_index >= 0),
+                    item_bytes BLOB NOT NULL,
+                    delivery_amount INTEGER NOT NULL CHECK(delivery_amount > 0),
+                    material TEXT NOT NULL,
+                    serialized_size INTEGER NOT NULL CHECK(serialized_size > 0),
+                    sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+                    captured_at INTEGER NOT NULL,
+                    PRIMARY KEY(crate_id, reward_id, action_index),
+                    FOREIGN KEY(crate_id, reward_id) REFERENCES reward_definition(crate_id, reward_id) ON DELETE CASCADE
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS reward_action (
+                    crate_id TEXT NOT NULL,
+                    reward_id TEXT NOT NULL,
+                    action_index INTEGER NOT NULL CHECK(action_index >= 0),
+                    action_type TEXT NOT NULL CHECK(action_type IN ('ITEM','COMMAND','EXPERIENCE_POINTS','EXPERIENCE_LEVELS','MONEY')),
+                    action_payload BLOB NOT NULL,
+                    PRIMARY KEY(crate_id, reward_id, action_index),
+                    FOREIGN KEY(crate_id, reward_id) REFERENCES reward_definition(crate_id, reward_id) ON DELETE CASCADE
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS key_definition_v3 (
+                    key_id TEXT PRIMARY KEY,
+                    source_type TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    resolution_state TEXT NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
+                    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+                    settings_payload BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS key_collection_page "
+                + "ON key_definition_v3(archived, display_name COLLATE NOCASE, key_id)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS key_template_v3 (
+                    key_id TEXT NOT NULL,
+                    template_kind TEXT NOT NULL CHECK(template_kind IN ('CURRENT','FALLBACK','LEGACY','LAST_KNOWN_GOOD')),
+                    sequence INTEGER NOT NULL DEFAULT 0 CHECK(sequence >= 0),
+                    item_bytes BLOB NOT NULL,
+                    material TEXT NOT NULL,
+                    serialized_size INTEGER NOT NULL CHECK(serialized_size > 0),
+                    sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+                    captured_at INTEGER NOT NULL,
+                    PRIMARY KEY(key_id, template_kind, sequence),
+                    FOREIGN KEY(key_id) REFERENCES key_definition_v3(key_id) ON DELETE CASCADE
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS active_key_template_fingerprint "
+                + "ON key_template_v3(sha256) WHERE template_kind IN ('CURRENT','FALLBACK','LAST_KNOWN_GOOD')");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS crate_key_link (
+                    crate_id TEXT NOT NULL,
+                    key_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    cost INTEGER NOT NULL CHECK(cost > 0),
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+                    PRIMARY KEY(crate_id, key_id),
+                    FOREIGN KEY(crate_id) REFERENCES crate_definition(crate_id) ON DELETE CASCADE,
+                    FOREIGN KEY(key_id) REFERENCES key_definition_v3(key_id) ON DELETE RESTRICT
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS crate_key_reverse_lookup ON crate_key_link(key_id, crate_id)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS effect_profile (
+                    profile_id TEXT PRIMARY KEY,
+                    immutable_preset INTEGER NOT NULL DEFAULT 0 CHECK(immutable_preset IN (0,1)),
+                    display_name TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+                    profile_payload BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS rarity_profile (
+                    rarity_id TEXT PRIMARY KEY,
+                    immutable_preset INTEGER NOT NULL DEFAULT 0 CHECK(immutable_preset IN (0,1)),
+                    archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1)),
+                    display_name TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL,
+                    curve_share INTEGER,
+                    profile_payload BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS milestone_definition (
+                    crate_id TEXT NOT NULL,
+                    milestone_id TEXT NOT NULL,
+                    threshold INTEGER NOT NULL CHECK(threshold > 0),
+                    repeat_policy TEXT NOT NULL CHECK(repeat_policy IN ('ONCE','REPEATING')),
+                    cycle_length INTEGER NOT NULL DEFAULT 0 CHECK(cycle_length >= 0),
+                    position INTEGER NOT NULL CHECK(position >= 0),
+                    definition_payload BLOB NOT NULL,
+                    PRIMARY KEY(crate_id, milestone_id),
+                    FOREIGN KEY(crate_id) REFERENCES crate_definition(crate_id) ON DELETE CASCADE
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS milestone_threshold_lookup "
+                + "ON milestone_definition(crate_id, threshold, position)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS milestone_state (
+                    player_uuid TEXT NOT NULL,
+                    crate_id TEXT NOT NULL,
+                    openings INTEGER NOT NULL DEFAULT 0 CHECK(openings >= 0),
+                    last_cycle INTEGER NOT NULL DEFAULT 0 CHECK(last_cycle >= 0),
+                    earned_payload BLOB NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(player_uuid, crate_id)
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS reroll_policy (
+                    crate_id TEXT PRIMARY KEY,
+                    policy_payload BLOB NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+                    FOREIGN KEY(crate_id) REFERENCES crate_definition(crate_id) ON DELETE CASCADE
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS reroll_balance (
+                    player_uuid TEXT PRIMARY KEY,
+                    balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
+                    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+                    updated_at INTEGER NOT NULL
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS virtual_key_balance (
+                    player_uuid TEXT NOT NULL,
+                    key_id TEXT NOT NULL,
+                    balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
+                    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY(player_uuid, key_id)
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS ledger_entry (
+                    entry_id TEXT PRIMARY KEY,
+                    idempotency_token TEXT NOT NULL UNIQUE,
+                    player_uuid TEXT NOT NULL,
+                    ledger_type TEXT NOT NULL CHECK(ledger_type IN ('VIRTUAL_KEY','REROLL')),
+                    key_id TEXT,
+                    delta INTEGER NOT NULL,
+                    balance_after INTEGER NOT NULL CHECK(balance_after >= 0),
+                    source_type TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    actor_uuid TEXT,
+                    created_at INTEGER NOT NULL
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS ledger_player_history "
+                + "ON ledger_entry(player_uuid, ledger_type, key_id, created_at DESC)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS claim_entry (
+                    claim_id TEXT PRIMARY KEY,
+                    idempotency_token TEXT NOT NULL UNIQUE,
+                    player_uuid TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    crate_id TEXT,
+                    reward_id TEXT,
+                    item_bytes BLOB,
+                    item_amount INTEGER,
+                    item_sha256 TEXT,
+                    virtual_key_id TEXT,
+                    virtual_key_amount INTEGER,
+                    state TEXT NOT NULL CHECK(state IN ('PENDING','CLAIMING','CLAIMED','REVIEW')),
+                    attempt_token TEXT,
+                    last_result TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    CHECK((item_bytes IS NOT NULL AND item_amount > 0 AND length(item_sha256) = 64
+                           AND virtual_key_id IS NULL AND virtual_key_amount IS NULL)
+                       OR (item_bytes IS NULL AND item_amount IS NULL AND item_sha256 IS NULL
+                           AND virtual_key_id IS NOT NULL AND virtual_key_amount > 0))
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS claim_player_state_page "
+                + "ON claim_entry(player_uuid, state, created_at, claim_id)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS portable_crate_issue (
+                    issue_id TEXT PRIMARY KEY,
+                    crate_id TEXT NOT NULL,
+                    revision_policy TEXT NOT NULL CHECK(revision_policy IN ('LATEST_PUBLISHED','PINNED_REVISION')),
+                    pinned_revision INTEGER,
+                    issued_to TEXT,
+                    issued_by TEXT,
+                    signature_version INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('UNUSED','RESERVED','CONSUMED','SUSPENDED','REVIEW')),
+                    reservation_token TEXT,
+                    issued_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY(crate_id) REFERENCES crate_definition(crate_id) ON DELETE RESTRICT
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS portable_crate_state_lookup "
+                + "ON portable_crate_issue(crate_id, state, issued_at)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS plugin_secret (
+                    secret_id TEXT PRIMARY KEY,
+                    secret_bytes BLOB NOT NULL,
+                    algorithm TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    retired_at INTEGER
+                )
+                """);
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS definition_draft (
+                    draft_uuid TEXT PRIMARY KEY,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    owner_uuid TEXT NOT NULL,
+                    owner_name TEXT NOT NULL,
+                    base_revision INTEGER NOT NULL CHECK(base_revision >= 0),
+                    revision INTEGER NOT NULL CHECK(revision >= 0),
+                    lease_token INTEGER NOT NULL CHECK(lease_token >= 0),
+                    save_state TEXT NOT NULL CHECK(save_state IN ('SAVING','SAVED','FAILED')),
+                    validation_status TEXT NOT NULL,
+                    payload BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(target_type, target_id)
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS draft_owner_page "
+                + "ON definition_draft(owner_uuid, updated_at DESC, draft_uuid)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS draft_revision (
+                    draft_uuid TEXT NOT NULL,
+                    revision INTEGER NOT NULL CHECK(revision >= 0),
+                    sequence INTEGER NOT NULL CHECK(sequence >= 0),
+                    action_type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    payload BLOB NOT NULL,
+                    actor_uuid TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY(draft_uuid, revision),
+                    FOREIGN KEY(draft_uuid) REFERENCES definition_draft(draft_uuid) ON DELETE CASCADE
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS draft_revision_undo "
+                + "ON draft_revision(draft_uuid, revision DESC)");
+        statement.executeUpdate("""
+                CREATE TABLE IF NOT EXISTS schema_migration (
+                    migration_id TEXT PRIMARY KEY,
+                    source_version INTEGER NOT NULL,
+                    target_version INTEGER NOT NULL,
+                    checksum TEXT NOT NULL,
+                    backup_path TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('PLANNED','RUNNING','COMPLETED','ROLLED_BACK','FAILED')),
+                    report_path TEXT NOT NULL DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    completed_at INTEGER
+                )
+                """);
+        statement.executeUpdate("CREATE INDEX IF NOT EXISTS location_world_position "
+                + "ON locations(world_uuid, x, z, y)");
     }
 
     private Connection connect() throws SQLException {
@@ -337,6 +655,27 @@ public final class DatabaseService implements AutoCloseable {
                 "SELECT COUNT(*) FROM opening_journal WHERE stage NOT IN ('COMPLETED', 'CANCELLED')");
              ResultSet rows = statement.executeQuery()) {
             return rows.next() ? rows.getInt(1) : 0;
+        }
+    }
+
+    public int schemaVersion() throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT value FROM schema_meta WHERE key = 'schema_version'");
+             ResultSet rows = statement.executeQuery()) {
+            if (!rows.next()) throw new SQLException("Missing schema_version metadata");
+            return Integer.parseInt(rows.getString(1));
+        }
+    }
+
+    public boolean schemaObjectExists(String type, String name) throws SQLException {
+        if (!List.of("table", "index").contains(type)) throw new IllegalArgumentException("Unsupported schema object type");
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?")) {
+            statement.setString(1, type);
+            statement.setString(2, name);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next();
+            }
         }
     }
 
@@ -605,6 +944,180 @@ public final class DatabaseService implements AutoCloseable {
         });
     }
 
+    public CompletableFuture<DefinitionDraft> createOrResumeDefinitionDraft(
+            String targetType, String targetId, UUID ownerId, String ownerName,
+            long baseRevision, byte[] initialPayload) {
+        String normalizedType = requiredText(targetType, "targetType").toUpperCase(java.util.Locale.ROOT);
+        String normalizedId = requiredText(targetId, "targetId");
+        String normalizedOwner = requiredText(ownerName, "ownerName");
+        UUID owner = java.util.Objects.requireNonNull(ownerId, "ownerId");
+        byte[] payload = validDraftPayload(initialPayload);
+        if (baseRevision < 0) throw new IllegalArgumentException("Base revision cannot be negative");
+
+        return submitTransactionQuery("create or resume definition draft", connection -> {
+            DefinitionDraft existing = loadDefinitionDraft(connection, normalizedType, normalizedId).orElse(null);
+            if (existing != null) return existing;
+
+            UUID draftId = UUID.randomUUID();
+            long now = System.currentTimeMillis();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO definition_draft(draft_uuid, target_type, target_id, owner_uuid, owner_name,
+                        base_revision, revision, lease_token, save_state, validation_status, payload,
+                        created_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?, 0, 1, 'SAVED', 'UNVALIDATED', ?, ?, ?)
+                    """)) {
+                statement.setString(1, draftId.toString());
+                statement.setString(2, normalizedType);
+                statement.setString(3, normalizedId);
+                statement.setString(4, owner.toString());
+                statement.setString(5, normalizedOwner);
+                statement.setLong(6, baseRevision);
+                statement.setBytes(7, payload);
+                statement.setLong(8, now);
+                statement.setLong(9, now);
+                statement.executeUpdate();
+            }
+            insertDraftRevision(connection, draftId, 0, 0, "CREATE", "Created durable draft", payload, owner, now);
+            return loadDefinitionDraft(connection, draftId).orElseThrow();
+        });
+    }
+
+    public CompletableFuture<Optional<DefinitionDraft>> loadDefinitionDraft(String targetType, String targetId) {
+        String normalizedType = requiredText(targetType, "targetType").toUpperCase(java.util.Locale.ROOT);
+        String normalizedId = requiredText(targetId, "targetId");
+        return submitQuery("load definition draft", connection ->
+                loadDefinitionDraft(connection, normalizedType, normalizedId));
+    }
+
+    public CompletableFuture<DefinitionDraft> saveDefinitionDraft(UUID draftId, DraftMutation mutation) {
+        UUID id = java.util.Objects.requireNonNull(draftId, "draftId");
+        DraftMutation change = java.util.Objects.requireNonNull(mutation, "mutation");
+        byte[] payload = validDraftPayload(change.payload());
+        return submitTransactionQuery("save definition draft revision", connection -> {
+            DefinitionDraft current = loadDefinitionDraft(connection, id)
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown definition draft"));
+            requireWritableDraft(current, change.actorId(), change.leaseToken(), change.expectedRevision());
+            long nextRevision = Math.addExact(current.revision(), 1);
+            long savedAt = change.createdAt().toEpochMilli();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE definition_draft SET revision = ?, save_state = 'SAVED', validation_status = ?,
+                        payload = ?, updated_at = ?
+                    WHERE draft_uuid = ? AND revision = ? AND lease_token = ? AND owner_uuid = ?
+                    """)) {
+                statement.setLong(1, nextRevision);
+                statement.setString(2, change.validationStatus());
+                statement.setBytes(3, payload);
+                statement.setLong(4, savedAt);
+                statement.setString(5, id.toString());
+                statement.setLong(6, change.expectedRevision());
+                statement.setLong(7, change.leaseToken());
+                statement.setString(8, change.actorId().toString());
+                if (statement.executeUpdate() != 1) throw new IllegalStateException("Draft changed before this save completed");
+            }
+            insertDraftRevision(connection, id, nextRevision, nextRevision, change.actionType(), change.summary(),
+                    payload, change.actorId(), savedAt);
+            trimDraftRevisions(connection, id, 20);
+            return loadDefinitionDraft(connection, id).orElseThrow();
+        });
+    }
+
+    public CompletableFuture<DefinitionDraft> takeoverDefinitionDraft(
+            UUID draftId, long expectedLeaseToken, UUID newOwnerId, String newOwnerName) {
+        UUID id = java.util.Objects.requireNonNull(draftId, "draftId");
+        UUID owner = java.util.Objects.requireNonNull(newOwnerId, "newOwnerId");
+        String name = requiredText(newOwnerName, "newOwnerName");
+        if (expectedLeaseToken < 0) throw new IllegalArgumentException("Expected lease token cannot be negative");
+        return submitTransactionQuery("take over definition draft", connection -> {
+            DefinitionDraft current = loadDefinitionDraft(connection, id)
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown definition draft"));
+            if (current.leaseToken() != expectedLeaseToken) {
+                throw new IllegalStateException("Draft lease changed before takeover confirmation");
+            }
+            long nextLease = Math.addExact(current.leaseToken(), 1);
+            long now = System.currentTimeMillis();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE definition_draft SET owner_uuid = ?, owner_name = ?, lease_token = ?, updated_at = ?
+                    WHERE draft_uuid = ? AND lease_token = ?
+                    """)) {
+                statement.setString(1, owner.toString());
+                statement.setString(2, name);
+                statement.setLong(3, nextLease);
+                statement.setLong(4, now);
+                statement.setString(5, id.toString());
+                statement.setLong(6, expectedLeaseToken);
+                if (statement.executeUpdate() != 1) throw new IllegalStateException("Draft lease changed before takeover");
+            }
+            try (PreparedStatement audit = connection.prepareStatement("""
+                    INSERT INTO audit_log(actor_uuid, actor_name, action, target_type, target_id, summary, created_at)
+                    VALUES(?, ?, 'TAKEOVER', 'DRAFT', ?, ?, ?)
+                    """)) {
+                audit.setString(1, owner.toString());
+                audit.setString(2, name);
+                audit.setString(3, id.toString());
+                audit.setString(4, "Took writable lease from " + current.ownerName());
+                audit.setLong(5, now);
+                audit.executeUpdate();
+            }
+            return loadDefinitionDraft(connection, id).orElseThrow();
+        });
+    }
+
+    public CompletableFuture<DefinitionDraft> undoDefinitionDraft(
+            UUID draftId, long expectedRevision, long leaseToken, UUID actorId, Instant createdAt) {
+        UUID id = java.util.Objects.requireNonNull(draftId, "draftId");
+        UUID actor = java.util.Objects.requireNonNull(actorId, "actorId");
+        Instant now = java.util.Objects.requireNonNull(createdAt, "createdAt");
+        return submitTransactionQuery("undo definition draft", connection -> {
+            DefinitionDraft current = loadDefinitionDraft(connection, id)
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown definition draft"));
+            requireWritableDraft(current, actor, leaseToken, expectedRevision);
+            byte[] previous;
+            long sourceRevision;
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT revision, payload FROM draft_revision
+                    WHERE draft_uuid = ? AND revision < ? ORDER BY revision DESC LIMIT 1
+                    """)) {
+                statement.setString(1, id.toString());
+                statement.setLong(2, expectedRevision);
+                try (ResultSet rows = statement.executeQuery()) {
+                    if (!rows.next()) throw new IllegalStateException("This draft has no earlier revision to undo");
+                    sourceRevision = rows.getLong(1);
+                    previous = rows.getBytes(2);
+                }
+            }
+            long nextRevision = Math.addExact(current.revision(), 1);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE definition_draft SET revision = ?, save_state = 'SAVED', validation_status = 'UNVALIDATED',
+                        payload = ?, updated_at = ? WHERE draft_uuid = ? AND revision = ? AND lease_token = ?
+                    """)) {
+                statement.setLong(1, nextRevision);
+                statement.setBytes(2, previous);
+                statement.setLong(3, now.toEpochMilli());
+                statement.setString(4, id.toString());
+                statement.setLong(5, expectedRevision);
+                statement.setLong(6, leaseToken);
+                if (statement.executeUpdate() != 1) throw new IllegalStateException("Draft changed before undo completed");
+            }
+            insertDraftRevision(connection, id, nextRevision, nextRevision, "UNDO",
+                    "Restored revision " + sourceRevision, previous, actor, now.toEpochMilli());
+            trimDraftRevisions(connection, id, 20);
+            return loadDefinitionDraft(connection, id).orElseThrow();
+        });
+    }
+
+    public CompletableFuture<Integer> draftRevisionCount(UUID draftId) {
+        UUID id = java.util.Objects.requireNonNull(draftId, "draftId");
+        return submitQuery("count draft revisions", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT COUNT(*) FROM draft_revision WHERE draft_uuid = ?")) {
+                statement.setString(1, id.toString());
+                try (ResultSet rows = statement.executeQuery()) {
+                    return rows.next() ? rows.getInt(1) : 0;
+                }
+            }
+        });
+    }
+
     public CompletableFuture<Void> createBackup(Path dataFolder, Path backupDirectory) {
         Path destination = backupDirectory.resolve("data/plexoncrates.db").toAbsolutePath().normalize();
         return submit("create backup", connection -> {
@@ -632,7 +1145,7 @@ public final class DatabaseService implements AutoCloseable {
                 statement.execute("VACUUM INTO '" + escaped + "'");
             }
             Files.writeString(backupDirectory.resolve("BACKUP.txt"),
-                    "PlexonCrates 2.0 backup\nCreated: " + Instant.now() + "\nSchema: " + SCHEMA_VERSION + "\n",
+                    "PlexonCrates 3.0 backup\nCreated: " + Instant.now() + "\nSchema: " + SCHEMA_VERSION + "\n",
                     StandardCharsets.UTF_8);
         });
     }
@@ -787,6 +1300,127 @@ public final class DatabaseService implements AutoCloseable {
             logger.warning("PlexonCrates database queue is full; rejected operation: " + description);
         }
         return future;
+    }
+
+    private <T> CompletableFuture<T> submitTransactionQuery(String description, SqlQuery<T> query) {
+        var future = new CompletableFuture<T>();
+        if (closed.get()) {
+            future.completeExceptionally(new IllegalStateException("Database is closed"));
+            return future;
+        }
+        try {
+            writer.execute(() -> {
+                try (Connection connection = connect()) {
+                    connection.setAutoCommit(false);
+                    try {
+                        T result = query.run(connection);
+                        connection.commit();
+                        future.complete(result);
+                    } catch (Exception error) {
+                        connection.rollback();
+                        future.completeExceptionally(error);
+                        logger.log(Level.SEVERE, "Could not " + description, error);
+                    } finally {
+                        connection.setAutoCommit(true);
+                    }
+                } catch (Exception error) {
+                    future.completeExceptionally(error);
+                    logger.log(Level.SEVERE, "Could not " + description, error);
+                }
+            });
+        } catch (RejectedExecutionException error) {
+            future.completeExceptionally(new IllegalStateException("Database queue is full", error));
+            logger.warning("PlexonCrates database queue is full; rejected operation: " + description);
+        }
+        return future;
+    }
+
+    private static Optional<DefinitionDraft> loadDefinitionDraft(
+            Connection connection, String targetType, String targetId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT draft_uuid, target_type, target_id, owner_uuid, owner_name, base_revision, revision,
+                       lease_token, save_state, validation_status, payload, created_at, updated_at
+                FROM definition_draft WHERE target_type = ? AND target_id = ?
+                """)) {
+            statement.setString(1, targetType);
+            statement.setString(2, targetId);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(definitionDraft(rows)) : Optional.empty();
+            }
+        }
+    }
+
+    private static Optional<DefinitionDraft> loadDefinitionDraft(Connection connection, UUID draftId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT draft_uuid, target_type, target_id, owner_uuid, owner_name, base_revision, revision,
+                       lease_token, save_state, validation_status, payload, created_at, updated_at
+                FROM definition_draft WHERE draft_uuid = ?
+                """)) {
+            statement.setString(1, draftId.toString());
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(definitionDraft(rows)) : Optional.empty();
+            }
+        }
+    }
+
+    private static DefinitionDraft definitionDraft(ResultSet rows) throws SQLException {
+        return new DefinitionDraft(UUID.fromString(rows.getString(1)), rows.getString(2), rows.getString(3),
+                UUID.fromString(rows.getString(4)), rows.getString(5), rows.getLong(6), rows.getLong(7),
+                rows.getLong(8), DraftSaveState.valueOf(rows.getString(9)), rows.getString(10), rows.getBytes(11),
+                Instant.ofEpochMilli(rows.getLong(12)), Instant.ofEpochMilli(rows.getLong(13)));
+    }
+
+    private static void insertDraftRevision(Connection connection, UUID draftId, long revision, long sequence,
+                                            String actionType, String summary, byte[] payload,
+                                            UUID actorId, long createdAt) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO draft_revision(draft_uuid, revision, sequence, action_type, summary, payload,
+                    actor_uuid, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """)) {
+            statement.setString(1, draftId.toString());
+            statement.setLong(2, revision);
+            statement.setLong(3, sequence);
+            statement.setString(4, actionType);
+            statement.setString(5, summary);
+            statement.setBytes(6, payload);
+            statement.setString(7, actorId.toString());
+            statement.setLong(8, createdAt);
+            statement.executeUpdate();
+        }
+    }
+
+    private static void trimDraftRevisions(Connection connection, UUID draftId, int retained) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                DELETE FROM draft_revision WHERE draft_uuid = ? AND revision NOT IN (
+                    SELECT revision FROM draft_revision WHERE draft_uuid = ? ORDER BY revision DESC LIMIT ?
+                )
+                """)) {
+            statement.setString(1, draftId.toString());
+            statement.setString(2, draftId.toString());
+            statement.setInt(3, retained);
+            statement.executeUpdate();
+        }
+    }
+
+    private static void requireWritableDraft(
+            DefinitionDraft current, UUID actorId, long leaseToken, long expectedRevision) {
+        if (!current.ownerId().equals(actorId)) throw new IllegalStateException("Draft is read-only for this administrator");
+        if (current.leaseToken() != leaseToken) throw new IllegalStateException("Draft lease is stale; reopen the editor");
+        if (current.revision() != expectedRevision) throw new IllegalStateException("Draft revision is stale; reopen the editor");
+    }
+
+    private static byte[] validDraftPayload(byte[] input) {
+        byte[] payload = java.util.Objects.requireNonNull(input, "payload").clone();
+        if (payload.length == 0 || payload.length > 16_000_000) {
+            throw new IllegalArgumentException("Draft payload is empty or exceeds 16,000,000 bytes");
+        }
+        return payload;
+    }
+
+    private static String requiredText(String input, String name) {
+        String value = java.util.Objects.requireNonNull(input, name).trim();
+        if (value.isEmpty()) throw new IllegalArgumentException(name + " cannot be blank");
+        return value;
     }
 
     private static void updateJournal(Connection connection, UUID transactionId, String stage, String detail) throws SQLException {

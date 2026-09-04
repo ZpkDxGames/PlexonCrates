@@ -172,7 +172,8 @@ public final class MenuService implements Listener {
     }
 
     public void refreshDraftState(Player player, String crateId) {
-        if (!(player.getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder holder)
+        Inventory top = player.getOpenInventory().getTopInventory();
+        if (top == null || !(top.getHolder() instanceof MenuHolder holder)
                 || !holder.crateId().equals(crateId)) return;
         if (holder.kind() == MenuHolder.Kind.EDITOR) {
             plugin.adminMenus().refreshDraftState(player, holder);

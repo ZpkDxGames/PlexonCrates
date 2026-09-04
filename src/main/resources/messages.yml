@@ -17,11 +17,17 @@ input-cancelled: <yellow>Editor input cancelled.</yellow>
 input-timeout: <yellow>Editor input expired. Your saved crate draft is still available.</yellow>
 input-invalid: <red>That value was rejected:</red> <gray><error></gray>
 draft-loading: <yellow>This durable draft is still loading. Try again in a moment.</yellow>
+draft-publishing: <yellow>This draft is already being published.</yellow>
 draft-read-only: <yellow>This draft is read-only because <white><owner></white> holds the writable lease.</yellow>
 draft-save-failed: <red>The latest draft save failed:</red> <gray><error></gray> <yellow>Use Retry Save before editing again.</yellow>
 draft-save-retried: <green>The latest crate draft snapshot was saved successfully.</green>
 draft-takeover-complete: <green>You now hold the writable lease for this crate draft.</green>
 draft-undo-complete: <green>Restored the previous durable draft revision.</green>
+draft-published: <green>Published <crate><green> as revision <white><revision></white>.</green>
+draft-publish-failed: <red>Publication failed:</red> <gray><error></gray> <yellow>The previous runtime revision is still active.</yellow>
+draft-published-mirror-warning: <yellow>The SQLite publication is active, but its optional YAML mirror could not be updated. Check the server log.</yellow>
+key-replacement-drafted: <green>Saved replacement-key drafts for <white><count></white> crate(s).</green> <yellow>Publish those crates before deleting the active key.</yellow>
+key-replacement-awaiting-publish: <yellow>This key is still used by a published crate. Publish its pending replacement draft before deleting the key.</yellow>
 validation-passed: <green>Validation passed:</green> <white><crates></white> <gray>crates,</gray> <white><keys></white> <gray>keys,</gray> <white><rewards></white> <gray>rewards.</gray>
 validation-failed: <red>Validation failed:</red> <gray><error></gray>
 backup-started: <yellow>Creating a consistent YAML and SQLite backup asynchronously…</yellow>
@@ -32,7 +38,7 @@ opened: <gray>You opened <crate> <gray>and received</gray> <reward><gray>!</gray
 bulk-opened: <gray>You opened <yellow><amount>x</yellow> <crate> <gray>and received <yellow><rewards></yellow> rewards.</gray>
 reward-overflow: <yellow>Your inventory was full, so overflow rewards were dropped safely at your feet.</yellow>
 preview-hint: <dark_gray>Left-click previews • Right-click opens • Sneak-right-click opens in bulk</dark_gray>
-reloaded: <green>Configuration, crates, keys, menus, locations, and displays reloaded.</green>
+reloaded: <green>Configuration, editor mirrors, keys, menus, locations, and displays reloaded.</green> <gray>The published runtime snapshot was not bypassed.</gray>
 config-error: <red>Reload rejected:</red> <gray><error></gray> <yellow>The previous valid state is still active.</yellow>
 target-required: <yellow>Look directly at a block within <distance> blocks.</yellow>
 location-set: <green>Linked this block to <crate><green>.</green>

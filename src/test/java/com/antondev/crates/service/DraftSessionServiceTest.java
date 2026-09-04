@@ -53,6 +53,17 @@ class DraftSessionServiceTest {
             assertEquals("two", text(database.loadDefinitionDraft("CRATE", "basic").join().orElseThrow().payload()));
             assertEquals(DraftSessionService.State.SAVED, undone.state());
             assertEquals(4, undone.revision());
+
+            var frozen = sessions.freezeCrate(second, "basic").join();
+            assertEquals(4, frozen.revision());
+            assertEquals("two", text(frozen.payload()));
+            assertEquals(DraftSessionService.State.PUBLISHING,
+                    sessions.view(second, "basic").orElseThrow().state());
+            assertThrows(CompletionException.class, () -> sessions.saveCrate(second, "basic", "EDIT",
+                    "Late edit", bytes("late")).join());
+            sessions.releasePublication(second, "basic");
+            assertEquals(DraftSessionService.State.SAVED,
+                    sessions.view(second, "basic").orElseThrow().state());
         }
     }
 

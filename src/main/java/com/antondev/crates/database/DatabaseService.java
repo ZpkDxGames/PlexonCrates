@@ -116,6 +116,156 @@ public final class DatabaseService implements AutoCloseable {
         }
     }
 
+    public record DefinitionItemData(
+            int actionIndex, byte[] bytes, int deliveryAmount, String material,
+            int serializedSize, String sha256, Instant capturedAt) {
+        public DefinitionItemData {
+            bytes = copyBytes(bytes, "item bytes");
+            material = requiredText(material, "material");
+            sha256 = requiredText(sha256, "sha256");
+            capturedAt = java.util.Objects.requireNonNull(capturedAt, "capturedAt");
+            if (actionIndex < 0 || deliveryAmount < 1 || serializedSize != bytes.length) {
+                throw new IllegalArgumentException("Invalid normalized reward item");
+            }
+        }
+
+        @Override public byte[] bytes() { return bytes.clone(); }
+    }
+
+    public record DefinitionActionData(int actionIndex, String actionType, byte[] payload) {
+        public DefinitionActionData {
+            actionType = requiredText(actionType, "actionType").toUpperCase(java.util.Locale.ROOT);
+            payload = copyBytes(payload, "action payload");
+            if (actionIndex < 0) throw new IllegalArgumentException("Action index cannot be negative");
+        }
+
+        @Override public byte[] payload() { return payload.clone(); }
+    }
+
+    public record DefinitionRewardData(
+            String rewardId, int position, boolean enabled, String displayName, String rarityId,
+            int chanceBasisPoints, boolean locked, byte[] settingsPayload,
+            List<DefinitionItemData> items, List<DefinitionActionData> actions) {
+        public DefinitionRewardData {
+            rewardId = requiredText(rewardId, "rewardId");
+            displayName = requiredText(displayName, "displayName");
+            rarityId = requiredText(rarityId, "rarityId");
+            settingsPayload = copyBytes(settingsPayload, "reward settings payload");
+            items = List.copyOf(items);
+            actions = List.copyOf(actions);
+            if (position < 0 || chanceBasisPoints < 0 || chanceBasisPoints > 10_000) {
+                throw new IllegalArgumentException("Invalid normalized reward metadata");
+            }
+        }
+
+        @Override public byte[] settingsPayload() { return settingsPayload.clone(); }
+    }
+
+    public record DefinitionKeyTemplateData(
+            String templateKind, int sequence, byte[] bytes, String material,
+            int serializedSize, String sha256, Instant capturedAt) {
+        public DefinitionKeyTemplateData {
+            templateKind = requiredText(templateKind, "templateKind").toUpperCase(java.util.Locale.ROOT);
+            bytes = copyBytes(bytes, "key template bytes");
+            material = requiredText(material, "material");
+            sha256 = requiredText(sha256, "sha256");
+            capturedAt = java.util.Objects.requireNonNull(capturedAt, "capturedAt");
+            if (sequence < 0 || serializedSize != bytes.length) {
+                throw new IllegalArgumentException("Invalid normalized key template");
+            }
+        }
+
+        @Override public byte[] bytes() { return bytes.clone(); }
+    }
+
+    public record DefinitionKeyData(
+            String keyId, String sourceType, String displayName, String resolutionState,
+            boolean archived, byte[] settingsPayload, List<DefinitionKeyTemplateData> templates) {
+        public DefinitionKeyData {
+            keyId = requiredText(keyId, "keyId");
+            sourceType = requiredText(sourceType, "sourceType");
+            displayName = requiredText(displayName, "displayName");
+            resolutionState = requiredText(resolutionState, "resolutionState");
+            settingsPayload = copyBytes(settingsPayload, "key settings payload");
+            templates = List.copyOf(templates);
+        }
+
+        @Override public byte[] settingsPayload() { return settingsPayload.clone(); }
+    }
+
+    public record DefinitionBundle(
+            String crateId, String lifecycle, int displayOrder, String displayName, String description,
+            byte[] iconBytes, byte[] settingsPayload, List<DefinitionRewardData> rewards,
+            List<DefinitionKeyData> keys, List<String> acceptedKeyIds, int keyCost,
+            Instant createdAt, Instant updatedAt) {
+        public DefinitionBundle {
+            crateId = requiredText(crateId, "crateId");
+            lifecycle = requiredText(lifecycle, "lifecycle").toUpperCase(java.util.Locale.ROOT);
+            displayName = requiredText(displayName, "displayName");
+            description = java.util.Objects.requireNonNull(description, "description");
+            iconBytes = copyBytes(iconBytes, "icon bytes");
+            settingsPayload = copyBytes(settingsPayload, "definition payload");
+            rewards = List.copyOf(rewards);
+            keys = List.copyOf(keys);
+            acceptedKeyIds = List.copyOf(acceptedKeyIds);
+            createdAt = java.util.Objects.requireNonNull(createdAt, "createdAt");
+            updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+            if (displayOrder < 0 || keyCost < 0 || keyCost > 64) {
+                throw new IllegalArgumentException("Invalid normalized crate metadata");
+            }
+        }
+
+        @Override public byte[] iconBytes() { return iconBytes.clone(); }
+        @Override public byte[] settingsPayload() { return settingsPayload.clone(); }
+    }
+
+    public record StoredDefinition(
+            String crateId, long publishedRevision, String lifecycle, byte[] payload, Instant updatedAt) {
+        public StoredDefinition {
+            crateId = requiredText(crateId, "crateId");
+            lifecycle = requiredText(lifecycle, "lifecycle");
+            payload = copyBytes(payload, "stored definition payload");
+            updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+            if (publishedRevision < 1) throw new IllegalArgumentException("Published revision must be positive");
+        }
+
+        @Override public byte[] payload() { return payload.clone(); }
+    }
+
+    public record PublishedSnapshot(long runtimeRevision, List<StoredDefinition> definitions) {
+        public PublishedSnapshot {
+            if (runtimeRevision < 0) throw new IllegalArgumentException("Runtime revision cannot be negative");
+            definitions = List.copyOf(definitions);
+        }
+    }
+
+    public record PublishRequest(
+            UUID draftId, long expectedDraftRevision, long expectedLeaseToken, UUID actorId,
+            String actorName, byte[] frozenPayload, DefinitionBundle definition, Instant createdAt) {
+        public PublishRequest {
+            draftId = java.util.Objects.requireNonNull(draftId, "draftId");
+            actorId = java.util.Objects.requireNonNull(actorId, "actorId");
+            actorName = requiredText(actorName, "actorName");
+            frozenPayload = copyBytes(frozenPayload, "frozen draft payload");
+            definition = java.util.Objects.requireNonNull(definition, "definition");
+            createdAt = java.util.Objects.requireNonNull(createdAt, "createdAt");
+            if (expectedDraftRevision < 0 || expectedLeaseToken < 0) {
+                throw new IllegalArgumentException("Expected draft revision and lease token cannot be negative");
+            }
+        }
+
+        @Override public byte[] frozenPayload() { return frozenPayload.clone(); }
+    }
+
+    public record PublishResult(StoredDefinition definition, long runtimeRevision) {
+        public PublishResult {
+            definition = java.util.Objects.requireNonNull(definition, "definition");
+            if (runtimeRevision < 1) throw new IllegalArgumentException("Runtime revision must be positive");
+        }
+    }
+
+    public record DefinitionCounts(int rewards, int items, int actions, int keyLinks) {}
+
     private final Logger logger;
     private final String jdbcUrl;
     private final ThreadPoolExecutor writer;
@@ -1153,6 +1303,87 @@ public final class DatabaseService implements AutoCloseable {
         });
     }
 
+    /** Imports the validated legacy published graph once; existing canonical data always wins. */
+    public CompletableFuture<PublishedSnapshot> bootstrapPublishedDefinitions(List<DefinitionBundle> definitions) {
+        List<DefinitionBundle> bundles = List.copyOf(definitions);
+        return submitTransactionQuery("bootstrap published definitions", connection -> {
+            if (definitionCount(connection) == 0 && !bundles.isEmpty()) {
+                long now = System.currentTimeMillis();
+                for (DefinitionBundle bundle : bundles) {
+                    requirePublished(bundle);
+                    writeDefinition(connection, bundle, 1, now);
+                    insertAudit(connection, null, "SYSTEM", "MIGRATE", "CRATE", bundle.crateId(),
+                            "Imported the validated 2.0 published definition as revision 1", now);
+                }
+                setRuntimeRevision(connection, Math.max(1, runtimeRevision(connection)));
+            }
+            return publishedSnapshot(connection);
+        });
+    }
+
+    public CompletableFuture<PublishedSnapshot> loadPublishedDefinitions() {
+        return submitQuery("load published definitions", DatabaseService::publishedSnapshot);
+    }
+
+    /**
+     * Compares the durable draft lease/revision and base publication revision,
+     * then replaces the complete normalized crate graph in one transaction.
+     */
+    public CompletableFuture<PublishResult> publishDefinitionDraft(PublishRequest request) {
+        PublishRequest publication = java.util.Objects.requireNonNull(request, "request");
+        requirePublished(publication.definition());
+        return submitTransactionQuery("publish definition draft", connection -> {
+            DefinitionDraft draft = loadDefinitionDraft(connection, publication.draftId())
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown definition draft"));
+            requireWritableDraft(draft, publication.actorId(), publication.expectedLeaseToken(),
+                    publication.expectedDraftRevision());
+            if (draft.saveState() != DraftSaveState.SAVED) {
+                throw new IllegalStateException("The latest draft revision is not durable");
+            }
+            if (!draft.targetType().equals("CRATE")
+                    || !draft.targetId().equals(publication.definition().crateId())) {
+                throw new IllegalStateException("Draft target does not match the definition being published");
+            }
+            if (!java.util.Arrays.equals(draft.payload(), publication.frozenPayload())) {
+                throw new IllegalStateException("The publication payload is not the frozen durable draft");
+            }
+
+            long currentRevision = publishedRevision(connection, draft.targetId());
+            if (currentRevision != draft.baseRevision()) {
+                throw new IllegalStateException("The published crate changed after this draft was opened");
+            }
+            long nextRevision = Math.addExact(currentRevision, 1);
+            long createdAt = publication.createdAt().toEpochMilli();
+            writeDefinition(connection, publication.definition(), nextRevision, createdAt);
+            long nextRuntimeRevision = Math.addExact(runtimeRevision(connection), 1);
+            setRuntimeRevision(connection, nextRuntimeRevision);
+            insertAudit(connection, publication.actorId(), publication.actorName(), "PUBLISH", "CRATE",
+                    draft.targetId(), "Published draft revision " + draft.revision()
+                            + " as definition revision " + nextRevision, createdAt);
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "DELETE FROM definition_draft WHERE draft_uuid = ? AND revision = ? AND lease_token = ?")) {
+                statement.setString(1, draft.draftId().toString());
+                statement.setLong(2, draft.revision());
+                statement.setLong(3, draft.leaseToken());
+                if (statement.executeUpdate() != 1) {
+                    throw new IllegalStateException("Draft changed before publication completed");
+                }
+            }
+            StoredDefinition stored = new StoredDefinition(draft.targetId(), nextRevision, "PUBLISHED",
+                    publication.definition().settingsPayload(), publication.createdAt());
+            return new PublishResult(stored, nextRuntimeRevision);
+        });
+    }
+
+    public CompletableFuture<DefinitionCounts> definitionCounts(String crateId) {
+        String id = requiredText(crateId, "crateId");
+        return submitQuery("count normalized definition rows", connection -> new DefinitionCounts(
+                countForCrate(connection, "reward_definition", id),
+                countForCrate(connection, "reward_item", id),
+                countForCrate(connection, "reward_action", id),
+                countForCrate(connection, "crate_key_link", id)));
+    }
+
     public CompletableFuture<Void> createBackup(Path dataFolder, Path backupDirectory) {
         Path destination = backupDirectory.resolve("data/plexoncrates.db").toAbsolutePath().normalize();
         return submit("create backup", connection -> {
@@ -1370,6 +1601,259 @@ public final class DatabaseService implements AutoCloseable {
         return future;
     }
 
+    private static PublishedSnapshot publishedSnapshot(Connection connection) throws SQLException {
+        var definitions = new ArrayList<StoredDefinition>();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT crate_id, published_revision, lifecycle, settings_payload, updated_at
+                FROM crate_definition WHERE lifecycle = 'PUBLISHED'
+                ORDER BY display_order, crate_id
+                """); ResultSet rows = statement.executeQuery()) {
+            while (rows.next()) {
+                definitions.add(new StoredDefinition(rows.getString(1), rows.getLong(2), rows.getString(3),
+                        rows.getBytes(4), Instant.ofEpochMilli(rows.getLong(5))));
+            }
+        }
+        return new PublishedSnapshot(runtimeRevision(connection), definitions);
+    }
+
+    private static void writeDefinition(
+            Connection connection, DefinitionBundle bundle, long revision, long publishedAt) throws SQLException {
+        for (DefinitionKeyData key : bundle.keys()) upsertDefinitionKey(connection, key, publishedAt);
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO crate_definition(crate_id, lifecycle, published_revision, display_order, display_name,
+                    description, icon_bytes, settings_payload, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(crate_id) DO UPDATE SET lifecycle=excluded.lifecycle,
+                    published_revision=excluded.published_revision, display_order=excluded.display_order,
+                    display_name=excluded.display_name, description=excluded.description,
+                    icon_bytes=excluded.icon_bytes, settings_payload=excluded.settings_payload,
+                    updated_at=excluded.updated_at
+                """)) {
+            statement.setString(1, bundle.crateId());
+            statement.setString(2, bundle.lifecycle());
+            statement.setLong(3, revision);
+            statement.setInt(4, bundle.displayOrder());
+            statement.setString(5, bundle.displayName());
+            statement.setString(6, bundle.description());
+            statement.setBytes(7, bundle.iconBytes());
+            statement.setBytes(8, bundle.settingsPayload());
+            statement.setLong(9, bundle.createdAt().toEpochMilli());
+            statement.setLong(10, publishedAt);
+            statement.executeUpdate();
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM reward_definition WHERE crate_id = ?")) {
+            statement.setString(1, bundle.crateId());
+            statement.executeUpdate();
+        }
+        for (DefinitionRewardData reward : bundle.rewards()) {
+            insertDefinitionReward(connection, bundle.crateId(), reward);
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM crate_key_link WHERE crate_id = ?")) {
+            statement.setString(1, bundle.crateId());
+            statement.executeUpdate();
+        }
+        if (bundle.keyCost() > 0) {
+            Map<String, String> sources = new LinkedHashMap<>();
+            bundle.keys().forEach(key -> sources.put(key.keyId(), key.sourceType()));
+            int priority = 0;
+            for (String keyId : new java.util.LinkedHashSet<>(bundle.acceptedKeyIds())) {
+                String source = sources.get(keyId);
+                if (source == null) throw new SQLException("Published crate references an unstored key: " + keyId);
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO crate_key_link(crate_id, key_id, source_type, cost, priority, enabled)
+                        VALUES(?, ?, ?, ?, ?, 1)
+                        """)) {
+                    statement.setString(1, bundle.crateId());
+                    statement.setString(2, keyId);
+                    statement.setString(3, source);
+                    statement.setInt(4, bundle.keyCost());
+                    statement.setInt(5, priority++);
+                    statement.executeUpdate();
+                }
+            }
+        }
+    }
+
+    private static void insertDefinitionReward(
+            Connection connection, String crateId, DefinitionRewardData reward) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO reward_definition(crate_id, reward_id, position, enabled, display_name, rarity_id,
+                    chance_basis_points, locked, settings_payload) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """)) {
+            statement.setString(1, crateId);
+            statement.setString(2, reward.rewardId());
+            statement.setInt(3, reward.position());
+            statement.setInt(4, reward.enabled() ? 1 : 0);
+            statement.setString(5, reward.displayName());
+            statement.setString(6, reward.rarityId());
+            statement.setInt(7, reward.chanceBasisPoints());
+            statement.setInt(8, reward.locked() ? 1 : 0);
+            statement.setBytes(9, reward.settingsPayload());
+            statement.executeUpdate();
+        }
+        for (DefinitionItemData item : reward.items()) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO reward_item(crate_id, reward_id, action_index, item_bytes, delivery_amount,
+                        material, serialized_size, sha256, captured_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """)) {
+                statement.setString(1, crateId);
+                statement.setString(2, reward.rewardId());
+                statement.setInt(3, item.actionIndex());
+                statement.setBytes(4, item.bytes());
+                statement.setInt(5, item.deliveryAmount());
+                statement.setString(6, item.material());
+                statement.setInt(7, item.serializedSize());
+                statement.setString(8, item.sha256());
+                statement.setLong(9, item.capturedAt().toEpochMilli());
+                statement.executeUpdate();
+            }
+        }
+        for (DefinitionActionData action : reward.actions()) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO reward_action(crate_id, reward_id, action_index, action_type, action_payload)
+                    VALUES(?, ?, ?, ?, ?)
+                    """)) {
+                statement.setString(1, crateId);
+                statement.setString(2, reward.rewardId());
+                statement.setInt(3, action.actionIndex());
+                statement.setString(4, action.actionType());
+                statement.setBytes(5, action.payload());
+                statement.executeUpdate();
+            }
+        }
+    }
+
+    private static void upsertDefinitionKey(
+            Connection connection, DefinitionKeyData key, long updatedAt) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO key_definition_v3(key_id, source_type, display_name, resolution_state, archived,
+                    revision, settings_payload, created_at, updated_at) VALUES(?, ?, ?, ?, ?, 1, ?, ?, ?)
+                ON CONFLICT(key_id) DO UPDATE SET source_type=excluded.source_type,
+                    display_name=excluded.display_name, resolution_state=excluded.resolution_state,
+                    archived=excluded.archived, revision=key_definition_v3.revision + 1,
+                    settings_payload=excluded.settings_payload, updated_at=excluded.updated_at
+                """)) {
+            statement.setString(1, key.keyId());
+            statement.setString(2, key.sourceType());
+            statement.setString(3, key.displayName());
+            statement.setString(4, key.resolutionState());
+            statement.setInt(5, key.archived() ? 1 : 0);
+            statement.setBytes(6, key.settingsPayload());
+            statement.setLong(7, updatedAt);
+            statement.setLong(8, updatedAt);
+            statement.executeUpdate();
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM key_template_v3 WHERE key_id = ?")) {
+            statement.setString(1, key.keyId());
+            statement.executeUpdate();
+        }
+        for (DefinitionKeyTemplateData template : key.templates()) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO key_template_v3(key_id, template_kind, sequence, item_bytes, material,
+                        serialized_size, sha256, captured_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    """)) {
+                statement.setString(1, key.keyId());
+                statement.setString(2, template.templateKind());
+                statement.setInt(3, template.sequence());
+                statement.setBytes(4, template.bytes());
+                statement.setString(5, template.material());
+                statement.setInt(6, template.serializedSize());
+                statement.setString(7, template.sha256());
+                statement.setLong(8, template.capturedAt().toEpochMilli());
+                statement.executeUpdate();
+            }
+        }
+    }
+
+    private static long publishedRevision(Connection connection, String crateId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT published_revision FROM crate_definition WHERE crate_id = ?")) {
+            statement.setString(1, crateId);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? rows.getLong(1) : 0L;
+            }
+        }
+    }
+
+    private static int definitionCount(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT COUNT(*) FROM crate_definition"); ResultSet rows = statement.executeQuery()) {
+            return rows.next() ? rows.getInt(1) : 0;
+        }
+    }
+
+    private static long runtimeRevision(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT value FROM schema_meta WHERE key = 'definition_runtime_revision'");
+             ResultSet rows = statement.executeQuery()) {
+            if (!rows.next()) return 0L;
+            try {
+                return Long.parseLong(rows.getString(1));
+            } catch (NumberFormatException error) {
+                throw new SQLException("Invalid definition runtime revision", error);
+            }
+        }
+    }
+
+    private static void setRuntimeRevision(Connection connection, long revision) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO schema_meta(key, value) VALUES('definition_runtime_revision', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """)) {
+            statement.setString(1, Long.toString(revision));
+            statement.executeUpdate();
+        }
+    }
+
+    private static int countForCrate(Connection connection, String table, String crateId) throws SQLException {
+        String checked = switch (table) {
+            case "reward_definition", "reward_item", "reward_action", "crate_key_link" -> table;
+            default -> throw new IllegalArgumentException("Unsupported definition table");
+        };
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT COUNT(*) FROM " + checked + " WHERE crate_id = ?")) {
+            statement.setString(1, crateId);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? rows.getInt(1) : 0;
+            }
+        }
+    }
+
+    private static void insertAudit(Connection connection, UUID actorId, String actorName, String action,
+                                    String targetType, String targetId, String summary, long createdAt)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO audit_log(actor_uuid, actor_name, action, target_type, target_id, summary, created_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """)) {
+            nullableUuid(statement, 1, actorId);
+            statement.setString(2, actorName);
+            statement.setString(3, action);
+            statement.setString(4, targetType);
+            statement.setString(5, targetId);
+            statement.setString(6, summary);
+            statement.setLong(7, createdAt);
+            statement.executeUpdate();
+        }
+    }
+
+    private static void requirePublished(DefinitionBundle bundle) {
+        if (!bundle.lifecycle().equals("PUBLISHED")) {
+            throw new IllegalArgumentException("Only published definitions can enter the runtime store");
+        }
+        int total = bundle.rewards().stream().filter(DefinitionRewardData::enabled)
+                .mapToInt(DefinitionRewardData::chanceBasisPoints).sum();
+        if (total != 10_000) {
+            throw new IllegalArgumentException("Published reward chances must total exactly 10,000 basis points");
+        }
+        if (bundle.rewards().stream().noneMatch(reward -> reward.enabled() && !reward.actions().isEmpty())) {
+            throw new IllegalArgumentException("Published definition needs an enabled deliverable reward");
+        }
+    }
+
     private static Optional<DefinitionDraft> loadDefinitionDraft(
             Connection connection, String targetType, String targetId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
@@ -1448,6 +1932,14 @@ public final class DatabaseService implements AutoCloseable {
         byte[] payload = java.util.Objects.requireNonNull(input, "payload").clone();
         if (payload.length == 0 || payload.length > 16_000_000) {
             throw new IllegalArgumentException("Draft payload is empty or exceeds 16,000,000 bytes");
+        }
+        return payload;
+    }
+
+    private static byte[] copyBytes(byte[] input, String name) {
+        byte[] payload = java.util.Objects.requireNonNull(input, name).clone();
+        if (payload.length == 0 || payload.length > 16_000_000) {
+            throw new IllegalArgumentException(name + " is empty or exceeds 16,000,000 bytes");
         }
         return payload;
     }

@@ -18,15 +18,21 @@ public final class MenuHolder implements InventoryHolder {
     private final String rewardId;
     private final int page;
     private final boolean adminOrigin;
+    private final long revision;
     private Inventory inventory;
     private final java.util.Map<Integer, Action> actions = new java.util.HashMap<>();
 
     public MenuHolder(Kind kind, String crateId, String rewardId, int page, boolean adminOrigin) {
+        this(kind, crateId, rewardId, page, adminOrigin, 0);
+    }
+
+    public MenuHolder(Kind kind, String crateId, String rewardId, int page, boolean adminOrigin, long revision) {
         this.kind = kind;
         this.crateId = crateId;
         this.rewardId = rewardId;
         this.page = page;
         this.adminOrigin = adminOrigin;
+        this.revision = revision;
     }
 
     public void attach(Inventory inventory) { this.inventory = inventory; }
@@ -35,6 +41,7 @@ public final class MenuHolder implements InventoryHolder {
     public String rewardId() { return rewardId; }
     public int page() { return page; }
     public boolean adminOrigin() { return adminOrigin; }
+    public long revision() { return revision; }
     public void bind(int slot, String action) { bind(slot, action, ""); }
     public void bind(int slot, String action, String value) { actions.put(slot, new Action(action, value)); }
     public Action action(int slot) { return actions.get(slot); }

@@ -3,6 +3,7 @@ package com.antondev.crates;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
@@ -229,6 +230,41 @@ class AdministrationIntegrationTest {
 
         assertTrue(plugin.draftSessions().view(second.getUniqueId(), crate.id()).orElseThrow().writable());
         assertFalse(plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow().writable());
+    }
+
+    @Test
+    void draftEditsStayOutOfPlayerRuntimeUntilAtomicPublication() throws Exception {
+        var editor = server.addPlayer("Publisher");
+        editor.setOp(true);
+        var activeBefore = plugin.runtime().find("basic").orElseThrow();
+        long runtimeBefore = plugin.runtime().snapshot().revision();
+        Component changedName = Component.text("Unpublished draft name");
+
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setDisplayName("basic", changedName, editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "IDENTITY", "Changed display name");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        assertEquals(changedName, plugin.crates().find("basic").orElseThrow().displayName());
+        assertEquals(activeBefore.displayName(), plugin.runtime().find("basic").orElseThrow().displayName());
+
+        var future = plugin.definitionPublisher().publish(editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var publication = future.join();
+
+        assertEquals(changedName, plugin.runtime().find("basic").orElseThrow().displayName());
+        assertNotEquals(runtimeBefore, plugin.runtime().snapshot().revision());
+        assertEquals(2, publication.crateRevision());
+        assertTrue(publication.yamlMirrorUpdated());
+        assertTrue(plugin.draftSessions().view(editor.getUniqueId(), "basic").isEmpty());
+        var counts = plugin.definitionRepository().counts("basic").join();
+        assertEquals(8, counts.rewards());
+        assertTrue(counts.items() > 0);
+        assertTrue(counts.actions() >= counts.items());
+        assertEquals(1, counts.keyLinks());
     }
 
     @Test

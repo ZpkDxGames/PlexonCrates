@@ -62,6 +62,8 @@ public final class OpeningService {
 
     public boolean open(Player player, Crate crate, int amount, OpenSource source, BlockPosition location) {
         if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Crate openings must begin on the primary server thread");
+        Crate published = plugin.runtime().find(crate.id()).orElse(null);
+        if (published != null) crate = published;
         if (!locks.add(player.getUniqueId())) {
             plugin.messages().send(player, "already-opening");
             return false;
@@ -118,7 +120,8 @@ public final class OpeningService {
 
             UUID transactionId = UUID.randomUUID();
             OpeningPlan plan = new OpeningPlan(transactionId, player.getUniqueId(), player.getName(), crate.id(),
-                    keyChoice.keyId(), keyAmount, openingCount, source, location, deliveries, Instant.now());
+                    keyChoice.keyId(), keyAmount, openingCount, source, location,
+                    plugin.runtime().crateRevision(crate.id()), deliveries, Instant.now());
             for (RewardDelivery reward : deliveries) {
                 Bukkit.getPluginManager().callEvent(new CrateRewardSelectEvent(player, plan, reward));
             }
@@ -174,7 +177,8 @@ public final class OpeningService {
         }
         UUID transaction = UUID.randomUUID();
         OpeningPlan plan = new OpeningPlan(transaction, player.getUniqueId(), player.getName(), crate.id(), "TEST", 0,
-                1, OpenSource.ADMIN_FORCE, null, List.of(delivery(reward)), Instant.now());
+                1, OpenSource.ADMIN_FORCE, null, plugin.runtime().crateRevision(crate.id()),
+                List.of(delivery(reward)), Instant.now());
         DeliveryResult result = deliver(player, crate, List.of(reward), plan, false);
         plugin.database().audit(new DatabaseService.AuditRecord(player.getUniqueId(), player.getName(), "TEST_DELIVER",
                 "REWARD", crate.id() + ":" + reward.id(), "Test-delivered without key, limits, pity, or statistics", Instant.now()));
@@ -203,8 +207,11 @@ public final class OpeningService {
                 abortPrepared(transactionId, "Player disconnected before key consumption", false);
                 return;
             }
-            Crate current = plugin.crates().find(plan.crateId()).orElse(null);
-            if (current == null || current.state() != CrateState.PUBLISHED
+            Crate active = plan.runtimeRevision() > 0
+                    ? plugin.runtime().find(plan.crateId()).orElse(null)
+                    : plugin.crates().find(plan.crateId()).orElse(null);
+            Crate current = opening.crate();
+            if (active == null || active.state() != CrateState.PUBLISHED
                     || !plugin.settings().enabled() || !plugin.settings().allows(player.getWorld())
                     || !current.allows(player.getWorld())) {
                 abortPrepared(transactionId, "Crate or world state changed before consumption", false);

@@ -52,6 +52,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 case "clone" -> cloneCrate(sender, args);
                 case "import" -> importCrate(sender, args);
                 case "export" -> exportCrate(sender, args);
+                case "publish" -> publishCrate(sender, args);
                 case "delete" -> deleteCrate(sender, args);
                 case "keys" -> keys(sender, args);
                 case "wand" -> wand(sender, args);
@@ -127,6 +128,29 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 plugin.getDataFolder().toPath().resolve("exports"));
         sender.sendMessage(Text.parse("<green>Exported</green> <white>" + crate.id()
                 + "</white> <green>to</green> <white>exports/" + destination.getFileName() + "</white><green>.</green>"));
+    }
+
+    private void publishCrate(CommandSender sender, String[] args) throws Exception {
+        Crate crate = crate(sender, args, 1);
+        if (crate == null) return;
+        UUID actor = actorId(sender);
+        byte[] payload = draftSeed(crate);
+        long baseRevision = plugin.runtime().crateRevision(crate.id());
+        plugin.draftSessions().openCrate(actor, sender.getName(), crate.id(), baseRevision, payload)
+                .thenCompose(view -> plugin.definitionPublisher().publish(actor, sender.getName(), crate.id()))
+                .whenComplete((publication, error) -> runSync(() -> {
+                    if (error != null) {
+                        Exception failure = asException(error);
+                        plugin.messages().send(sender, "draft-publish-failed", Text.value("error",
+                                failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
+                    } else {
+                        plugin.messages().send(sender, "draft-published", Text.component("crate",
+                                publication.crate().displayName()), Text.value("revision", publication.crateRevision()));
+                        if (!publication.yamlMirrorUpdated()) {
+                            plugin.messages().send(sender, "draft-published-mirror-warning");
+                        }
+                    }
+                }));
     }
 
     private void deleteCrate(CommandSender sender, String[] args) {
@@ -287,7 +311,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             plugin.messages().send(sender, "player-not-found");
             return;
         }
-        Crate crate = plugin.crates().find(args[2]).orElse(null);
+        Crate crate = plugin.runtime().find(args[2]).orElse(null);
         if (crate == null) {
             invalidCrate(sender);
             return;
@@ -300,14 +324,15 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
     }
 
     private void status(CommandSender sender) {
-        plugin.messages().send(sender, "status", Text.value("crates", plugin.crates().all().size()),
-                Text.value("rewards", plugin.crates().rewardCount()), Text.value("locations", plugin.locations().all().size()),
+        plugin.messages().send(sender, "status", Text.value("crates", plugin.runtime().all().size()),
+                Text.value("rewards", plugin.runtime().rewardCount()), Text.value("locations", plugin.locations().all().size()),
                 Text.value("key_source", plugin.keys().sourceLabel()));
     }
 
     private void registerDraft(CommandSender sender, Crate crate) throws Exception {
-        byte[] payload = plugin.crates().serialized(crate.id()).getBytes(StandardCharsets.UTF_8);
-        plugin.draftSessions().openCrate(actorId(sender), sender.getName(), crate.id(), 0, payload)
+        byte[] payload = draftSeed(crate);
+        plugin.draftSessions().openCrate(actorId(sender), sender.getName(), crate.id(),
+                        plugin.runtime().crateRevision(crate.id()), payload)
                 .whenComplete((view, error) -> {
                     if (error != null) runSync(() -> plugin.configError(sender, asException(error)));
                 });
@@ -316,10 +341,12 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
     private void mutateDraft(CommandSender sender, Crate crate, String actionType, String summary,
                              DraftCommandMutation mutation) throws Exception {
         UUID actorId = actorId(sender);
-        byte[] initial = plugin.crates().serialized(crate.id()).getBytes(StandardCharsets.UTF_8);
+        byte[] initial = draftSeed(crate);
+        boolean resuming = plugin.draftSessions().view(actorId, crate.id()).isEmpty();
         java.util.concurrent.CompletableFuture<DraftSessionService.View> ready = plugin.draftSessions()
                 .view(actorId, crate.id()).map(java.util.concurrent.CompletableFuture::completedFuture)
-                .orElseGet(() -> plugin.draftSessions().openCrate(actorId, sender.getName(), crate.id(), 0, initial));
+                .orElseGet(() -> plugin.draftSessions().openCrate(actorId, sender.getName(), crate.id(),
+                        plugin.runtime().crateRevision(crate.id()), initial));
         ready.whenComplete((view, loadError) -> runSync(() -> {
             if (loadError != null) {
                 plugin.configError(sender, asException(loadError));
@@ -333,6 +360,11 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 return;
             }
             try {
+                if (resuming) {
+                    byte[] durable = plugin.draftSessions().payload(actorId, crate.id())
+                            .orElseThrow(() -> new IllegalStateException("The durable draft payload is unavailable"));
+                    plugin.crates().restoreDraftSnapshot(crate.id(), durable);
+                }
                 mutation.run();
                 byte[] payload = plugin.crates().serialized(crate.id()).getBytes(StandardCharsets.UTF_8);
                 plugin.draftSessions().saveCrate(actorId, crate.id(), actionType, summary, payload)
@@ -345,6 +377,16 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 plugin.configError(sender, error);
             }
         }));
+    }
+
+    private byte[] draftSeed(Crate crate) throws Exception {
+        return plugin.runtime().payload(crate.id()).orElseGet(() -> {
+            try {
+                return plugin.crates().serialized(crate.id()).getBytes(StandardCharsets.UTF_8);
+            } catch (Exception error) {
+                throw new IllegalStateException(error);
+            }
+        });
     }
 
     private UUID actorId(CommandSender sender) {
@@ -376,7 +418,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
     private static String permission(String action) {
         return switch (action) {
             case "gui", "help", "status" -> "plexoncrates.admin.gui";
-            case "create", "edit", "clone", "import", "export", "delete" -> "plexoncrates.admin.crates";
+            case "create", "edit", "clone", "import", "export", "publish", "delete" -> "plexoncrates.admin.crates";
             case "keys" -> "plexoncrates.admin.keys";
             case "additem", "addcommand", "remove", "chance", "weight" -> "plexoncrates.admin.rewards";
             case "wand", "link", "unlink", "set", "unset" -> "plexoncrates.admin.locations";
@@ -454,7 +496,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>PlexonCrates</bold></gradient> <dark_gray>•</dark_gray> <gold>Administration</gold>"));
         sender.sendMessage(Text.parse("<white>/pcrates</white> <dark_gray>—</dark_gray> <gray>Open the visual editor.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates create <id></white> <dark_gray>•</dark_gray> <white>edit <crate></white> <dark_gray>•</dark_gray> <white>clone <crate> <new-id></white>"));
-        sender.sendMessage(Text.parse("<white>/pcrates import <file.yml> <new-id></white> <dark_gray>•</dark_gray> <white>export <crate></white>"));
+        sender.sendMessage(Text.parse("<white>/pcrates import <file.yml> <new-id></white> <dark_gray>•</dark_gray> <white>export <crate></white> <dark_gray>•</dark_gray> <white>publish <crate></white>"));
         sender.sendMessage(Text.parse("<white>/pcrates delete <crate></white> <dark_gray>•</dark_gray> <white>keys [sync]</white> <dark_gray>•</dark_gray> <white>wand [crate]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates link <crate></white> <dark_gray>—</dark_gray> <gray>Link the block you are looking at.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates unlink</white> <dark_gray>—</dark_gray> <gray>Confirm unlinking the target block.</gray>"));
@@ -470,11 +512,11 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                                  @NotNull String alias, @NotNull String[] args) {
         if (!sender.hasPermission("plexoncrates.admin") && !sender.hasPermission("plexoncrates.admin.gui")) return List.of();
-        if (args.length == 1) return filter(List.of("gui", "create", "edit", "clone", "import", "export", "delete", "keys", "wand",
+        if (args.length == 1) return filter(List.of("gui", "create", "edit", "clone", "import", "export", "publish", "delete", "keys", "wand",
                 "link", "unlink", "set", "unset", "additem", "addcommand", "remove", "chance", "givekey",
                 "open", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
         String action = args[0].toLowerCase(Locale.ROOT);
-        if (args.length == 2 && List.of("edit", "export", "delete", "link", "set", "additem", "addcommand", "remove", "chance", "weight").contains(action)) {
+        if (args.length == 2 && List.of("edit", "export", "publish", "delete", "link", "set", "additem", "addcommand", "remove", "chance", "weight").contains(action)) {
             return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[1]);
         }
         if (args.length == 2 && action.equals("clone")) return filter(plugin.crates().orderedAdmin().stream().map(Crate::id).toList(), args[1]);
@@ -487,7 +529,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             return filter(plugin.crates().ordered().stream().map(Crate::keyId).distinct().toList(), args[2]);
         }
         if (args.length == 3 && action.equals("open")) {
-            return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[2]);
+            return filter(plugin.runtime().ordered().stream().map(Crate::id).toList(), args[2]);
         }
         if (args.length == 3 && List.of("remove", "chance", "weight").contains(action)) {
             return plugin.crates().find(args[1]).map(crate -> filter(new ArrayList<>(crate.rewards().keySet()), args[2])).orElse(List.of());

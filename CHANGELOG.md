@@ -26,6 +26,14 @@ All notable PlexonCrates changes are documented here.
 - Added a single-writer lease across administrators, an explicit read-only view for additional editors, and permission-gated confirmed takeover that immediately invalidates the previous lease.
 - Made crate deletion discard its durable draft transactionally so recreating an ID cannot resume stale editor data.
 
+### Published runtime isolation
+
+- Added a canonical definition repository, atomic `DefinitionPublisher`, and immutable revisioned runtime snapshots loaded from SQLite.
+- Normalized each publication into crate, reward, typed-action, exact-item, key-template, and crate-key-link rows in the same transaction as its audit entry and draft close.
+- Routed player browsing, commands, linked blocks, displays, forced openings, and public API crate queries through published snapshots while administration continues to render the current durable draft.
+- Added frozen draft publication, stale base/lease/revision rejection, the cancellable `CrateDraftPublishEvent`, runtime revision API accessors, and preview revision checks.
+- Prevented cross-crate key replacement from bypassing draft leases and kept active keys undeletable until every replacement draft is published.
+
 ### Documentation
 
 - Adopted the expanded 3.0 implementation specification, including the one-edition/unlimited-definition contract and the original PhoenixCrates-benchmarked GUI usability boundary.

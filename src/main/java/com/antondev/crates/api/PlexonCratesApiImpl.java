@@ -13,14 +13,16 @@ public final class PlexonCratesApiImpl implements PlexonCratesApi {
 
     public PlexonCratesApiImpl(PlexonCrates plugin) { this.plugin = plugin; }
 
-    @Override public Optional<Crate> crate(String id) { return plugin.crates().find(id); }
-    @Override public Collection<Crate> crates() { return ListCopies.crates(plugin.crates().all()); }
+    @Override public Optional<Crate> crate(String id) { return plugin.runtime().find(id); }
+    @Override public Collection<Crate> crates() { return ListCopies.crates(plugin.runtime().all()); }
     @Override public Optional<KeyDefinition> key(String id) { return plugin.keys().definition(id); }
     @Override public Collection<KeyDefinition> keys() { return ListCopies.keys(plugin.keys().definitions()); }
+    @Override public long runtimeRevision() { return plugin.runtime().snapshot().revision(); }
+    @Override public long crateRevision(String crateId) { return plugin.runtime().crateRevision(crateId); }
 
     @Override
     public boolean requestOpening(Player player, String crateId, int amount, OpenSource source) {
-        Crate crate = plugin.crates().find(crateId).orElse(null);
+        Crate crate = plugin.runtime().find(crateId).orElse(null);
         return crate != null && plugin.openings().open(player, crate, amount, source, null);
     }
 

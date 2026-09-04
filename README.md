@@ -17,6 +17,7 @@ This is an independent implementation inspired by the usability goals and featur
 - Non-destructive drag/cursor capture for custom keys, crate icons, and reward items.
 - Exact `0.01%` base chances backed by a 10,000-ticket allocator, automatic proportional rebalancing, and eligible-pool normalization.
 - Versioned SQLite crate drafts with ordered autosaves, forward undo, visible save health, single-writer leases, confirmed takeover, publish validation, cloning, search, and safe import/export.
+- Atomic definition publication into normalized SQLite rows plus a revisioned immutable runtime snapshot; unpublished edits never reach player browsing, linked blocks, displays, API lookups, or openings.
 - Item, console-command, experience, level, and Vault money actions in one reward bundle.
 - Permission filters, player/global lifetime and rolling-window limits, reward cooldowns, rarities, and deterministic pity guarantees.
 - `INSTANT`, `ROULETTE`, `REVEAL`, and `SUMMARY` presentation modes plus per-reward titles, sounds, particles, messages, and broadcasts.
@@ -79,7 +80,7 @@ At a linked block, left-click previews, right-click opens one, and sneak-right-c
 
 ## Administration
 
-`/pcrates` opens the dashboard. The GUI supports persistent guided drafts, full reward editing, exact capture, key rotation, location inspection, statistics, validation, reload, backups, and diagnostics. Drafts load asynchronously and show `Loading`, `Saving`, `Saved`, `Save failed`, or `Read only`; failed writes block further mutation until retried. A second administrator can inspect the current definition but must confirm a permission-gated takeover before editing. Display items are never trusted as data; all actions resolve through server-side menu state.
+`/pcrates` opens the dashboard. The GUI supports persistent guided drafts, full reward editing, exact capture, key rotation, location inspection, statistics, validation, reload, backups, and diagnostics. Drafts load asynchronously and show `Loading`, `Saving`, `Publishing`, `Saved`, `Save failed`, or `Read only`; failed writes block further mutation until retried. Publishing freezes the durable revision, validates it, commits the complete normalized graph and audit entry in one SQLite transaction, and only then swaps the active runtime snapshot. A second administrator can inspect the current definition but must confirm a permission-gated takeover before editing. Display items are never trusted as data; all actions resolve through server-side menu state.
 
 | Command | Purpose |
 |---|---|
@@ -88,6 +89,7 @@ At a linked block, left-click previews, right-click opens one, and sneak-right-c
 | `/pcrates clone <crate> <new-id>` | Clone a definition as a draft |
 | `/pcrates import <file.yml> <new-id>` | Import `imports/file.yml` as a validated draft |
 | `/pcrates export <crate>` | Export a definition to `exports/<crate>.yml` |
+| `/pcrates publish <crate>` | Validate and atomically publish the latest durable draft revision |
 | `/pcrates delete <crate>` | Open destructive confirmation |
 | `/pcrates keys` | Open the physical-key registry |
 | `/pcrates keys sync` | Refresh PlexonKeys discovery and templates |
@@ -137,11 +139,11 @@ Each crate can require its own permission. Each reward can independently require
 | Path | Responsibility |
 |---|---|
 | `config.yml` | Runtime, database, interaction, opening, visual, integration, and logging settings |
-| `keys.yml` | Provider-backed and plugin-owned exact physical-key definitions |
+| `keys.yml` | Current compatibility/import mirror for provider-backed and plugin-owned exact keys |
 | `menus.yml` | Configurable inventory layouts, slots, icons, names, and lore |
 | `messages.yml` | MiniMessage feedback |
-| `crates/*.yml` | Versioned crate and reward definitions |
-| `data/plexoncrates.db` | Links, statistics, limits, pity, history, journals, drafts, template cache, migration markers, and audit data |
+| `crates/*.yml` | Compatibility/import-export mirrors for editable crate definitions |
+| `data/plexoncrates.db` | Canonical published definitions, normalized rewards/actions/exact items/keys, drafts, links, statistics, limits, pity, history, journals, migrations, and audit data |
 | `imports/` / `exports/` | Deliberate crate-definition transfer boundary |
 | `backups/` | Automatic migration and manual consistent backups |
 | `logs/openings-YYYY-MM-DD.log` | Optional human-readable opening log |
@@ -217,7 +219,7 @@ Closing an animation or disconnecting after delivery cannot remove or duplicate 
 
 ## Public API and events
 
-Other plugins can obtain `com.antondev.crates.api.PlexonCratesApi` from Bukkit's services manager. The API returns immutable snapshots and can query crates/keys or request a validated opening.
+Other plugins can obtain `com.antondev.crates.api.PlexonCratesApi` from Bukkit's services manager. The API returns only immutable published definitions, exposes global/per-crate snapshot revisions, and can query crates/keys or request a validated opening.
 
 Primary-thread Bukkit events:
 
@@ -227,6 +229,7 @@ Primary-thread Bukkit events:
 - `CrateOpenEvent` — after delivery succeeds;
 - `CrateLinkEvent` and `CrateUnlinkEvent` — cancellable before persistence;
 - `CrateDefinitionChangeEvent` — after a crate is created, updated, published, disabled, archived, or deleted.
+- `CrateDraftPublishEvent` — cancellable after full validation and before the atomic definition transaction.
 
 ## Build and test
 
@@ -234,7 +237,7 @@ Primary-thread Bukkit events:
 mvn --batch-mode --no-transfer-progress clean verify
 ```
 
-Build with Java 25. The shaded artifact is `target/PlexonCrates-2.0.0.jar`; SQLite is bundled, while Paper and optional plugin APIs remain provided dependencies. See [TESTING.md](TESTING.md) for automated coverage and the real-server acceptance checklist.
+Build with Java 25. During 3.0 development the shaded artifact is `target/PlexonCrates-3.0.0-SNAPSHOT.jar`; SQLite is bundled, while Paper and optional plugin APIs remain provided dependencies. See [TESTING.md](TESTING.md) for automated coverage and the real-server acceptance checklist.
 
 ## License and authorship
 

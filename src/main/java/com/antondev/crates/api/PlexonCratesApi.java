@@ -12,5 +12,7 @@ public interface PlexonCratesApi {
     Collection<Crate> crates();
     Optional<KeyDefinition> key(String id);
     Collection<KeyDefinition> keys();
+    default long runtimeRevision() { return 0L; }
+    default long crateRevision(String crateId) { return 0L; }
     boolean requestOpening(Player player, String crateId, int amount, OpenSource source);
 }

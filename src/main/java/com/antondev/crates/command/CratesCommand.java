@@ -59,7 +59,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
                 invalidCrate(player);
                 return true;
             }
-            Crate crate = plugin.crates().find(args[1]).orElse(null);
+            Crate crate = plugin.runtime().find(args[1]).orElse(null);
             if (crate == null) {
                 invalidCrate(player);
                 return true;
@@ -73,7 +73,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         if (!allowed(player, "plexoncrates.preview")) return denied(player);
-        Crate direct = plugin.crates().find(action).orElse(null);
+        Crate direct = plugin.runtime().find(action).orElse(null);
         if (direct != null) plugin.menus().openPreview(player, direct, 0, false);
         else invalidCrate(player);
         return true;
@@ -135,7 +135,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
     }
 
     private void invalidCrate(CommandSender sender) {
-        plugin.messages().send(sender, "invalid-crate", Text.value("crates", plugin.crates().ids()));
+        plugin.messages().send(sender, "invalid-crate", Text.value("crates", plugin.runtime().ids()));
     }
 
     @Override
@@ -143,11 +143,11 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
                                                  @NotNull String alias, @NotNull String[] args) {
         if (args.length == 1) {
             var values = new ArrayList<>(List.of("preview", "open", "history", "help"));
-            values.addAll(plugin.crates().ordered().stream().map(Crate::id).toList());
+            values.addAll(plugin.runtime().ordered().stream().map(Crate::id).toList());
             return filter(values, args[0]);
         }
         if (args.length == 2 && (args[0].equalsIgnoreCase("preview") || args[0].equalsIgnoreCase("open"))) {
-            return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[1]);
+            return filter(plugin.runtime().ordered().stream().map(Crate::id).toList(), args[1]);
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("open")) return filter(List.of("1", "5", "10", "64"), args[2]);
         if (args.length == 2 && args[0].equalsIgnoreCase("history")) return filter(List.of("1", "2", "3"), args[1]);

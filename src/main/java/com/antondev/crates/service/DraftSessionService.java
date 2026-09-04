@@ -21,6 +21,7 @@ public final class DraftSessionService {
     public enum State {
         LOADING,
         SAVING,
+        PUBLISHING,
         SAVED,
         SAVE_FAILED,
         READ_ONLY
@@ -45,6 +46,22 @@ public final class DraftSessionService {
                 throw new IllegalArgumentException("Draft revision and lease token cannot be negative");
             }
         }
+    }
+
+    public record FrozenDraft(
+            String crateId, UUID draftId, long baseRevision, long revision, long leaseToken,
+            UUID actorId, byte[] payload) {
+        public FrozenDraft {
+            crateId = required(crateId, "crateId");
+            draftId = Objects.requireNonNull(draftId, "draftId");
+            actorId = Objects.requireNonNull(actorId, "actorId");
+            payload = Objects.requireNonNull(payload, "payload").clone();
+            if (baseRevision < 0 || revision < 0 || leaseToken < 0) {
+                throw new IllegalArgumentException("Draft revisions and lease token cannot be negative");
+            }
+        }
+
+        @Override public byte[] payload() { return payload.clone(); }
     }
 
     @FunctionalInterface
@@ -218,6 +235,49 @@ public final class DraftSessionService {
         return result;
     }
 
+    /** Freezes this session after its ordered save tail so no later click can overtake publication. */
+    public CompletableFuture<FrozenDraft> freezeCrate(UUID actorId, String crateId) {
+        Session session = requireSession(actorId, crateId);
+        CompletableFuture<DefinitionDraft> durable;
+        synchronized (session) {
+            View current = viewLocked(session);
+            if (!current.writable()) {
+                return CompletableFuture.failedFuture(new DraftAccessException(accessMessage(current)));
+            }
+            session.localState = State.PUBLISHING;
+            session.failure = "";
+            durable = session.tail == null ? session.ready : session.tail;
+        }
+        publish(session, view(session));
+        return durable.thenApply(ignored -> {
+            synchronized (session) {
+                DefinitionDraft draft = session.draft;
+                if (draft == null || !draft.ownerId().equals(actorId)
+                        || session.localState != State.PUBLISHING) {
+                    throw new DraftAccessException(readOnlyMessage(session));
+                }
+                return new FrozenDraft(session.key.crateId(), draft.draftId(), draft.baseRevision(),
+                        draft.revision(), draft.leaseToken(), actorId, draft.payload());
+            }
+        }).whenComplete((ignored, error) -> {
+            if (error != null) releasePublication(actorId, crateId);
+        });
+    }
+
+    public void releasePublication(UUID actorId, String crateId) {
+        Session session = sessions.get(new SessionKey(actorId, crateId));
+        if (session == null) return;
+        synchronized (session) {
+            if (session.localState == State.PUBLISHING) session.localState = State.SAVED;
+        }
+        publish(session, view(session));
+    }
+
+    public void published(String crateId) {
+        String id = required(crateId, "crateId").toLowerCase(Locale.ROOT);
+        sessions.keySet().removeIf(key -> key.crateId().equals(id));
+    }
+
     public CompletableFuture<Void> discardCrate(UUID actorId, String crateId) {
         Session session = requireSession(actorId, crateId);
         DefinitionDraft current;
@@ -351,7 +411,7 @@ public final class DraftSessionService {
         synchronized (session) {
             if (operation == session.operation) {
                 if (error == null) {
-                    session.localState = State.SAVED;
+                    if (session.localState != State.PUBLISHING) session.localState = State.SAVED;
                     session.failure = "";
                 } else if (!blocksWrites) {
                     session.localState = State.SAVED;
@@ -415,6 +475,7 @@ public final class DraftSessionService {
     private static String accessMessage(View view) {
         return switch (view.state()) {
             case LOADING -> "The draft is still loading";
+            case PUBLISHING -> "This draft is currently being published";
             case SAVE_FAILED -> "The latest draft save failed; retry it before making more changes";
             case READ_ONLY -> "This draft is currently edited by "
                     + (view.ownerName().isBlank() ? "another administrator" : view.ownerName());

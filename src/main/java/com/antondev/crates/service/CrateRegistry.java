@@ -51,6 +51,17 @@ public final class CrateRegistry {
         }
     }
 
+    public record PreparedPublication(String crateId, Crate crate, byte[] payload, Path file) {
+        public PreparedPublication {
+            crateId = java.util.Objects.requireNonNull(crateId, "crateId");
+            crate = java.util.Objects.requireNonNull(crate, "crate");
+            payload = java.util.Objects.requireNonNull(payload, "payload").clone();
+            file = java.util.Objects.requireNonNull(file, "file");
+        }
+
+        @Override public byte[] payload() { return payload.clone(); }
+    }
+
     private static final Pattern ID = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
     private static final ItemSnapshotCodec ITEM_SNAPSHOTS = new ItemSnapshotCodec();
     private final Path directory;
@@ -112,16 +123,43 @@ public final class CrateRegistry {
         return Files.readString(file, StandardCharsets.UTF_8);
     }
 
+    public PreparedPublication preparePublished(
+            String crateId, byte[] frozenDraftPayload, String editor) throws Exception {
+        String id = normalize(crateId);
+        Path file = files.get(id);
+        if (file == null) throw new IllegalArgumentException("Unknown crate");
+        YamlConfiguration yaml = decode(frozenDraftPayload);
+        String payloadId = normalize(yaml.getString("id", id));
+        if (!id.equals(payloadId)) throw new IllegalArgumentException("Draft snapshot targets a different crate ID");
+        yaml.set("state", CrateState.PUBLISHED.name());
+        touch(yaml, editor);
+        Crate published = parse(file, yaml);
+        byte[] payload = yaml.saveToString().getBytes(StandardCharsets.UTF_8);
+        return new PreparedPublication(id, published, payload, file);
+    }
+
+    public Crate parsePublished(String crateId, byte[] payload) throws Exception {
+        String id = normalize(crateId);
+        YamlConfiguration yaml = decode(payload);
+        Crate parsed = parse(files.getOrDefault(id, directory.resolve(id + ".yml")), yaml);
+        if (!parsed.id().equals(id) || parsed.state() != CrateState.PUBLISHED) {
+            throw new IllegalArgumentException("Stored runtime definition is not the requested published crate");
+        }
+        return parsed;
+    }
+
+    public void installPublished(PreparedPublication publication) throws IOException {
+        AtomicFiles.write(publication.file(), new String(publication.payload(), StandardCharsets.UTF_8));
+        Crate previous = crates.get(publication.crateId());
+        install(publication.crateId(), publication.file(), publication.crate());
+        fireChange(publication.crate(), changeType(previous, publication.crate()));
+    }
+
     public Crate restoreDraftSnapshot(String crateId, byte[] payload) throws Exception {
         String id = normalize(crateId);
         Path file = files.get(id);
         if (file == null) throw new IllegalArgumentException("Unknown crate");
-        String serialized = StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(java.util.Objects.requireNonNull(payload, "payload"))).toString();
-        YamlConfiguration yaml = new YamlConfiguration();
-        yaml.loadFromString(serialized);
+        YamlConfiguration yaml = decode(payload);
         Crate previous = crates.get(id);
         Crate restored = parse(file, yaml);
         if (!restored.id().equals(id)) {
@@ -335,6 +373,10 @@ public final class CrateRegistry {
 
     public List<String> publishingIssues(String crateId, KeyService keys) {
         Crate crate = find(crateId).orElseThrow(() -> new IllegalArgumentException("Unknown crate"));
+        return publishingIssues(crate, keys);
+    }
+
+    public List<String> publishingIssues(Crate crate, KeyService keys) {
         var issues = new ArrayList<String>();
         if (crate.keyCost() > 0) {
             if (crate.acceptedKeyIds().isEmpty()) issues.add("Select at least one key.");
@@ -939,6 +981,16 @@ public final class CrateRegistry {
         YamlConfiguration yaml = new YamlConfiguration();
         try { yaml.loadFromString(Files.readString(file, StandardCharsets.UTF_8)); }
         catch (Exception error) { throw path(file, "invalid YAML", error); }
+        return yaml;
+    }
+
+    private static YamlConfiguration decode(byte[] payload) throws Exception {
+        String serialized = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(java.util.Objects.requireNonNull(payload, "payload"))).toString();
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.loadFromString(serialized);
         return yaml;
     }
 

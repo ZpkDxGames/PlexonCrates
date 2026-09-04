@@ -48,11 +48,12 @@ public final class MenuService implements Listener {
 
     public void openBrowser(Player player) {
         MenuConfig menus = plugin.menusConfig();
-        MenuHolder holder = new MenuHolder(MenuHolder.Kind.BROWSER, "", "", 0, false);
+        MenuHolder holder = new MenuHolder(MenuHolder.Kind.BROWSER, "", "", 0, false,
+                plugin.runtime().snapshot().revision());
         Inventory inventory = create(holder, menus.size("browser"), menus.title("browser"));
         fill(inventory);
         List<Integer> slots = menus.slots("browser.crate-slots");
-        List<Crate> crates = plugin.crates().ordered();
+        List<Crate> crates = plugin.runtime().ordered();
         for (int index = 0; index < Math.min(slots.size(), crates.size()); index++) {
             Crate crate = crates.get(index);
             ItemStack icon = crate.iconCopy();
@@ -72,7 +73,8 @@ public final class MenuService implements Listener {
         List<CrateReward> rewards = crate.orderedRewards().stream().filter(CrateReward::enabled).toList();
         int pages = Math.max(1, (rewards.size() + rewardSlots.size() - 1) / rewardSlots.size());
         int page = Math.max(0, Math.min(requestedPage, pages - 1));
-        MenuHolder holder = new MenuHolder(MenuHolder.Kind.PREVIEW, crate.id(), "", page, adminOrigin);
+        MenuHolder holder = new MenuHolder(MenuHolder.Kind.PREVIEW, crate.id(), "", page, adminOrigin,
+                adminOrigin ? 0 : plugin.runtime().crateRevision(crate.id()));
         Inventory inventory = create(holder, menus.size("preview"), menus.title("preview", Text.component("crate", crate.displayName())));
         fill(inventory);
         long now = System.currentTimeMillis();
@@ -294,10 +296,16 @@ public final class MenuService implements Listener {
         int slot = event.getRawSlot();
         MenuConfig menus = plugin.menusConfig();
         switch (holder.kind()) {
-            case BROWSER -> browserClick(player, slot, event.isRightClick());
+            case BROWSER -> browserClick(player, holder, slot, event.isRightClick());
             case PREVIEW -> {
-                Crate crate = plugin.crates().find(holder.crateId()).orElse(null);
+                Crate crate = (holder.adminOrigin() ? plugin.crates().find(holder.crateId())
+                        : plugin.runtime().find(holder.crateId())).orElse(null);
                 if (crate == null) return;
+                if (!holder.adminOrigin() && holder.revision() != plugin.runtime().crateRevision(crate.id())) {
+                    plugin.messages().send(player, "opening-state-changed");
+                    openPreview(player, crate, 0, false);
+                    return;
+                }
                 if (slot == menus.slot("preview.open")) plugin.openings().open(player, crate, 1, false);
                 else if (slot == menus.slot("preview.back")) {
                     if (holder.adminOrigin()) openEditor(player, crate); else openBrowser(player);
@@ -328,14 +336,19 @@ public final class MenuService implements Listener {
         rewardSearch.remove(event.getPlayer().getUniqueId());
     }
 
-    private void browserClick(Player player, int slot, boolean rightClick) {
+    private void browserClick(Player player, MenuHolder holder, int slot, boolean rightClick) {
         MenuConfig menus = plugin.menusConfig();
         if (slot == menus.slot("browser.close")) {
             player.closeInventory();
             return;
         }
+        if (holder.revision() != plugin.runtime().snapshot().revision()) {
+            plugin.messages().send(player, "opening-state-changed");
+            openBrowser(player);
+            return;
+        }
         int index = menus.slots("browser.crate-slots").indexOf(slot);
-        List<Crate> crates = plugin.crates().ordered();
+        List<Crate> crates = plugin.runtime().ordered();
         if (index < 0 || index >= crates.size()) return;
         Crate crate = crates.get(index);
         if (rightClick) plugin.openings().open(player, crate, 1, false);
@@ -586,16 +599,6 @@ public final class MenuService implements Listener {
                 + fingerprint + "</white> <dark_gray>•</dark_gray> <gray>bytes</gray> <white>" + size + "</white>"));
     }
 
-    private void copyReward(Player player, Crate source, CrateReward reward) {
-        plugin.editSessions().request(player, Text.parse("<aqua>Enter <white>target_crate,new_reward_id</white>:</aqua>"), (target, value) -> {
-            String[] parts = value.split(",", -1);
-            if (parts.length != 2) throw new IllegalArgumentException("Use target_crate,new_reward_id");
-            plugin.crates().copyReward(source.id(), reward.id(), parts[0].trim(), parts[1].trim(), target.getName());
-            Crate destination = plugin.crates().find(parts[0].trim()).orElseThrow();
-            openRewards(target, destination, 0);
-        });
-    }
-
     private void openConfirmDelete(Player player, Crate crate, CrateReward reward, int returnPage) {
         MenuConfig menus = plugin.menusConfig();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.CONFIRM_DELETE, crate.id(), reward.id(), returnPage, true);
@@ -663,6 +666,7 @@ public final class MenuService implements Listener {
         Component state = switch (draft.state()) {
             case LOADING -> Text.parse("<yellow>Loading</yellow>");
             case SAVING -> Text.parse("<yellow>Saving</yellow>");
+            case PUBLISHING -> Text.parse("<aqua>Publishing</aqua>");
             case SAVED -> Text.parse("<green>Saved</green>");
             case SAVE_FAILED -> Text.parse("<red>Save failed</red>");
             case READ_ONLY -> Text.parse("<gold>Read only</gold>");

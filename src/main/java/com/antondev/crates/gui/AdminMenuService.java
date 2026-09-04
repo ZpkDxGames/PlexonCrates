@@ -470,11 +470,7 @@ public final class AdminMenuService {
                 }
             }
             case "publish" -> {
-                if (requireWritableDraft(player, action.value())) {
-                    plugin.crates().publish(action.value(), plugin.keys(), player.getName());
-                    saveDraftRevision(player, action.value(), "STATE", "Published crate");
-                    refreshCrate(player, action.value());
-                }
+                if (requireWritableDraft(player, action.value())) publishDraft(player, action.value());
             }
             case "archive" -> openCrateConfirmation(player, action.value(), "archive");
             case "clone" -> cloneCrate(player, action.value());
@@ -731,9 +727,10 @@ public final class AdminMenuService {
                     if (plugin.keys().definition(value).isEmpty() || plugin.keys().resolve(value).isEmpty()) {
                         throw new IllegalArgumentException("The replacement key must exist and resolve exactly");
                     }
-                    plugin.crates().replaceKeyReferences(keyId, value, target.getName());
-                    openKeyDeleteConfirmation(target, keyId);
+                    replaceKeyReferences(target, keyId, value);
                 });
+            } else if (publishedKeyReferences(keyId) > 0) {
+                plugin.messages().send(player, "key-replacement-awaiting-publish");
             } else openKeyDeleteConfirmation(player, keyId);
         } else if (event.isRightClick()) {
             plugin.keys().give(player, keyId, 1);
@@ -743,6 +740,76 @@ public final class AdminMenuService {
             player.sendMessage(Text.parse("<aqua>" + keyId + "</aqua> <dark_gray>•</dark_gray> <gray>" + definition.source()
                     + " • " + (plugin.keys().resolve(keyId).isPresent() ? "resolved" : "unresolved") + "</gray>"));
         }
+    }
+
+    private void replaceKeyReferences(Player player, String oldKeyId, String newKeyId) {
+        List<Crate> affected = plugin.crates().orderedAdmin().stream()
+                .filter(crate -> crate.acceptedKeyIds().contains(oldKeyId)).toList();
+        if (affected.isEmpty()) {
+            openKeyDeleteConfirmation(player, oldKeyId);
+            return;
+        }
+        UUID actor = player.getUniqueId();
+        var loads = new ArrayList<java.util.concurrent.CompletableFuture<DraftSessionService.View>>();
+        var resumed = new java.util.LinkedHashSet<String>();
+        try {
+            for (Crate crate : affected) {
+                if (plugin.draftSessions().view(actor, crate.id()).isEmpty()) resumed.add(crate.id());
+                byte[] payload = plugin.runtime().payload(crate.id()).orElseGet(() -> {
+                    try {
+                        return plugin.crates().serialized(crate.id()).getBytes(StandardCharsets.UTF_8);
+                    } catch (Exception error) {
+                        throw new IllegalStateException(error);
+                    }
+                });
+                loads.add(plugin.draftSessions().openCrate(actor, player.getName(), crate.id(),
+                        plugin.runtime().crateRevision(crate.id()), payload));
+            }
+        } catch (Exception error) {
+            plugin.configError(player, error);
+            return;
+        }
+        java.util.concurrent.CompletableFuture.allOf(
+                loads.toArray(java.util.concurrent.CompletableFuture<?>[]::new))
+                .whenComplete((ignored, loadError) -> runFor(actor, target -> {
+                    if (loadError != null) {
+                        plugin.configError(target, asException(loadError));
+                        return;
+                    }
+                    for (Crate crate : affected) {
+                        if (!plugin.draftSessions().writable(actor, crate.id())) {
+                            plugin.messages().send(target, "draft-read-only", Text.value("owner",
+                                    plugin.draftSessions().view(actor, crate.id())
+                                            .map(DraftSessionService.View::ownerName).orElse("another administrator")));
+                            return;
+                        }
+                    }
+                    try {
+                        for (String crateId : resumed) {
+                            byte[] durable = plugin.draftSessions().payload(actor, crateId).orElseThrow();
+                            plugin.crates().restoreDraftSnapshot(crateId, durable);
+                        }
+                        plugin.crates().replaceKeyReferences(oldKeyId, newKeyId, target.getName());
+                        var saves = new ArrayList<java.util.concurrent.CompletableFuture<DraftSessionService.View>>();
+                        for (Crate crate : affected) {
+                            byte[] payload = plugin.crates().serialized(crate.id()).getBytes(StandardCharsets.UTF_8);
+                            saves.add(plugin.draftSessions().saveCrate(actor, crate.id(), "KEY",
+                                    "Replaced accepted key " + oldKeyId + " with " + newKeyId, payload));
+                        }
+                        java.util.concurrent.CompletableFuture.allOf(
+                                saves.toArray(java.util.concurrent.CompletableFuture<?>[]::new))
+                                .whenComplete((saved, saveError) -> runFor(actor, current -> {
+                                    if (saveError != null) plugin.configError(current, asException(saveError));
+                                    else {
+                                        plugin.messages().send(current, "key-replacement-drafted",
+                                                Text.value("count", affected.size()));
+                                        openKeys(current, 0);
+                                    }
+                                }));
+                    } catch (Exception error) {
+                        plugin.configError(target, error);
+                    }
+                }));
     }
 
     private void openKeyDeleteConfirmation(Player player, String keyId) {
@@ -760,8 +827,15 @@ public final class AdminMenuService {
         if (plugin.crates().referencesToKey(keyId) > 0) {
             throw new IllegalStateException("Replace every crate reference before deleting this key");
         }
+        if (publishedKeyReferences(keyId) > 0) {
+            throw new IllegalStateException("Publish every pending key-reference change before deleting this active key");
+        }
         plugin.keys().delete(keyId, player.getName());
         openKeys(player, 0);
+    }
+
+    private long publishedKeyReferences(String keyId) {
+        return plugin.runtime().all().stream().filter(crate -> crate.acceptedKeyIds().contains(keyId)).count();
     }
 
     private void selectKey(Player player, String crateId, String keyId) throws Exception {
@@ -1002,6 +1076,26 @@ public final class AdminMenuService {
         }
     }
 
+    private void publishDraft(Player player, String crateId) {
+        plugin.definitionPublisher().publish(player.getUniqueId(), player.getName(), crateId)
+                .whenComplete((publication, error) -> runFor(player.getUniqueId(), target -> {
+                    if (error != null) {
+                        Exception failure = asException(error);
+                        plugin.messages().send(target, "draft-publish-failed", Text.value("error",
+                                failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage()));
+                        plugin.getLogger().log(java.util.logging.Level.WARNING,
+                                "Could not publish crate draft " + crateId, failure);
+                        return;
+                    }
+                    plugin.messages().send(target, "draft-published", Text.component("crate",
+                            publication.crate().displayName()), Text.value("revision", publication.crateRevision()));
+                    if (!publication.yamlMirrorUpdated()) {
+                        plugin.messages().send(target, "draft-published-mirror-warning");
+                    }
+                    openCrates(target, 0);
+                }));
+    }
+
     private void undoDraft(Player player, String crateId) {
         if (!requireWritableDraft(player, crateId)) return;
         plugin.draftSessions().undoCrate(player.getUniqueId(), crateId)
@@ -1185,6 +1279,8 @@ public final class AdminMenuService {
         if (view.writable()) return true;
         if (view.state() == DraftSessionService.State.LOADING) {
             plugin.messages().send(player, "draft-loading");
+        } else if (view.state() == DraftSessionService.State.PUBLISHING) {
+            plugin.messages().send(player, "draft-publishing");
         } else if (view.state() == DraftSessionService.State.READ_ONLY) {
             plugin.messages().send(player, "draft-read-only", Text.value("owner",
                     view.ownerName().isBlank() ? "another administrator" : view.ownerName()));
@@ -1209,12 +1305,39 @@ public final class AdminMenuService {
         Optional<DraftSessionService.View> current = plugin.draftSessions().view(player.getUniqueId(), crateId);
         if (current.isPresent()) return current.get();
         try {
-            byte[] payload = plugin.crates().serialized(crateId).getBytes(StandardCharsets.UTF_8);
-            plugin.draftSessions().openCrate(player.getUniqueId(), player.getName(), crateId, 0, payload)
-                    .exceptionally(error -> null);
+            byte[] payload = plugin.runtime().payload(crateId).orElseGet(() -> {
+                try {
+                    return plugin.crates().serialized(crateId).getBytes(StandardCharsets.UTF_8);
+                } catch (Exception error) {
+                    throw new IllegalStateException(error);
+                }
+            });
+            long baseRevision = plugin.runtime().crateRevision(crateId);
+            plugin.draftSessions().openCrate(player.getUniqueId(), player.getName(), crateId, baseRevision, payload)
+                    .whenComplete((view, error) -> {
+                        if (error == null) runFor(player.getUniqueId(), target -> restoreLoadedDraft(target, crateId));
+                    }).exceptionally(error -> null);
             return plugin.draftSessions().view(player.getUniqueId(), crateId).orElseThrow();
         } catch (Exception error) {
             throw new IllegalStateException("Could not open the durable crate draft", error);
+        }
+    }
+
+    private void restoreLoadedDraft(Player player, String crateId) {
+        try {
+            byte[] payload = plugin.draftSessions().payload(player.getUniqueId(), crateId).orElse(null);
+            if (payload == null) return;
+            byte[] current = plugin.crates().serialized(crateId).getBytes(StandardCharsets.UTF_8);
+            Crate crate = java.util.Arrays.equals(payload, current)
+                    ? plugin.crates().find(crateId).orElseThrow()
+                    : plugin.crates().restoreDraftSnapshot(crateId, payload);
+            Inventory top = player.getOpenInventory().getTopInventory();
+            if (top == null || !(top.getHolder() instanceof MenuHolder holder)
+                    || !holder.crateId().equals(crateId)) return;
+            if (holder.kind() == MenuHolder.Kind.REWARDS) plugin.menus().openRewards(player, crate, holder.page());
+            else if (holder.kind() == MenuHolder.Kind.EDITOR) openCrateEditor(player, crate);
+        } catch (Exception error) {
+            plugin.configError(player, error);
         }
     }
 
@@ -1228,7 +1351,7 @@ public final class AdminMenuService {
         int statusSlot = menus.slot("editor.draft-status");
         ItemStack status = menus.item("editor.draft-status", tags);
         status.setType(switch (draft.state()) {
-            case LOADING, SAVING -> Material.CLOCK;
+            case LOADING, SAVING, PUBLISHING -> Material.CLOCK;
             case SAVED -> Material.PAPER;
             case SAVE_FAILED -> Material.REDSTONE;
             case READ_ONLY -> Material.IRON_DOOR;
@@ -1263,6 +1386,7 @@ public final class AdminMenuService {
         return switch (state) {
             case LOADING -> "Loading";
             case SAVING -> "Saving";
+            case PUBLISHING -> "Publishing";
             case SAVED -> "Saved";
             case SAVE_FAILED -> "Save failed";
             case READ_ONLY -> "Read only";

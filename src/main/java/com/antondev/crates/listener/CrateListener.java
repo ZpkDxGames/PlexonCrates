@@ -37,7 +37,7 @@ public final class CrateListener implements Listener {
         if (event.getHand() != EquipmentSlot.HAND || event.getClickedBlock() == null) return;
         var link = plugin.locations().at(event.getClickedBlock()).orElse(null);
         if (link == null) return;
-        Crate crate = plugin.crates().find(link.crateId()).orElse(null);
+        Crate crate = plugin.runtime().find(link.crateId()).orElse(null);
         if (crate == null) return;
         switch (event.getAction()) {
             case LEFT_CLICK_BLOCK -> {

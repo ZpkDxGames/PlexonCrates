@@ -13,8 +13,10 @@ import com.antondev.crates.gui.EditSessionService;
 import com.antondev.crates.gui.AdminMenuService;
 import com.antondev.crates.listener.CrateListener;
 import com.antondev.crates.database.DatabaseService;
+import com.antondev.crates.database.DefinitionRepository;
 import com.antondev.crates.database.LegacyMigration;
 import com.antondev.crates.service.CrateRegistry;
+import com.antondev.crates.service.DefinitionPublisher;
 import com.antondev.crates.service.DisplayService;
 import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.KeyService;
@@ -24,6 +26,7 @@ import com.antondev.crates.service.OpeningService;
 import com.antondev.crates.service.StatsStore;
 import com.antondev.crates.service.WandService;
 import com.antondev.crates.service.RewardStateService;
+import com.antondev.crates.service.RuntimeRegistry;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.List;
@@ -42,15 +45,18 @@ import org.bukkit.plugin.ServicePriority;
 public class PlexonCrates extends JavaPlugin {
     private PluginSettings settings;
     private DatabaseService database;
+    private DefinitionRepository definitionRepository;
     private LegacyMigration.Result migration;
     private Messages messages;
     private MenuConfig menusConfig;
     private CrateRegistry crates;
+    private RuntimeRegistry runtime;
     private LocationStore locations;
     private KeyService keys;
     private StatsStore statistics;
     private RewardStateService rewardStates;
     private DraftSessionService draftSessions;
+    private DefinitionPublisher definitionPublisher;
     private DisplayService displays;
     private MenuService menus;
     private EditSessionService editSessions;
@@ -78,11 +84,15 @@ public class PlexonCrates extends JavaPlugin {
             KeyService.Snapshot keySnapshot = KeyService.load(file(settings.fallbackFile()));
             keys = new KeyService(this, database, file(settings.fallbackFile()).toPath(), keySnapshot,
                     database.loadKeyTemplateCache());
+            definitionRepository = new DefinitionRepository(database);
+            runtime = new RuntimeRegistry(DefinitionPublisher.bootstrap(definitionRepository, crates, keys));
             statistics = new StatsStore(database.loadStatistics());
             rewardStates = new RewardStateService(database.loadRewardStates());
             openingLog = new OpeningLog(this);
             displays = new DisplayService(this);
             draftSessions = new DraftSessionService(database, this::draftStateChanged);
+            definitionPublisher = new DefinitionPublisher(this, definitionRepository, crates, keys, runtime,
+                    draftSessions);
             editSessions = new EditSessionService(this);
             adminMenus = new AdminMenuService(this);
             menus = new MenuService(this);
@@ -104,7 +114,8 @@ public class PlexonCrates extends JavaPlugin {
                         + ". Recovery policy is MANUAL_REVIEW; inspect /pcrates diagnose before changing data.");
             }
             getLogger().info("PlexonCrates " + getPluginMeta().getVersion() + " by Tonim (ZpkDxGames) enabled: "
-                    + crates.all().size() + " crates, " + crates.rewardCount() + " rewards, " + locations.all().size()
+                    + runtime.all().size() + " published crates, " + runtime.rewardCount() + " rewards, "
+                    + locations.all().size()
                     + " linked blocks. Key source: " + keys.sourceLabel() + "."
                     + (migration.migrated() ? " Migrated 1.0 data into " + migration.backupDirectory() + "." : ""));
         } catch (Exception | LinkageError error) {
@@ -265,6 +276,9 @@ public class PlexonCrates extends JavaPlugin {
         sender.sendMessage(Text.parse("<gray>Unresolved:</gray> <white>" + keys.unresolved().size() + "</white> <dark_gray>•</dark_gray> <gray>Collisions:</gray> <white>" + keys.collisions().size() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Locations:</gray> <white>" + locations.all().size() + "</white> <dark_gray>(" + onlineLocations + " online)</dark_gray>"));
         sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + pendingJournals + "</white>"));
+        sender.sendMessage(Text.parse("<gray>Runtime snapshot:</gray> <white>" + runtime.snapshot().revision()
+                + "</white> <dark_gray>•</dark_gray> <gray>Published crates:</gray> <white>"
+                + runtime.all().size() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Active opening/edit sessions:</gray> <white>"
                 + (openings.pendingCount() + draftSessions.activeSessions()) + "</white>"));
     }
@@ -324,15 +338,18 @@ public class PlexonCrates extends JavaPlugin {
 
     public PluginSettings settings() { return settings; }
     public DatabaseService database() { return database; }
+    public DefinitionRepository definitionRepository() { return definitionRepository; }
     public LegacyMigration.Result migration() { return migration; }
     public Messages messages() { return messages; }
     public MenuConfig menusConfig() { return menusConfig; }
     public CrateRegistry crates() { return crates; }
+    public RuntimeRegistry runtime() { return runtime; }
     public LocationStore locations() { return locations; }
     public KeyService keys() { return keys; }
     public StatsStore statistics() { return statistics; }
     public RewardStateService rewardStates() { return rewardStates; }
     public DraftSessionService draftSessions() { return draftSessions; }
+    public DefinitionPublisher definitionPublisher() { return definitionPublisher; }
     public DisplayService displays() { return displays; }
     public MenuService menus() { return menus; }
     public EditSessionService editSessions() { return editSessions; }

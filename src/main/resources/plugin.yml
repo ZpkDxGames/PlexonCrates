@@ -13,7 +13,7 @@ commands:
     aliases: [crate, plexoncrates]
   cratesadmin:
     description: Configure PlexonCrates in game.
-    usage: /pcrates [create|edit|clone|import|export|delete|keys|wand|link|unlink|givekey|open|validate|reload|backup|status|diagnose]
+    usage: /pcrates [create|edit|clone|import|export|publish|delete|keys|wand|link|unlink|givekey|open|validate|reload|backup|status|diagnose]
     aliases: [pcrates, pca]
 permissions:
   plexoncrates.use:
@@ -51,7 +51,7 @@ permissions:
     description: Open the administrative dashboard.
     default: op
   plexoncrates.admin.crates:
-    description: Create, edit, clone, archive, and delete crate definitions.
+    description: Create, edit, clone, publish, archive, and delete crate definitions.
     default: op
   plexoncrates.admin.keys:
     description: Manage exact physical key definitions and provider discovery.

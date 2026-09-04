@@ -1,6 +1,7 @@
 package com.antondev.crates.database;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -83,6 +84,44 @@ class DatabaseServiceTest {
                     secondEditor, "Second").join();
             assertTrue(database.loadDefinitionDraft("CRATE", "basic").join().isEmpty());
             assertEquals(0, database.draftRevisionCount(current.draftId()).join());
+        }
+    }
+
+    @Test
+    void publicationChecksFrozenDraftAndBaseRevisionThenCommitsNormalizedGraphAtomically() throws Exception {
+        UUID editor = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-04T12:00:00Z");
+        var action = new DatabaseService.DefinitionActionData(0, "COMMAND", bytes("say published"));
+        var reward = new DatabaseService.DefinitionRewardData("winner", 0, true, "Winner", "common",
+                10_000, false, bytes("settings"), List.of(), List.of(action));
+        var definition = new DatabaseService.DefinitionBundle("atomic", "PUBLISHED", 10, "Atomic",
+                "Atomic publication", bytes("icon"), bytes("published"), List.of(reward), List.of(),
+                List.of(), 0, now, now);
+
+        try (DatabaseService database = database()) {
+            var draft = database.createOrResumeDefinitionDraft("CRATE", "atomic", editor, "Editor", 0,
+                    bytes("draft")).join();
+            DatabaseService.PublishResult published = database.publishDefinitionDraft(
+                    new DatabaseService.PublishRequest(draft.draftId(), draft.revision(), draft.leaseToken(),
+                            editor, "Editor", draft.payload(), definition, now)).join();
+
+            assertEquals(1, published.definition().publishedRevision());
+            assertEquals(1, published.runtimeRevision());
+            assertTrue(database.loadDefinitionDraft("CRATE", "atomic").join().isEmpty());
+            var snapshot = database.loadPublishedDefinitions().join();
+            assertEquals(1, snapshot.runtimeRevision());
+            assertArrayEquals(bytes("published"), snapshot.definitions().getFirst().payload());
+            assertEquals(new DatabaseService.DefinitionCounts(1, 0, 1, 0),
+                    database.definitionCounts("atomic").join());
+
+            var stale = database.createOrResumeDefinitionDraft("CRATE", "atomic", editor, "Editor", 0,
+                    bytes("stale")).join();
+            assertThrows(CompletionException.class, () -> database.publishDefinitionDraft(
+                    new DatabaseService.PublishRequest(stale.draftId(), stale.revision(), stale.leaseToken(),
+                            editor, "Editor", stale.payload(), definition, now.plusSeconds(1))).join());
+            var unchanged = database.loadPublishedDefinitions().join();
+            assertEquals(1, unchanged.runtimeRevision());
+            assertArrayEquals(bytes("published"), unchanged.definitions().getFirst().payload());
         }
     }
 

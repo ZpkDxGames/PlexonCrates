@@ -19,6 +19,13 @@ All notable PlexonCrates changes are documented here.
 - Converted legacy version 2 weights deterministically while retaining deprecated API and command aliases for 3.x compatibility.
 - Switched runtime selection to unbiased integer tickets and clearly separated configured base chance from the player's current eligible chance.
 
+### Durable editor sessions
+
+- Connected GUI and compatibility-command mutations to the schema-3 draft repository instead of the legacy last-writer-wins snapshot path.
+- Added asynchronous draft loading, visible saving/saved/failure/read-only states, ordered per-draft saves, stale mutation guards, retry, forward undo, and bounded shutdown flushing.
+- Added a single-writer lease across administrators, an explicit read-only view for additional editors, and permission-gated confirmed takeover that immediately invalidates the previous lease.
+- Made crate deletion discard its durable draft transactionally so recreating an ID cannot resume stale editor data.
+
 ### Documentation
 
 - Adopted the expanded 3.0 implementation specification, including the one-edition/unlimited-definition contract and the original PhoenixCrates-benchmarked GUI usability boundary.

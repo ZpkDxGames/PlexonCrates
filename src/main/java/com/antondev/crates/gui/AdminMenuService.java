@@ -16,7 +16,9 @@ import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
 import com.antondev.crates.service.CrateRegistry;
+import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.LocationStore;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -98,6 +100,7 @@ public final class AdminMenuService {
     }
 
     public void openCrateEditor(Player player, Crate crate) {
+        DraftSessionService.View draft = ensureDraft(player, crate.id());
         MenuConfig menus = plugin.menusConfig();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.EDITOR, crate.id(), "", 0, true);
         Inventory inventory = create(holder, menus.size("editor"), menus.title("editor", Text.component("crate", crate.displayName())));
@@ -118,6 +121,25 @@ public final class AdminMenuService {
             inventory.setItem(slot, menus.item("editor." + action, tags));
             holder.bind(slot, action, crate.id());
         }
+        installDraftControls(player, inventory, holder, draft);
+        open(player, inventory);
+    }
+
+    public void refreshDraftState(Player player, MenuHolder holder) {
+        if (holder.kind() != MenuHolder.Kind.EDITOR
+                || player.getOpenInventory().getTopInventory().getHolder() != holder) return;
+        plugin.draftSessions().view(player.getUniqueId(), holder.crateId())
+                .ifPresent(view -> installDraftControls(player, holder.getInventory(), holder, view));
+    }
+
+    public void openTakeoverConfirmation(Player player, String crateId, String returnScreen, int returnPage) {
+        MenuConfig menus = plugin.menusConfig();
+        MenuHolder holder = new MenuHolder(MenuHolder.Kind.CONFIRM_TAKEOVER, crateId, returnScreen, returnPage, true);
+        Inventory inventory = create(holder, menus.size("confirm-takeover"),
+                menus.title("confirm-takeover", Text.value("crate_id", crateId)));
+        fill(inventory);
+        put(inventory, holder, "confirm-takeover", "confirm", "confirm-takeover", returnScreen);
+        put(inventory, holder, "confirm-takeover", "cancel", "cancel-takeover", returnScreen);
         open(player, inventory);
     }
 
@@ -235,12 +257,14 @@ public final class AdminMenuService {
     }
 
     public void editReward(Player player, Crate crate, CrateReward reward) {
+        if (!requireWritableDraft(player, crate.id())) return;
         int index = crate.orderedRewards().indexOf(reward);
         plugin.editSessions().beginReward(player, crate.id(), reward, Math.max(0, index));
         openRewardBuilder(player);
     }
 
     public void beginSpecialReward(Player player, String crateId) {
+        if (!requireWritableDraft(player, crateId)) return;
         Crate crate = plugin.crates().find(crateId)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown crate"));
         String id;
@@ -438,8 +462,20 @@ public final class AdminMenuService {
             case "opening" -> editOpening(player, action.value(), event);
             case "display" -> editDisplay(player, action.value());
             case "access" -> editAccess(player, action.value());
-            case "disable" -> { plugin.crates().setState(action.value(), CrateState.DISABLED, player.getName()); refreshCrate(player, action.value()); }
-            case "publish" -> { plugin.crates().publish(action.value(), plugin.keys(), player.getName()); refreshCrate(player, action.value()); }
+            case "disable" -> {
+                if (requireWritableDraft(player, action.value())) {
+                    plugin.crates().setState(action.value(), CrateState.DISABLED, player.getName());
+                    saveDraftRevision(player, action.value(), "STATE", "Disabled crate");
+                    refreshCrate(player, action.value());
+                }
+            }
+            case "publish" -> {
+                if (requireWritableDraft(player, action.value())) {
+                    plugin.crates().publish(action.value(), plugin.keys(), player.getName());
+                    saveDraftRevision(player, action.value(), "STATE", "Published crate");
+                    refreshCrate(player, action.value());
+                }
+            }
             case "archive" -> openCrateConfirmation(player, action.value(), "archive");
             case "clone" -> cloneCrate(player, action.value());
             case "delete" -> openCrateConfirmation(player, action.value(), "delete");
@@ -471,6 +507,11 @@ public final class AdminMenuService {
             case "confirm-unlink" -> confirmUnlink(player, action.value());
             case "confirm-crate" -> confirmCrate(player, holder.crateId(), action.value());
             case "confirm-key-delete" -> confirmKeyDelete(player, action.value());
+            case "retry-draft" -> retryDraft(player, holder.crateId());
+            case "undo-draft" -> undoDraft(player, holder.crateId());
+            case "takeover-draft" -> openTakeoverConfirmation(player, holder.crateId(), "editor", holder.page());
+            case "confirm-takeover" -> confirmTakeover(player, holder.crateId(), action.value(), holder.page());
+            case "cancel-takeover" -> reopenAfterTakeover(player, holder.crateId(), action.value(), holder.page());
             case "noop", "capture-icon", "key-input", "reward-input" -> { }
             default -> throw new IllegalArgumentException("Unknown GUI action: " + action.id());
         }
@@ -481,7 +522,6 @@ public final class AdminMenuService {
             plugin.editSessions().request(player, Text.parse("<gold>Enter the new crate ID:</gold>"), (target, value) -> {
                 if (!CrateRegistry.validId(value) || !value.equals(value.toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Use lowercase letters, numbers, _ or -");
                 Crate crate = plugin.crates().createDraft(value, target.getName());
-                saveDraft(target, crate.id());
                 openCrateEditor(target, crate);
             });
         } else if (kind == MenuHolder.Kind.KEY_LIST) {
@@ -494,48 +534,56 @@ public final class AdminMenuService {
     }
 
     private void renameCrate(Player player, String crateId) {
+        if (!requireWritableDraft(player, crateId)) return;
         plugin.editSessions().request(player, Text.parse("<gold>Enter the new MiniMessage crate name:</gold>"), (target, value) -> {
+            if (!requireWritableDraft(target, crateId)) return;
             Component parsed = Text.parse(value);
             plugin.crates().setDisplayName(crateId, parsed, target.getName());
-            saveDraft(target, crateId);
+            saveDraftRevision(target, crateId, "IDENTITY", "Changed crate display name");
             refreshCrate(target, crateId);
         });
     }
 
     private void editDescription(Player player, String crateId) {
+        if (!requireWritableDraft(player, crateId)) return;
         plugin.editSessions().request(player, Text.parse("<white>Enter MiniMessage description lines separated by |:</white>"), (target, value) -> {
+            if (!requireWritableDraft(target, crateId)) return;
             List<Component> lines = componentLines(value);
             plugin.crates().setDescription(crateId, lines, target.getName());
-            saveDraft(target, crateId);
+            saveDraftRevision(target, crateId, "IDENTITY", "Changed crate description");
             refreshCrate(target, crateId);
         });
     }
 
     private void editOrder(Player player, String crateId) {
+        if (!requireWritableDraft(player, crateId)) return;
         plugin.editSessions().request(player, Text.parse("<yellow>Enter display order (0-1000000):</yellow>"), (target, value) -> {
+            if (!requireWritableDraft(target, crateId)) return;
             plugin.crates().setDisplayOrder(crateId, Integer.parseInt(value), target.getName());
-            saveDraft(target, crateId);
+            saveDraftRevision(target, crateId, "ORDER", "Changed crate display order");
             refreshCrate(target, crateId);
         });
     }
 
     private void editOpening(Player player, String crateId, InventoryClickEvent event) throws Exception {
+        if (!requireWritableDraft(player, crateId)) return;
         Crate crate = plugin.crates().find(crateId).orElseThrow();
         if (event.isShiftClick() && event.isLeftClick()) {
             plugin.crates().setOpening(crateId, crate.cooldownSeconds(), !crate.bulkEnabled(), crate.bulkMaximum(),
                     crate.animation(), player.getName());
-            saveDraft(player, crateId);
+            saveDraftRevision(player, crateId, "OPENING", "Toggled bulk opening");
             refreshCrate(player, crateId);
             return;
         }
         if (event.isRightClick()) {
             plugin.editSessions().request(player, Text.parse("<aqua>Enter cooldown seconds and bulk maximum as <white>cooldown,maximum</white>:</aqua>"), (target, value) -> {
+                if (!requireWritableDraft(target, crateId)) return;
                 String[] parts = value.split(",", -1);
                 if (parts.length != 2) throw new IllegalArgumentException("Use cooldown,maximum (for example 1,64)");
                 Crate current = plugin.crates().find(crateId).orElseThrow();
                 plugin.crates().setOpening(crateId, Integer.parseInt(parts[0].trim()), current.bulkEnabled(),
                         Integer.parseInt(parts[1].trim()), current.animation(), target.getName());
-                saveDraft(target, crateId);
+                saveDraftRevision(target, crateId, "OPENING", "Changed cooldown and bulk maximum");
                 refreshCrate(target, crateId);
             });
             return;
@@ -544,26 +592,30 @@ public final class AdminMenuService {
         AnimationType next = values[(crate.animation().ordinal() + 1) % values.length];
         plugin.crates().setOpening(crateId, crate.cooldownSeconds(), crate.bulkEnabled(), crate.bulkMaximum(), next,
                 player.getName());
-        saveDraft(player, crateId);
+        saveDraftRevision(player, crateId, "OPENING", "Changed opening animation");
         refreshCrate(player, crateId);
     }
 
     private void editDisplay(Player player, String crateId) {
+        if (!requireWritableDraft(player, crateId)) return;
         plugin.editSessions().request(player, Text.parse("<light_purple>Enter MiniMessage hologram lines separated by |:</light_purple>"), (target, value) -> {
+            if (!requireWritableDraft(target, crateId)) return;
             plugin.crates().setHologramLines(crateId, componentLines(value), target.getName());
-            saveDraft(target, crateId);
+            saveDraftRevision(target, crateId, "DISPLAY", "Changed world display lines");
             plugin.displays().refresh();
             refreshCrate(target, crateId);
         });
     }
 
     private void editAccess(Player player, String crateId) {
+        if (!requireWritableDraft(player, crateId)) return;
         plugin.editSessions().request(player, Text.parse("<gold>Enter <white>permission | allowed worlds CSV | excluded worlds CSV</white>. Use - for none:</gold>"), (target, value) -> {
+            if (!requireWritableDraft(target, crateId)) return;
             String[] parts = value.split("\\|", -1);
             if (parts.length != 3) throw new IllegalArgumentException("Use exactly three | separated fields");
             String permission = parts[0].trim().equals("-") ? "" : parts[0].trim();
             plugin.crates().setAccess(crateId, permission, csv(parts[1]), csv(parts[2]), target.getName());
-            saveDraft(target, crateId);
+            saveDraftRevision(target, crateId, "ACCESS", "Changed crate access rules");
             refreshCrate(target, crateId);
         });
     }
@@ -571,7 +623,6 @@ public final class AdminMenuService {
     private void cloneCrate(Player player, String crateId) {
         plugin.editSessions().request(player, Text.parse("<aqua>Enter the clone's new ID:</aqua>"), (target, value) -> {
             Crate clone = plugin.crates().cloneAsDraft(crateId, value, target.getName());
-            saveDraft(target, clone.id());
             openCrateEditor(target, clone);
         });
     }
@@ -597,7 +648,6 @@ public final class AdminMenuService {
             Path source = root.resolve(fileName).normalize();
             if (!source.getParent().equals(root)) throw new IllegalArgumentException("Import path leaves the imports folder");
             Crate imported = plugin.crates().importAsDraft(source, parts[1].trim(), target.getName());
-            saveDraft(target, imported.id());
             openCrateEditor(target, imported);
         });
     }
@@ -647,7 +697,9 @@ public final class AdminMenuService {
     }
 
     private void createReward(Player player, String crateId) {
+        if (!requireWritableDraft(player, crateId)) return;
         plugin.editSessions().request(player, Text.parse("<light_purple>Enter a unique reward ID:</light_purple>"), (target, value) -> {
+            if (!requireWritableDraft(target, crateId)) return;
             if (!CrateRegistry.validId(value) || !value.equals(value.toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Use a lowercase reward ID");
             Crate crate = plugin.crates().find(crateId).orElseThrow();
             if (crate.rewards().containsKey(value)) throw new IllegalArgumentException("That reward already exists");
@@ -713,10 +765,11 @@ public final class AdminMenuService {
     }
 
     private void selectKey(Player player, String crateId, String keyId) throws Exception {
+        if (!requireWritableDraft(player, crateId)) return;
         if (plugin.keys().definition(keyId).isEmpty()) plugin.keys().bindExternal(keyId, player.getName());
         Crate crate = plugin.crates().find(crateId).orElseThrow();
         plugin.crates().setAcceptedKeys(crate.id(), List.of(keyId), Math.max(1, crate.keyCost()), player.getName());
-        saveDraft(player, crateId);
+        saveDraftRevision(player, crateId, "KEY", "Replaced accepted physical key");
         refreshCrate(player, crateId);
     }
 
@@ -745,6 +798,7 @@ public final class AdminMenuService {
         } else if (kind == MenuHolder.Kind.REWARD_BUILDER) {
             EditSessionService.RewardDraft draft = plugin.editSessions().reward(player);
             if (draft == null || !draft.deliverable()) throw new IllegalArgumentException("Add an item, command, XP, or money first");
+            if (!requireWritableDraft(player, draft.crateId())) return;
             if (draft.editing()) {
                 plugin.crates().updateBundleReward(draft.crateId(), draft.id(), draft.displayName(), draft.baseChancePercent(),
                         draft.enabled(), draft.rarity(), draft.displayItem(), draft.items(), draft.commands(),
@@ -760,7 +814,8 @@ public final class AdminMenuService {
             }
             String crateId = draft.crateId();
             plugin.editSessions().clearReward(player);
-            saveDraft(player, crateId);
+            saveDraftRevision(player, crateId, "REWARD", draft.editing()
+                    ? "Updated reward " + draft.id() : "Added reward " + draft.id());
             refreshCrate(player, crateId);
         }
     }
@@ -931,10 +986,90 @@ public final class AdminMenuService {
         open(player, inventory);
     }
 
+    public void retryDraft(Player player, String crateId) {
+        try {
+            byte[] payload = plugin.crates().serialized(crateId).getBytes(StandardCharsets.UTF_8);
+            plugin.draftSessions().retryCrate(player.getUniqueId(), crateId, payload)
+                    .whenComplete((view, error) -> runFor(player.getUniqueId(), target -> {
+                        if (error != null) plugin.configError(target, asException(error));
+                        else {
+                            plugin.messages().send(target, "draft-save-retried");
+                            plugin.menus().refreshDraftState(target, crateId);
+                        }
+                    }));
+        } catch (Exception error) {
+            plugin.configError(player, error);
+        }
+    }
+
+    private void undoDraft(Player player, String crateId) {
+        if (!requireWritableDraft(player, crateId)) return;
+        plugin.draftSessions().undoCrate(player.getUniqueId(), crateId)
+                .whenComplete((view, error) -> runFor(player.getUniqueId(), target -> {
+                    if (error != null) {
+                        plugin.configError(target, asException(error));
+                        return;
+                    }
+                    try {
+                        byte[] payload = plugin.draftSessions().payload(target.getUniqueId(), crateId)
+                                .orElseThrow(() -> new IllegalStateException("The restored draft payload is unavailable"));
+                        Crate restored = plugin.crates().restoreDraftSnapshot(crateId, payload);
+                        plugin.displays().refresh();
+                        plugin.messages().send(target, "draft-undo-complete");
+                        openCrateEditor(target, restored);
+                    } catch (Exception restoreError) {
+                        plugin.configError(target, restoreError);
+                    }
+                }));
+    }
+
+    private void confirmTakeover(Player player, String crateId, String returnScreen, int returnPage) {
+        if (!player.hasPermission("plexoncrates.admin.takeover")) {
+            plugin.messages().send(player, "no-permission");
+            return;
+        }
+        plugin.draftSessions().takeoverCrate(player.getUniqueId(), crateId)
+                .whenComplete((view, error) -> runFor(player.getUniqueId(), target -> {
+                    if (error != null) plugin.configError(target, asException(error));
+                    else {
+                        plugin.messages().send(target, "draft-takeover-complete");
+                        reopenAfterTakeover(target, crateId, returnScreen, returnPage);
+                    }
+                }));
+    }
+
+    private void reopenAfterTakeover(Player player, String crateId, String returnScreen, int returnPage) {
+        Crate crate = plugin.crates().find(crateId).orElse(null);
+        if (crate == null) {
+            openCrates(player, 0);
+        } else if (returnScreen.equals("rewards")) {
+            plugin.menus().openRewards(player, crate, returnPage);
+        } else {
+            openCrateEditor(player, crate);
+        }
+    }
+
+    private void runFor(UUID playerId, java.util.function.Consumer<Player> action) {
+        if (!plugin.isEnabled()) return;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player target = Bukkit.getPlayer(playerId);
+            if (target != null && target.isOnline()) action.accept(target);
+        });
+    }
+
+    private static Exception asException(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && (current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException)) current = current.getCause();
+        return current instanceof Exception exception ? exception : new IllegalStateException(current);
+    }
+
     private void confirmCrate(Player player, String crateId, String action) throws Exception {
+        if (!requireWritableDraft(player, crateId)) return;
         Crate crate = plugin.crates().find(crateId).orElseThrow();
         if (action.equals("archive")) {
             plugin.crates().setState(crateId, CrateState.ARCHIVED, player.getName());
+            saveDraftRevision(player, crateId, "STATE", "Archived crate");
             openCrates(player, 0);
             return;
         }
@@ -943,10 +1078,21 @@ public final class AdminMenuService {
         if (crate.state() != CrateState.ARCHIVED && crate.state() != CrateState.DRAFT) {
             throw new IllegalStateException("Archive this crate before deleting it");
         }
-        plugin.crates().delete(crateId);
-        plugin.database().audit(new DatabaseService.AuditRecord(player.getUniqueId(), player.getName(), "DELETE",
-                "CRATE", crateId, "Deleted confirmed crate definition", Instant.now()));
-        openCrates(player, 0);
+        plugin.draftSessions().discardCrate(player.getUniqueId(), crateId)
+                .whenComplete((ignored, error) -> runFor(player.getUniqueId(), target -> {
+                    if (error != null) {
+                        plugin.configError(target, asException(error));
+                        return;
+                    }
+                    try {
+                        plugin.crates().delete(crateId);
+                        plugin.database().audit(new DatabaseService.AuditRecord(target.getUniqueId(), target.getName(),
+                                "DELETE", "CRATE", crateId, "Deleted confirmed crate definition", Instant.now()));
+                        openCrates(target, 0);
+                    } catch (Exception deleteError) {
+                        plugin.configError(target, deleteError);
+                    }
+                }));
     }
 
     private boolean captureKeyClick(InventoryClickEvent event, Player player) {
@@ -1008,9 +1154,10 @@ public final class AdminMenuService {
 
     private void captureIcon(Player player, String crateId, ItemStack item) {
         if (isEditorItem(item) || plugin.wand().isWand(item)) return;
+        if (!requireWritableDraft(player, crateId)) return;
         try {
             plugin.crates().setIcon(crateId, item, player.getName());
-            saveDraft(player, crateId);
+            saveDraftRevision(player, crateId, "IDENTITY", "Replaced exact crate icon");
             refreshCrate(player, crateId);
         } catch (Exception error) {
             plugin.configError(player, error);
@@ -1033,12 +1180,93 @@ public final class AdminMenuService {
         plugin.crates().find(crateId).ifPresentOrElse(crate -> openCrateEditor(player, crate), () -> openCrates(player, 0));
     }
 
-    private void saveDraft(Player player, String crateId) {
+    public boolean requireWritableDraft(Player player, String crateId) {
+        DraftSessionService.View view = ensureDraft(player, crateId);
+        if (view.writable()) return true;
+        if (view.state() == DraftSessionService.State.LOADING) {
+            plugin.messages().send(player, "draft-loading");
+        } else if (view.state() == DraftSessionService.State.READ_ONLY) {
+            plugin.messages().send(player, "draft-read-only", Text.value("owner",
+                    view.ownerName().isBlank() ? "another administrator" : view.ownerName()));
+        } else if (view.state() == DraftSessionService.State.SAVE_FAILED) {
+            plugin.messages().send(player, "draft-save-failed", Text.value("error",
+                    view.failure().isBlank() ? "unknown database error" : view.failure()));
+        }
+        return false;
+    }
+
+    public void saveDraftRevision(Player player, String crateId, String actionType, String summary) {
         try {
-            plugin.database().saveDraft(crateId, plugin.crates().serialized(crateId), player.getUniqueId());
+            byte[] payload = plugin.crates().serialized(crateId).getBytes(StandardCharsets.UTF_8);
+            plugin.draftSessions().saveCrate(player.getUniqueId(), crateId, actionType, summary, payload)
+                    .exceptionally(error -> null);
         } catch (Exception error) {
             plugin.getLogger().log(java.util.logging.Level.WARNING, "Could not queue the crate draft snapshot", error);
         }
+    }
+
+    public DraftSessionService.View ensureDraft(Player player, String crateId) {
+        Optional<DraftSessionService.View> current = plugin.draftSessions().view(player.getUniqueId(), crateId);
+        if (current.isPresent()) return current.get();
+        try {
+            byte[] payload = plugin.crates().serialized(crateId).getBytes(StandardCharsets.UTF_8);
+            plugin.draftSessions().openCrate(player.getUniqueId(), player.getName(), crateId, 0, payload)
+                    .exceptionally(error -> null);
+            return plugin.draftSessions().view(player.getUniqueId(), crateId).orElseThrow();
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not open the durable crate draft", error);
+        }
+    }
+
+    private void installDraftControls(Player player, Inventory inventory, MenuHolder holder,
+                                      DraftSessionService.View draft) {
+        MenuConfig menus = plugin.menusConfig();
+        var tags = new net.kyori.adventure.text.minimessage.tag.resolver.TagResolver[]{
+                Text.value("draft_state", draftState(draft.state())),
+                Text.value("draft_owner", draft.ownerName().isBlank() ? "loading" : draft.ownerName()),
+                Text.value("draft_revision", draft.revision())};
+        int statusSlot = menus.slot("editor.draft-status");
+        ItemStack status = menus.item("editor.draft-status", tags);
+        status.setType(switch (draft.state()) {
+            case LOADING, SAVING -> Material.CLOCK;
+            case SAVED -> Material.PAPER;
+            case SAVE_FAILED -> Material.REDSTONE;
+            case READ_ONLY -> Material.IRON_DOOR;
+        });
+        inventory.setItem(statusSlot, markEditorItem(status));
+        holder.bind(statusSlot, draft.state() == DraftSessionService.State.SAVE_FAILED ? "retry-draft" : "noop",
+                holder.crateId());
+
+        int undoSlot = menus.slot("editor.undo");
+        inventory.setItem(undoSlot, markEditorItem(menus.item("editor.undo")));
+        holder.bind(undoSlot, draft.writable() ? "undo-draft" : "noop", holder.crateId());
+
+        int takeoverSlot = menus.slot("editor.takeover");
+        if (draft.state() == DraftSessionService.State.READ_ONLY
+                && player.hasPermission("plexoncrates.admin.takeover")) {
+            inventory.setItem(takeoverSlot, markEditorItem(menus.item("editor.takeover")));
+            holder.bind(takeoverSlot, "takeover-draft", holder.crateId());
+        } else {
+            inventory.setItem(takeoverSlot, markEditorItem(menus.item("filler")));
+            holder.bind(takeoverSlot, "noop", holder.crateId());
+        }
+    }
+
+    private ItemStack markEditorItem(ItemStack source) {
+        ItemStack item = source.clone();
+        item.editMeta(meta -> meta.getPersistentDataContainer()
+                .set(editorItem, PersistentDataType.BYTE, (byte) 1));
+        return item;
+    }
+
+    private static String draftState(DraftSessionService.State state) {
+        return switch (state) {
+            case LOADING -> "Loading";
+            case SAVING -> "Saving";
+            case SAVED -> "Saved";
+            case SAVE_FAILED -> "Save failed";
+            case READ_ONLY -> "Read only";
+        };
     }
 
     private List<KeyEntry> keyEntries() {
@@ -1075,6 +1303,8 @@ public final class AdminMenuService {
             case "validate", "reload" -> "plexoncrates.admin.reload";
             case "backup" -> "plexoncrates.admin.backup";
             case "diagnose" -> "plexoncrates.admin.diagnose";
+            case "takeover-draft", "confirm-takeover" -> "plexoncrates.admin.takeover";
+            case "cancel-takeover" -> "";
             default -> sectionPermission(kind);
         };
     }
@@ -1085,6 +1315,7 @@ public final class AdminMenuService {
             case KEY_LIST, KEY_TEMPLATE, CONFIRM_KEY_DELETE -> "plexoncrates.admin.keys";
             case KEY_SELECT -> "plexoncrates.admin.crates";
             case REWARDS, REWARD_BUILDER, GLOBAL_REWARDS, CONFIRM_DELETE -> "plexoncrates.admin.rewards";
+            case CONFIRM_TAKEOVER -> "plexoncrates.admin.takeover";
             case LOCATIONS, WAND_SELECT, CONFIRM_UNLINK -> "plexoncrates.admin.locations";
             default -> "plexoncrates.admin.gui";
         };

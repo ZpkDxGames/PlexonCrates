@@ -15,7 +15,9 @@ import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.CodingErrorAction;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -108,6 +110,27 @@ public final class CrateRegistry {
         Path file = files.get(normalize(crateId));
         if (file == null) throw new IllegalArgumentException("Unknown crate");
         return Files.readString(file, StandardCharsets.UTF_8);
+    }
+
+    public Crate restoreDraftSnapshot(String crateId, byte[] payload) throws Exception {
+        String id = normalize(crateId);
+        Path file = files.get(id);
+        if (file == null) throw new IllegalArgumentException("Unknown crate");
+        String serialized = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(java.util.Objects.requireNonNull(payload, "payload"))).toString();
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.loadFromString(serialized);
+        Crate previous = crates.get(id);
+        Crate restored = parse(file, yaml);
+        if (!restored.id().equals(id)) {
+            throw new IllegalArgumentException("Draft snapshot targets a different crate ID");
+        }
+        AtomicFiles.write(file, yaml.saveToString());
+        install(id, file, restored);
+        fireChange(restored, changeType(previous, restored));
+        return restored;
     }
 
     public Crate createDraft(String rawId, String editor) throws Exception {
@@ -407,13 +430,18 @@ public final class CrateRegistry {
     }
 
     public void addCommandReward(String crateId, String rewardId, double baseChancePercent, String command) throws Exception {
+        addCommandReward(crateId, rewardId, baseChancePercent, command, "CONSOLE");
+    }
+
+    public void addCommandReward(String crateId, String rewardId, double baseChancePercent, String command,
+                                 String editor) throws Exception {
         String normalized = command == null ? "" : command.trim();
         if (normalized.startsWith("/")) throw new IllegalArgumentException("Reward commands must not begin with /");
         if (normalized.isBlank() || normalized.contains("\n") || normalized.contains("\r")) {
             throw new IllegalArgumentException("Command cannot be empty or contain newlines");
         }
         addBundleReward(crateId, rewardId, Text.parse("<gold><bold>Command Reward</bold></gold>"), baseChancePercent,
-                RewardRarity.COMMON, List.of(), List.of(normalized), 0, 0, 0, "CONSOLE");
+                RewardRarity.COMMON, List.of(), List.of(normalized), 0, 0, 0, editor);
     }
 
     public void addBundleReward(String crateId, String rewardId, Component displayName, double baseChancePercent,
@@ -614,6 +642,10 @@ public final class CrateRegistry {
     }
 
     public void removeReward(String crateId, String rewardId) throws Exception {
+        removeReward(crateId, rewardId, "CONSOLE");
+    }
+
+    public void removeReward(String crateId, String rewardId, String editor) throws Exception {
         mutate(crateId, yaml -> {
             upgradeChancePool(yaml);
             String path = "rewards." + normalize(rewardId);
@@ -623,7 +655,7 @@ public final class CrateRegistry {
             if (!remaining.isEmpty() && remaining.stream().anyMatch(chance -> chance.basisPoints() > 0)) {
                 applyChancePool(yaml, ChanceAllocator.normalizeUnlocked(remaining));
             }
-            touch(yaml, "CONSOLE");
+            touch(yaml, editor);
         });
     }
 
@@ -634,6 +666,10 @@ public final class CrateRegistry {
     }
 
     public void setChanceBasisPoints(String crateId, String rewardId, int basisPoints) throws Exception {
+        setChanceBasisPoints(crateId, rewardId, basisPoints, "CONSOLE");
+    }
+
+    public void setChanceBasisPoints(String crateId, String rewardId, int basisPoints, String editor) throws Exception {
         if (basisPoints < 0 || basisPoints > ChanceAllocator.TOTAL_BASIS_POINTS) {
             throw new IllegalArgumentException("Chance must be between 0.00% and 100.00%");
         }
@@ -647,7 +683,7 @@ public final class CrateRegistry {
             ChanceAllocator.Allocation allocation = ChanceAllocator.setChance(chancePool(yaml),
                     normalize(rewardId), basisPoints);
             applyChancePool(yaml, allocation);
-            touch(yaml, "CONSOLE");
+            touch(yaml, editor);
         });
     }
 

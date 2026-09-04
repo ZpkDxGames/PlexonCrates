@@ -16,6 +16,7 @@ import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.database.LegacyMigration;
 import com.antondev.crates.service.CrateRegistry;
 import com.antondev.crates.service.DisplayService;
+import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.KeyService;
 import com.antondev.crates.service.LocationStore;
 import com.antondev.crates.service.OpeningLog;
@@ -27,12 +28,14 @@ import java.io.File;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.logging.Level;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.ServicePriority;
 
@@ -47,6 +50,7 @@ public class PlexonCrates extends JavaPlugin {
     private KeyService keys;
     private StatsStore statistics;
     private RewardStateService rewardStates;
+    private DraftSessionService draftSessions;
     private DisplayService displays;
     private MenuService menus;
     private EditSessionService editSessions;
@@ -78,6 +82,7 @@ public class PlexonCrates extends JavaPlugin {
             rewardStates = new RewardStateService(database.loadRewardStates());
             openingLog = new OpeningLog(this);
             displays = new DisplayService(this);
+            draftSessions = new DraftSessionService(database, this::draftStateChanged);
             editSessions = new EditSessionService(this);
             adminMenus = new AdminMenuService(this);
             menus = new MenuService(this);
@@ -112,6 +117,14 @@ public class PlexonCrates extends JavaPlugin {
     public void onDisable() {
         if (menus != null) menus.closeAll();
         if (editSessions != null) editSessions.stop();
+        if (draftSessions != null) {
+            try {
+                draftSessions.awaitIdle().get(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception error) {
+                getLogger().log(Level.WARNING, "Not every queued draft revision finished before shutdown", error);
+            }
+            draftSessions.clear();
+        }
         getServer().getServicesManager().unregisterAll(this);
         if (displays != null) displays.stop();
         if (openings != null) openings.clear();
@@ -252,7 +265,22 @@ public class PlexonCrates extends JavaPlugin {
         sender.sendMessage(Text.parse("<gray>Unresolved:</gray> <white>" + keys.unresolved().size() + "</white> <dark_gray>•</dark_gray> <gray>Collisions:</gray> <white>" + keys.collisions().size() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Locations:</gray> <white>" + locations.all().size() + "</white> <dark_gray>(" + onlineLocations + " online)</dark_gray>"));
         sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + pendingJournals + "</white>"));
-        sender.sendMessage(Text.parse("<gray>Active opening/edit locks:</gray> <white>" + openings.pendingCount() + "</white>"));
+        sender.sendMessage(Text.parse("<gray>Active opening/edit sessions:</gray> <white>"
+                + (openings.pendingCount() + draftSessions.activeSessions()) + "</white>"));
+    }
+
+    private void draftStateChanged(UUID actorId, String crateId, DraftSessionService.View view) {
+        if (!isEnabled()) return;
+        getServer().getScheduler().runTask(this, () -> {
+            if (!isEnabled()) return;
+            Player player = getServer().getPlayer(actorId);
+            if (player == null || menus == null) return;
+            menus.refreshDraftState(player, crateId);
+            if (view.state() == DraftSessionService.State.SAVE_FAILED) {
+                messages.send(player, "draft-save-failed", Text.value("error",
+                        view.failure().isBlank() ? "unknown database error" : view.failure()));
+            }
+        });
     }
 
     private void saveBundledFiles() throws Exception {
@@ -304,6 +332,7 @@ public class PlexonCrates extends JavaPlugin {
     public KeyService keys() { return keys; }
     public StatsStore statistics() { return statistics; }
     public RewardStateService rewardStates() { return rewardStates; }
+    public DraftSessionService draftSessions() { return draftSessions; }
     public DisplayService displays() { return displays; }
     public MenuService menus() { return menus; }
     public EditSessionService editSessions() { return editSessions; }

@@ -169,6 +169,11 @@ editor:
     material: IRON_DOOR
     name: <gold>Access rules</gold>
     lore: ['<gray>Permission:</gray> <white><permission></white>', <gray>Edit allowed and excluded worlds.</gray>]
+  draft-status:
+    slot: 40
+    material: PAPER
+    name: <white>Draft <draft_state></white>
+    lore: ['<gray>Editor:</gray> <white><draft_owner></white>', '<gray>Revision:</gray> <white><draft_revision></white>', <dark_gray>Failed saves can be retried here.</dark_gray>]
   disable:
     slot: 42
     material: LEVER
@@ -184,6 +189,11 @@ editor:
     material: CLOCK
     name: <yellow>Archive crate</yellow>
     lore: [<gray>Hide the crate while preserving its definition.</gray>]
+  undo:
+    slot: 47
+    material: CLOCK
+    name: <yellow>Undo Last Change</yellow>
+    lore: [<gray>Creates a new forward revision from the previous snapshot.</gray>]
   clone:
     slot: 48
     material: MAP
@@ -194,6 +204,11 @@ editor:
     material: ARROW
     name: <gray>Back</gray>
     lore: []
+  takeover:
+    slot: 51
+    material: IRON_DOOR
+    name: <gold>Take Over Draft</gold>
+    lore: [<gray>Requires confirmation and invalidates the old editor lease.</gray>]
   delete:
     slot: 53
     material: RED_CONCRETE
@@ -346,6 +361,12 @@ confirm-key-delete:
   size: 27
   confirm: {slot: 11, material: LIME_CONCRETE, name: <green>Confirm Delete</green>, lore: []}
   cancel: {slot: 15, material: RED_CONCRETE, name: <red>Keep Key</red>, lore: []}
+
+confirm-takeover:
+  title: <red>Take over <crate_id> draft?</red>
+  size: 27
+  confirm: {slot: 11, material: LIME_CONCRETE, name: <green>Confirm Takeover</green>, lore: [<gray>The current editor becomes read-only immediately.</gray>]}
+  cancel: {slot: 15, material: RED_CONCRETE, name: <red>Cancel</red>, lore: []}
 
 confirm-delete:
   title: <red>Remove reward?</red>

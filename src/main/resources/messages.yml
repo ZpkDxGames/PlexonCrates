@@ -16,6 +16,12 @@ database-error: <red>The opening journal is temporarily unavailable.</red> <yell
 input-cancelled: <yellow>Editor input cancelled.</yellow>
 input-timeout: <yellow>Editor input expired. Your saved crate draft is still available.</yellow>
 input-invalid: <red>That value was rejected:</red> <gray><error></gray>
+draft-loading: <yellow>This durable draft is still loading. Try again in a moment.</yellow>
+draft-read-only: <yellow>This draft is read-only because <white><owner></white> holds the writable lease.</yellow>
+draft-save-failed: <red>The latest draft save failed:</red> <gray><error></gray> <yellow>Use Retry Save before editing again.</yellow>
+draft-save-retried: <green>The latest crate draft snapshot was saved successfully.</green>
+draft-takeover-complete: <green>You now hold the writable lease for this crate draft.</green>
+draft-undo-complete: <green>Restored the previous durable draft revision.</green>
 validation-passed: <green>Validation passed:</green> <white><crates></white> <gray>crates,</gray> <white><keys></white> <gray>keys,</gray> <white><rewards></white> <gray>rewards.</gray>
 validation-failed: <red>Validation failed:</red> <gray><error></gray>
 backup-started: <yellow>Creating a consistent YAML and SQLite backup asynchronously…</yellow>

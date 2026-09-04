@@ -16,7 +16,7 @@ This is an independent implementation inspired by the usability goals and featur
 - Exact item matching that preserves PDC, custom metadata, components, enchantments, lore, names, and other Bukkit item data.
 - Non-destructive drag/cursor capture for custom keys, crate icons, and reward items.
 - Exact `0.01%` base chances backed by a 10,000-ticket allocator, automatic proportional rebalancing, and eligible-pool normalization.
-- Persistent crate drafts with publish validation, cloning, search, archive/delete confirmation, and safe YAML import/export.
+- Versioned SQLite crate drafts with ordered autosaves, forward undo, visible save health, single-writer leases, confirmed takeover, publish validation, cloning, search, and safe import/export.
 - Item, console-command, experience, level, and Vault money actions in one reward bundle.
 - Permission filters, player/global lifetime and rolling-window limits, reward cooldowns, rarities, and deterministic pity guarantees.
 - `INSTANT`, `ROULETTE`, `REVEAL`, and `SUMMARY` presentation modes plus per-reward titles, sounds, particles, messages, and broadcasts.
@@ -79,7 +79,7 @@ At a linked block, left-click previews, right-click opens one, and sneak-right-c
 
 ## Administration
 
-`/pcrates` opens the dashboard. The GUI supports persistent guided drafts, full reward editing, exact capture, key rotation, location inspection, statistics, validation, reload, backups, and diagnostics. Display items are never trusted as data; all actions resolve through server-side menu state.
+`/pcrates` opens the dashboard. The GUI supports persistent guided drafts, full reward editing, exact capture, key rotation, location inspection, statistics, validation, reload, backups, and diagnostics. Drafts load asynchronously and show `Loading`, `Saving`, `Saved`, `Save failed`, or `Read only`; failed writes block further mutation until retried. A second administrator can inspect the current definition but must confirm a permission-gated takeover before editing. Display items are never trusted as data; all actions resolve through server-side menu state.
 
 | Command | Purpose |
 |---|---|
@@ -123,6 +123,7 @@ In the Crates menu, shift-left-click a crate to export it. Imported version 2 or
 | `plexoncrates.admin.give` | OP | Give keys and request administrative openings |
 | `plexoncrates.admin.reload` | OP | Validate, reload, and flush statistics |
 | `plexoncrates.admin.backup` | OP | Create backups |
+| `plexoncrates.admin.takeover` | OP | Confirm takeover of another administrator's writable draft lease |
 | `plexoncrates.admin.diagnose` | OP | View detailed diagnostics |
 | `plexoncrates.admin.protection-bypass` | OP | Break a protected linked block intentionally |
 | `plexoncrates.bypass.key` | OP | Open without a key; bulk is still clamped to one |

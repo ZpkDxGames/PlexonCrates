@@ -1118,6 +1118,41 @@ public final class DatabaseService implements AutoCloseable {
         });
     }
 
+    public CompletableFuture<Void> discardDefinitionDraft(
+            UUID draftId, long expectedRevision, long leaseToken, UUID actorId, String actorName) {
+        UUID id = java.util.Objects.requireNonNull(draftId, "draftId");
+        UUID actor = java.util.Objects.requireNonNull(actorId, "actorId");
+        String name = requiredText(actorName, "actorName");
+        return submitTransaction("discard definition draft", connection -> {
+            DefinitionDraft current = loadDefinitionDraft(connection, id)
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown definition draft"));
+            requireWritableDraft(current, actor, leaseToken, expectedRevision);
+            try (PreparedStatement revisions = connection.prepareStatement(
+                    "DELETE FROM draft_revision WHERE draft_uuid = ?")) {
+                revisions.setString(1, id.toString());
+                revisions.executeUpdate();
+            }
+            try (PreparedStatement draft = connection.prepareStatement(
+                    "DELETE FROM definition_draft WHERE draft_uuid = ? AND revision = ? AND lease_token = ?")) {
+                draft.setString(1, id.toString());
+                draft.setLong(2, expectedRevision);
+                draft.setLong(3, leaseToken);
+                if (draft.executeUpdate() != 1) throw new IllegalStateException("Draft changed before discard completed");
+            }
+            try (PreparedStatement audit = connection.prepareStatement("""
+                    INSERT INTO audit_log(actor_uuid, actor_name, action, target_type, target_id, summary, created_at)
+                    VALUES(?, ?, 'DISCARD', 'DRAFT', ?, ?, ?)
+                    """)) {
+                audit.setString(1, actor.toString());
+                audit.setString(2, name);
+                audit.setString(3, id.toString());
+                audit.setString(4, "Discarded " + current.targetType() + " draft " + current.targetId());
+                audit.setLong(5, System.currentTimeMillis());
+                audit.executeUpdate();
+            }
+        });
+    }
+
     public CompletableFuture<Void> createBackup(Path dataFolder, Path backupDirectory) {
         Path destination = backupDirectory.resolve("data/plexoncrates.db").toAbsolutePath().normalize();
         return submit("create backup", connection -> {

@@ -79,6 +79,10 @@ class DatabaseServiceTest {
             }
             assertEquals(20, database.draftRevisionCount(current.draftId()).join());
             assertEquals(current.draftId(), database.loadDefinitionDraft("CRATE", "basic").join().orElseThrow().draftId());
+            database.discardDefinitionDraft(current.draftId(), current.revision(), current.leaseToken(),
+                    secondEditor, "Second").join();
+            assertTrue(database.loadDefinitionDraft("CRATE", "basic").join().isEmpty());
+            assertEquals(0, database.draftRevisionCount(current.draftId()).join());
         }
     }
 

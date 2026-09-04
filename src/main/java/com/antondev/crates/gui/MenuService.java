@@ -8,6 +8,7 @@ import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
 import com.antondev.crates.service.ChanceAllocator;
 import com.antondev.crates.service.CrateRegistry;
+import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.RewardSelector;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -131,6 +132,7 @@ public final class MenuService implements Listener {
     }
 
     public void openRewards(Player player, Crate crate, int requestedPage) {
+        DraftSessionService.View draft = plugin.adminMenus().ensureDraft(player, crate.id());
         MenuConfig menus = plugin.menusConfig();
         List<Integer> slots = menus.slots("reward-pool.reward-slots");
         String query = rewardSearch.getOrDefault(player.getUniqueId(), "");
@@ -158,14 +160,27 @@ public final class MenuService implements Listener {
         inventory.setItem(menus.slot("reward-pool.search"), control("reward-pool.search"));
         inventory.setItem(menus.slot("reward-pool.previous"), control("reward-pool.previous"));
         inventory.setItem(menus.slot("reward-pool.back"), control("reward-pool.back"));
-        inventory.setItem(menus.slot("reward-pool.status"), control("reward-pool.status",
-                Text.value("count", crate.rewards().size()),
-                Text.value("total", format(totalBasisPoints / 100.0)), Text.component("state", health)));
+        ItemStack status = control("reward-pool.status", Text.value("count", crate.rewards().size()),
+                Text.value("total", format(totalBasisPoints / 100.0)), Text.component("state", health));
+        appendLore(status, draftLore(draft));
+        inventory.setItem(menus.slot("reward-pool.status"), status);
         inventory.setItem(menus.slot("reward-pool.preview"), control("reward-pool.preview"));
         inventory.setItem(menus.slot("reward-pool.next"), control("reward-pool.next"));
         inventory.setItem(menus.slot("reward-pool.balance"), control("reward-pool.balance"));
         inventory.setItem(menus.slot("reward-pool.done"), control("reward-pool.done"));
         player.openInventory(inventory);
+    }
+
+    public void refreshDraftState(Player player, String crateId) {
+        if (!(player.getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder holder)
+                || !holder.crateId().equals(crateId)) return;
+        if (holder.kind() == MenuHolder.Kind.EDITOR) {
+            plugin.adminMenus().refreshDraftState(player, holder);
+        } else if (holder.kind() == MenuHolder.Kind.REWARDS) {
+            Crate crate = plugin.crates().find(crateId).orElse(null);
+            DraftSessionService.View draft = plugin.draftSessions().view(player.getUniqueId(), crateId).orElse(null);
+            if (crate != null && draft != null) updateRewardPoolStatus(holder.getInventory(), crate, draft);
+        }
     }
 
     public void animate(Player player, Crate crate, CrateReward selected, Runnable completed) {
@@ -362,7 +377,9 @@ public final class MenuService implements Listener {
                     plugin.messages().send(player, "hold-item");
                     return;
                 }
-                String rewardId = plugin.crates().addGeneratedCapturedReward(crate.id(), held);
+                if (!plugin.adminMenus().requireWritableDraft(player, crate.id())) return;
+                String rewardId = plugin.crates().addGeneratedCapturedReward(crate.id(), held, player.getName());
+                plugin.adminMenus().saveDraftRevision(player, crate.id(), "REWARD", "Captured reward " + rewardId);
                 CrateReward reward = plugin.crates().find(crate.id()).orElseThrow().rewards().get(rewardId);
                 plugin.messages().send(player, "reward-added", Text.value("reward", rewardId),
                         Text.component("crate", crate.displayName()),
@@ -444,6 +461,14 @@ public final class MenuService implements Listener {
                 openRewards(player, crate, holder.page() + 1);
             } else if (slot == menus.slot("reward-pool.balance")) {
                 balanceRewardPool(player, crate, event);
+            } else if (slot == menus.slot("reward-pool.status")) {
+                DraftSessionService.View draft = plugin.adminMenus().ensureDraft(player, crate.id());
+                if (draft.state() == DraftSessionService.State.SAVE_FAILED) {
+                    plugin.adminMenus().retryDraft(player, crate.id());
+                } else if (draft.state() == DraftSessionService.State.READ_ONLY
+                        && player.hasPermission("plexoncrates.admin.takeover")) {
+                    plugin.adminMenus().openTakeoverConfirmation(player, crate.id(), "rewards", holder.page());
+                }
             }
         } catch (Exception error) {
             plugin.configError(player, error);
@@ -477,10 +502,11 @@ public final class MenuService implements Listener {
 
     private void capturePoolReward(Player player, Crate crate, ItemStack source) {
         if (source == null || source.getType().isAir() || protectedInput(source)) return;
+        if (!plugin.adminMenus().requireWritableDraft(player, crate.id())) return;
         try {
             itemSnapshots.capture(source);
             String rewardId = plugin.crates().addGeneratedCapturedReward(crate.id(), source, player.getName());
-            saveCrateDraft(player, crate.id());
+            plugin.adminMenus().saveDraftRevision(player, crate.id(), "REWARD", "Captured reward " + rewardId);
             rewardSearch.remove(player.getUniqueId());
             Crate updated = plugin.crates().find(crate.id()).orElseThrow();
             CrateReward reward = updated.rewards().get(rewardId);
@@ -509,6 +535,7 @@ public final class MenuService implements Listener {
     }
 
     private void balanceRewardPool(Player player, Crate crate, InventoryClickEvent event) throws Exception {
+        if (!plugin.adminMenus().requireWritableDraft(player, crate.id())) return;
         CrateRegistry.ChanceBalanceMode mode;
         if (event.isShiftClick() && event.isRightClick()) {
             mode = CrateRegistry.ChanceBalanceMode.NORMALIZE_UNLOCKED;
@@ -520,7 +547,8 @@ public final class MenuService implements Listener {
             mode = CrateRegistry.ChanceBalanceMode.PRESERVE_RELATIVE;
         }
         plugin.crates().balanceChances(crate.id(), mode, player.getName());
-        saveCrateDraft(player, crate.id());
+        plugin.adminMenus().saveDraftRevision(player, crate.id(), "CHANCE",
+                "Balanced reward chances using " + mode.name());
         player.sendMessage(Text.parse("<green>Balanced reward chances:</green> <white>" + mode.name()
                 .toLowerCase(Locale.ROOT).replace('_', ' ') + "</white><green>.</green>"));
         openRewards(player, plugin.crates().find(crate.id()).orElseThrow(), 0);
@@ -541,15 +569,6 @@ public final class MenuService implements Listener {
     private static boolean cursorPlacement(InventoryAction action) {
         return action == InventoryAction.PLACE_ALL || action == InventoryAction.PLACE_ONE
                 || action == InventoryAction.PLACE_SOME || action == InventoryAction.SWAP_WITH_CURSOR;
-    }
-
-    private void saveCrateDraft(Player player, String crateId) {
-        try {
-            plugin.database().saveDraft(crateId, plugin.crates().serialized(crateId), player.getUniqueId());
-        } catch (Exception error) {
-            plugin.getLogger().log(java.util.logging.Level.WARNING,
-                    "Could not queue the crate draft snapshot", error);
-        }
     }
 
     private void inspectReward(Player player, CrateReward reward) {
@@ -597,7 +616,10 @@ public final class MenuService implements Listener {
         }
         if (slot != menus.slot("confirm-delete.confirm")) return;
         try {
-            plugin.crates().removeReward(crate.id(), holder.rewardId());
+            if (!plugin.adminMenus().requireWritableDraft(player, crate.id())) return;
+            plugin.crates().removeReward(crate.id(), holder.rewardId(), player.getName());
+            plugin.adminMenus().saveDraftRevision(player, crate.id(), "REWARD",
+                    "Removed reward " + holder.rewardId());
             plugin.messages().send(player, "reward-removed", Text.value("reward", holder.rewardId()),
                     Text.component("crate", crate.displayName()));
             openRewards(player, plugin.crates().find(crate.id()).orElseThrow(), holder.page());
@@ -623,6 +645,40 @@ public final class MenuService implements Listener {
         item.editMeta(meta -> meta.getPersistentDataContainer()
                 .set(editorItem, PersistentDataType.BYTE, (byte) 1));
         return item;
+    }
+
+    private void updateRewardPoolStatus(Inventory inventory, Crate crate, DraftSessionService.View draft) {
+        int totalBasisPoints = crate.rewards().values().stream().filter(CrateReward::enabled)
+                .mapToInt(CrateReward::chanceBasisPoints).sum();
+        Component health = totalBasisPoints == ChanceAllocator.TOTAL_BASIS_POINTS
+                ? Text.parse("<green>Healthy</green>") : Text.parse("<yellow>Needs balance</yellow>");
+        ItemStack status = control("reward-pool.status", Text.value("count", crate.rewards().size()),
+                Text.value("total", format(totalBasisPoints / 100.0)), Text.component("state", health));
+        appendLore(status, draftLore(draft));
+        inventory.setItem(plugin.menusConfig().slot("reward-pool.status"), status);
+    }
+
+    private static List<Component> draftLore(DraftSessionService.View draft) {
+        Component state = switch (draft.state()) {
+            case LOADING -> Text.parse("<yellow>Loading</yellow>");
+            case SAVING -> Text.parse("<yellow>Saving</yellow>");
+            case SAVED -> Text.parse("<green>Saved</green>");
+            case SAVE_FAILED -> Text.parse("<red>Save failed</red>");
+            case READ_ONLY -> Text.parse("<gold>Read only</gold>");
+        };
+        var lore = new ArrayList<Component>();
+        lore.add(Component.empty());
+        lore.add(Text.parse("<gray>Draft:</gray> <state>", Text.component("state", state)));
+        lore.add(Text.parse("<gray>Editor:</gray> <white><owner></white>",
+                Text.value("owner", draft.ownerName().isBlank() ? "loading" : draft.ownerName())));
+        lore.add(Text.parse("<gray>Revision:</gray> <white><revision></white>",
+                Text.value("revision", draft.revision())));
+        if (draft.state() == DraftSessionService.State.SAVE_FAILED) {
+            lore.add(Text.parse("<yellow>Click to retry the latest snapshot.</yellow>"));
+        } else if (draft.state() == DraftSessionService.State.READ_ONLY) {
+            lore.add(Text.parse("<yellow>Click to request a confirmed takeover.</yellow>"));
+        }
+        return List.copyOf(lore);
     }
 
     private static void appendLore(ItemStack item, List<Component> additions) {
@@ -660,7 +716,7 @@ public final class MenuService implements Listener {
         return switch (kind) {
             case ADMIN, EDITOR, CRATE_LIST, KEY_LIST, KEY_TEMPLATE, KEY_SELECT, REWARD_BUILDER,
                     LOCATIONS, STATISTICS, SYSTEM, GLOBAL_REWARDS, WAND_SELECT,
-                    CONFIRM_UNLINK, CONFIRM_CRATE_DELETE, CONFIRM_KEY_DELETE -> true;
+                    CONFIRM_UNLINK, CONFIRM_CRATE_DELETE, CONFIRM_KEY_DELETE, CONFIRM_TAKEOVER -> true;
             default -> false;
         };
     }

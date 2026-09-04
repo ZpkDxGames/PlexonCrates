@@ -25,6 +25,7 @@ import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import org.junit.jupiter.api.AfterEach;
@@ -99,6 +100,7 @@ class AdministrationIntegrationTest {
         player.setOp(true);
         var crate = plugin.crates().find("basic").orElseThrow();
         plugin.menus().openRewards(player, crate, 0);
+        awaitDraft(player, crate.id());
         MenuHolder holder = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
         List<Integer> slots = plugin.menusConfig().slots("reward-pool.reward-slots");
         ItemStack original = exactReward(Material.NETHER_STAR, 7);
@@ -137,6 +139,7 @@ class AdministrationIntegrationTest {
         ItemStack cursorSource = exactReward(Material.DIAMOND_SWORD, 1);
         byte[] cursorBefore = cursorSource.serializeAsBytes();
         plugin.menus().openRewards(player, crate, 0);
+        awaitDraft(player, crate.id());
         player.setItemOnCursor(cursorSource);
         InventoryClickEvent cursorClick = new InventoryClickEvent(player.getOpenInventory(),
                 InventoryType.SlotType.CONTAINER, slots.get(8), ClickType.LEFT, InventoryAction.SWAP_WITH_CURSOR);
@@ -164,6 +167,8 @@ class AdministrationIntegrationTest {
         player.setOp(true);
         var crate = plugin.crates().find("basic").orElseThrow();
         var original = crate.orderedRewards().getFirst();
+        plugin.adminMenus().ensureDraft(player, crate.id());
+        awaitDraft(player, crate.id());
         plugin.adminMenus().editReward(player, crate, original);
         var draft = plugin.editSessions().reward(player);
         draft.baseChancePercent(42.5);
@@ -185,6 +190,45 @@ class AdministrationIntegrationTest {
         assertTrue(updated.presentation().firework());
         assertEquals(original.id(), updatedCrate.orderedRewards().getLast().id());
         assertEquals(original.itemCopies().size(), updated.itemCopies().size());
+    }
+
+    @Test
+    void secondAdministratorIsReadOnlyUntilConfirmedTakeover() {
+        var first = server.addPlayer("FirstEditor");
+        var second = server.addPlayer("SecondEditor");
+        first.setOp(true);
+        second.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+
+        plugin.adminMenus().openCrateEditor(first, crate);
+        awaitDraft(first, crate.id());
+        plugin.adminMenus().openCrateEditor(second, crate);
+        awaitDraft(second, crate.id());
+        assertTrue(plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow().writable());
+        assertFalse(plugin.draftSessions().view(second.getUniqueId(), crate.id()).orElseThrow().writable());
+
+        int before = crate.rewards().size();
+        plugin.menus().openRewards(second, crate, 0);
+        List<Integer> slots = plugin.menusConfig().slots("reward-pool.reward-slots");
+        ItemStack source = exactReward(Material.DIAMOND, 3);
+        second.setItemOnCursor(source);
+        InventoryClickEvent rejected = new InventoryClickEvent(second.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, slots.get(8), ClickType.LEFT, InventoryAction.SWAP_WITH_CURSOR);
+        plugin.menus().click(rejected);
+        assertEquals(before, plugin.crates().find(crate.id()).orElseThrow().rewards().size());
+
+        plugin.adminMenus().openCrateEditor(second, crate);
+        second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("editor.takeover"));
+        assertEquals(MenuHolder.Kind.CONFIRM_TAKEOVER,
+                ((MenuHolder) second.getOpenInventory().getTopInventory().getHolder()).kind());
+        second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("confirm-takeover.confirm"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        assertTrue(plugin.draftSessions().view(second.getUniqueId(), crate.id()).orElseThrow().writable());
+        assertFalse(plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow().writable());
     }
 
     @Test
@@ -257,5 +301,11 @@ class AdministrationIntegrationTest {
                     PersistentDataType.STRING, "preserve-me");
         });
         return item;
+    }
+
+    private void awaitDraft(Player player, String crateId) {
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertTrue(plugin.draftSessions().view(player.getUniqueId(), crateId).isPresent());
     }
 }

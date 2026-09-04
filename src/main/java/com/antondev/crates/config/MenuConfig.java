@@ -19,13 +19,14 @@ public final class MenuConfig {
             yaml.set("reward-builder.chance", yaml.get("reward-builder.weight"));
         }
         installRewardPoolFallback(yaml);
+        installDraftFallbacks(yaml);
         validateMenu("browser", List.of("info", "close"));
         validateMenu("preview", List.of("open", "previous", "back", "next"));
         validateMenu("opening", List.of("marker"));
         validateMenu("admin", List.of("crates", "keys", "locations", "rewards", "statistics", "system", "close"));
         validateMenu("editor", List.of("preview", "rename", "key", "rewards", "description", "order",
                 "create-reward", "wand", "opening", "display", "access", "disable",
-                "publish", "archive", "clone", "back", "delete"));
+                "draft-status", "publish", "archive", "undo", "clone", "back", "takeover", "delete"));
         validateMenu("confirm-delete", List.of("confirm", "cancel"));
         validateMenu("summary", List.of("close"));
         validateMenu("crate-list", List.of("create", "previous", "back", "next"));
@@ -44,6 +45,7 @@ public final class MenuConfig {
         validateMenu("confirm-unlink", List.of("confirm", "cancel"));
         validateMenu("confirm-crate-delete", List.of("confirm", "cancel"));
         validateMenu("confirm-key-delete", List.of("confirm", "cancel"));
+        validateMenu("confirm-takeover", List.of("confirm", "cancel"));
         item("filler");
         for (String line : yaml.getStringList("preview.reward-lore")) Text.parse(line);
     }
@@ -111,6 +113,30 @@ public final class MenuConfig {
                 List.of("<gray>Left relative • Right equal</gray>",
                         "<gray>Shift-left rarity • Shift-right unlocked</gray>"));
         installItem(yaml, "reward-pool.done", 53, "LIME_CONCRETE", "<green>Done</green>", List.of());
+    }
+
+    private static void installDraftFallbacks(YamlConfiguration yaml) {
+        if (!yaml.contains("editor.draft-status")) {
+            installItem(yaml, "editor.draft-status", 40, "PAPER", "<white>Draft <draft_state></white>", List.of(
+                    "<gray>Editor:</gray> <white><draft_owner></white>",
+                    "<gray>Revision:</gray> <white><draft_revision></white>",
+                    "<dark_gray>Failed saves can be retried here.</dark_gray>"));
+        }
+        if (!yaml.contains("editor.undo")) {
+            installItem(yaml, "editor.undo", 47, "CLOCK", "<yellow>Undo Last Change</yellow>", List.of(
+                    "<gray>Creates a new forward revision from the previous snapshot.</gray>"));
+        }
+        if (!yaml.contains("editor.takeover")) {
+            installItem(yaml, "editor.takeover", 51, "IRON_DOOR", "<gold>Take Over Draft</gold>", List.of(
+                    "<gray>Requires confirmation and invalidates the old editor lease.</gray>"));
+        }
+        if (!yaml.contains("confirm-takeover")) {
+            yaml.set("confirm-takeover.title", "<red>Take over <crate_id> draft?</red>");
+            yaml.set("confirm-takeover.size", 27);
+            installItem(yaml, "confirm-takeover.confirm", 11, "LIME_CONCRETE", "<green>Confirm Takeover</green>",
+                    List.of("<gray>The current editor becomes read-only immediately.</gray>"));
+            installItem(yaml, "confirm-takeover.cancel", 15, "RED_CONCRETE", "<red>Cancel</red>", List.of());
+        }
     }
 
     private static void installItem(YamlConfiguration yaml, String path, Integer slot, String material,

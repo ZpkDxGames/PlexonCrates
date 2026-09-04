@@ -45,6 +45,7 @@ permissions:
       plexoncrates.admin.reload: true
       plexoncrates.admin.backup: true
       plexoncrates.admin.diagnose: true
+      plexoncrates.admin.takeover: true
       plexoncrates.admin.protection-bypass: true
   plexoncrates.admin.gui:
     description: Open the administrative dashboard.
@@ -72,6 +73,9 @@ permissions:
     default: op
   plexoncrates.admin.diagnose:
     description: View detailed configuration and integration diagnostics.
+    default: op
+  plexoncrates.admin.takeover:
+    description: Confirm takeover of another administrator's writable draft lease.
     default: op
   plexoncrates.admin.protection-bypass:
     description: Explicitly allow breaking protected linked crate blocks.

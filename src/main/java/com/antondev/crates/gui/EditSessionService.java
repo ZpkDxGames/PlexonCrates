@@ -28,7 +28,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.scheduler.BukkitTask;
 
-/** Owns safe chat inputs and transient item-builder state. Persistent crate drafts remain YAML/SQLite backed. */
+/** Owns safe chat inputs and transient item-builder state around durable SQLite draft sessions. */
 public final class EditSessionService implements Listener {
     private final PlexonCrates plugin;
     private final Map<UUID, TextInput> inputs = new ConcurrentHashMap<>();
@@ -123,6 +123,7 @@ public final class EditSessionService implements Listener {
         inputs.remove(event.getPlayer().getUniqueId());
         keys.remove(event.getPlayer().getUniqueId());
         rewards.remove(event.getPlayer().getUniqueId());
+        plugin.draftSessions().forget(event.getPlayer().getUniqueId());
     }
 
     public void stop() {
@@ -158,6 +159,7 @@ public final class EditSessionService implements Listener {
         long sessionExpiry = now - plugin.settings().sessionTimeoutMinutes() * 60_000L;
         keys.entrySet().removeIf(entry -> entry.getValue().updatedAt < sessionExpiry);
         rewards.entrySet().removeIf(entry -> entry.getValue().updatedAt < sessionExpiry);
+        plugin.draftSessions().expireOlderThan(sessionExpiry);
     }
 
     private static String concise(Throwable error) {

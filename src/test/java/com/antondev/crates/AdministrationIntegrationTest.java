@@ -147,14 +147,14 @@ class AdministrationIntegrationTest {
 
         ItemStack shiftSource = exactReward(Material.EMERALD, 13);
         byte[] shiftBefore = shiftSource.serializeAsBytes();
-        player.getInventory().setItem(9, shiftSource);
+        player.getInventory().setItem(0, shiftSource);
         InventoryClickEvent shiftClick = new InventoryClickEvent(player.getOpenInventory(),
-                InventoryType.SlotType.CONTAINER, player.getOpenInventory().getTopInventory().getSize(),
+                InventoryType.SlotType.QUICKBAR, player.getOpenInventory().getTopInventory().getSize() + 27,
                 ClickType.SHIFT_LEFT, InventoryAction.MOVE_TO_OTHER_INVENTORY);
         plugin.menus().click(shiftClick);
         assertTrue(shiftClick.isCancelled());
         assertArrayEquals(shiftBefore, shiftSource.serializeAsBytes());
-        assertEquals(13, player.getInventory().getItem(9).getAmount());
+        assertEquals(13, player.getInventory().getItem(0).getAmount());
         assertEquals(10, plugin.crates().find("basic").orElseThrow().rewards().size());
     }
 

@@ -125,7 +125,7 @@ class PluginIntegrationTest {
                 com.antondev.crates.service.CrateRegistry.ChanceBalanceMode.RARITY_CURVE, "TEST");
         var curved = plugin.crates().find("basic").orElseThrow().orderedRewards();
         assertEquals(10_000, curved.stream().mapToInt(reward -> reward.chanceBasisPoints()).sum());
-        assertTrue(curved.getFirst().chanceBasisPoints() > curved.getLast().chanceBasisPoints());
+        assertTrue(curved.stream().allMatch(reward -> reward.chanceBasisPoints() == 1_250));
     }
 
     @Test

@@ -15,6 +15,10 @@ public final class MenuConfig {
 
     private MenuConfig(YamlConfiguration yaml) {
         this.yaml = yaml;
+        if (!yaml.contains("reward-builder.chance") && yaml.contains("reward-builder.weight")) {
+            yaml.set("reward-builder.chance", yaml.get("reward-builder.weight"));
+        }
+        installRewardPoolFallback(yaml);
         validateMenu("browser", List.of("info", "close"));
         validateMenu("preview", List.of("open", "previous", "back", "next"));
         validateMenu("opening", List.of("marker"));
@@ -28,7 +32,9 @@ public final class MenuConfig {
         validateMenu("key-list", List.of("create", "sync", "previous", "back", "next"));
         validateMenu("key-template", List.of("name", "previous", "legacy", "confirm", "cancel", "input-placeholder"));
         validateMenu("key-select", List.of("back", "previous", "next"));
-        validateMenu("reward-builder", List.of("name", "weight", "command", "experience", "money", "rarity",
+        validateMenu("reward-pool", List.of("empty", "add-special", "search", "previous", "back",
+                "status", "preview", "next", "balance", "done"));
+        validateMenu("reward-builder", List.of("name", "chance", "command", "experience", "money", "rarity",
                 "clear", "permissions", "limits", "messages", "effects", "enabled", "order", "confirm", "cancel", "input-placeholder"));
         validateMenu("locations", List.of("wand", "previous", "back", "next"));
         validateMenu("statistics", List.of("summary", "back"));
@@ -76,6 +82,43 @@ public final class MenuConfig {
 
     public List<String> strings(String path) {
         return yaml.getStringList(path);
+    }
+
+    private static void installRewardPoolFallback(YamlConfiguration yaml) {
+        if (yaml.contains("reward-pool")) return;
+        yaml.set("reward-pool.title", "<crate> <dark_gray>›</dark_gray> <yellow>Rewards</yellow>");
+        yaml.set("reward-pool.size", 54);
+        yaml.set("reward-pool.reward-slots", List.of(
+                10, 11, 12, 13, 14, 15, 16,
+                19, 20, 21, 22, 23, 24, 25,
+                28, 29, 30, 31, 32, 33, 34,
+                37, 38, 39, 40, 41, 42, 43));
+        installItem(yaml, "reward-pool.empty", null, "HOPPER", "<gray>Drop an item here</gray>",
+                List.of("<dark_gray>Your item is copied, never moved.</dark_gray>"));
+        installItem(yaml, "reward-pool.add-special", 45, "COMMAND_BLOCK", "<gold>Add Special Reward</gold>",
+                List.of("<gray>Create a command, XP, level, money, or mixed reward.</gray>"));
+        installItem(yaml, "reward-pool.search", 46, "COMPASS", "<aqua>Search / Filter</aqua>", List.of());
+        installItem(yaml, "reward-pool.previous", 47, "ARROW", "<gray>Previous Page</gray>", List.of());
+        installItem(yaml, "reward-pool.back", 48, "OAK_DOOR", "<gray>Back to Crate Studio</gray>", List.of());
+        installItem(yaml, "reward-pool.status", 49, "FILLED_MAP", "<yellow>Pool Health</yellow>", List.of(
+                "<gray>Rewards:</gray> <white><count></white>",
+                "<gray>Base total:</gray> <white><total>%</white>",
+                "<gray>State:</gray> <state>",
+                "<dark_gray>Drag or shift-click to copy an exact item.</dark_gray>"));
+        installItem(yaml, "reward-pool.preview", 50, "ENDER_EYE", "<aqua>Preview Pool</aqua>", List.of());
+        installItem(yaml, "reward-pool.next", 51, "ARROW", "<gray>Next Page</gray>", List.of());
+        installItem(yaml, "reward-pool.balance", 52, "COMPARATOR", "<light_purple>Balance Chances</light_purple>",
+                List.of("<gray>Left relative • Right equal</gray>",
+                        "<gray>Shift-left rarity • Shift-right unlocked</gray>"));
+        installItem(yaml, "reward-pool.done", 53, "LIME_CONCRETE", "<green>Done</green>", List.of());
+    }
+
+    private static void installItem(YamlConfiguration yaml, String path, Integer slot, String material,
+                                    String name, List<String> lore) {
+        if (slot != null) yaml.set(path + ".slot", slot);
+        yaml.set(path + ".material", material);
+        yaml.set(path + ".name", name);
+        yaml.set(path + ".lore", lore);
     }
 
     private void validateMenu(String path, List<String> items) {

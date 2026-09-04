@@ -10,9 +10,11 @@ import com.antondev.crates.domain.reward.PityPolicy;
 import com.antondev.crates.domain.reward.RewardLimits;
 import com.antondev.crates.domain.reward.RewardRarity;
 import com.antondev.crates.domain.reward.RewardPresentation;
+import com.antondev.crates.item.ItemSnapshotCodec;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,6 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -47,6 +50,7 @@ public final class CrateRegistry {
     }
 
     private static final Pattern ID = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
+    private static final ItemSnapshotCodec ITEM_SNAPSHOTS = new ItemSnapshotCodec();
     private final Path directory;
     private Map<String, Crate> crates;
     private Map<String, Path> files;
@@ -114,7 +118,7 @@ public final class CrateRegistry {
         if (!file.getParent().equals(directory.normalize())) throw new IllegalArgumentException("Invalid crate path");
         Instant now = Instant.now();
         YamlConfiguration yaml = new YamlConfiguration();
-        yaml.set("config-version", 2);
+        yaml.set("config-version", 3);
         yaml.set("id", id);
         yaml.set("state", "DRAFT");
         yaml.set("display-order", nextDisplayOrder());
@@ -320,8 +324,15 @@ public final class CrateRegistry {
         List<CrateReward> reachable = crate.rewards().values().stream()
                 .filter(CrateReward::enabled).filter(CrateReward::hasDelivery).toList();
         if (reachable.isEmpty()) issues.add("Add at least one enabled deliverable reward.");
-        double weight = reachable.stream().mapToDouble(CrateReward::weight).sum();
-        if (!Double.isFinite(weight) || weight <= 0) issues.add("The enabled reward pool has no positive weight.");
+        if (crate.rewards().values().stream().anyMatch(reward -> reward.enabled() && !reward.hasDelivery())) {
+            issues.add("Every enabled reward needs at least one deliverable action.");
+        }
+        int chanceTotal = crate.rewards().values().stream().filter(CrateReward::enabled)
+                .mapToInt(CrateReward::chanceBasisPoints).sum();
+        if (chanceTotal != ChanceAllocator.TOTAL_BASIS_POINTS) {
+            issues.add("Enabled reward chances total " + String.format(Locale.ROOT, "%.2f%%", chanceTotal / 100.0)
+                    + "; balance the pool to exactly 100.00%.");
+        }
         return List.copyOf(issues);
     }
 
@@ -353,80 +364,105 @@ public final class CrateRegistry {
         fireChange(deleted, CrateDefinitionChangeEvent.ChangeType.DELETED);
     }
 
-    public void addCapturedReward(String crateId, String rewardId, double weight, ItemStack held) throws Exception {
-        validateRewardInput(rewardId, weight);
-        if (held == null || held.getType().isAir()) throw new IllegalArgumentException("Hold the exact reward item first");
-        addBundleReward(crateId, rewardId, Text.parse("<white><bold>" + pretty(held.getType().name()) + "</bold></white>"),
-                weight, RewardRarity.COMMON, List.of(held), List.of(), 0, 0, 0, "CONSOLE");
+    public void addCapturedReward(String crateId, String rewardId, double baseChancePercent, ItemStack held) throws Exception {
+        addCapturedReward(crateId, rewardId, baseChancePercent, held, "CONSOLE");
     }
 
-    public String addGeneratedCapturedReward(String crateId, ItemStack held, double weight) throws Exception {
+    public void addCapturedReward(String crateId, String rewardId, double baseChancePercent, ItemStack held,
+                                  String editor) throws Exception {
+        validateRewardInput(rewardId, baseChancePercent);
+        if (held == null || held.getType().isAir()) throw new IllegalArgumentException("Hold the exact reward item first");
+        ITEM_SNAPSHOTS.capture(held);
+        Component customName = held.hasItemMeta() ? held.getItemMeta().displayName() : null;
+        Component displayName = customName == null
+                ? Text.parse("<white><bold>" + pretty(held.getType().name()) + "</bold></white>") : customName;
+        addBundleReward(crateId, rewardId, displayName, baseChancePercent, RewardRarity.COMMON,
+                List.of(held), List.of(), 0, 0, 0, editor);
+    }
+
+    public String addGeneratedCapturedReward(String crateId, ItemStack held, double baseChancePercent) throws Exception {
+        return addGeneratedCapturedReward(crateId, held, baseChancePercent, "CONSOLE");
+    }
+
+    public String addGeneratedCapturedReward(String crateId, ItemStack held, double baseChancePercent,
+                                             String editor) throws Exception {
         String base = held.getType().name().toLowerCase(Locale.ROOT);
         Crate crate = find(crateId).orElseThrow(() -> new IllegalArgumentException("Unknown crate"));
-        String id = base;
-        int number = 2;
-        while (crate.rewards().containsKey(id)) id = base + "_" + number++;
-        addCapturedReward(crateId, id, weight, held);
+        String id;
+        do {
+            id = base + "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 4);
+        } while (crate.rewards().containsKey(id));
+        addCapturedReward(crateId, id, baseChancePercent, held, editor);
         return id;
     }
 
-    public void addCommandReward(String crateId, String rewardId, double weight, String command) throws Exception {
+    public String addGeneratedCapturedReward(String crateId, ItemStack held) throws Exception {
+        return addGeneratedCapturedReward(crateId, held, "CONSOLE");
+    }
+
+    public String addGeneratedCapturedReward(String crateId, ItemStack held, String editor) throws Exception {
+        Crate crate = find(crateId).orElseThrow(() -> new IllegalArgumentException("Unknown crate"));
+        int defaultBasisPoints = ChanceAllocator.defaultNewRewardBasisPoints(crate.rewards().size() + 1);
+        return addGeneratedCapturedReward(crateId, held, defaultBasisPoints / 100.0, editor);
+    }
+
+    public void addCommandReward(String crateId, String rewardId, double baseChancePercent, String command) throws Exception {
         String normalized = command == null ? "" : command.trim();
         if (normalized.startsWith("/")) throw new IllegalArgumentException("Reward commands must not begin with /");
         if (normalized.isBlank() || normalized.contains("\n") || normalized.contains("\r")) {
             throw new IllegalArgumentException("Command cannot be empty or contain newlines");
         }
-        addBundleReward(crateId, rewardId, Text.parse("<gold><bold>Command Reward</bold></gold>"), weight,
+        addBundleReward(crateId, rewardId, Text.parse("<gold><bold>Command Reward</bold></gold>"), baseChancePercent,
                 RewardRarity.COMMON, List.of(), List.of(normalized), 0, 0, 0, "CONSOLE");
     }
 
-    public void addBundleReward(String crateId, String rewardId, Component displayName, double weight,
+    public void addBundleReward(String crateId, String rewardId, Component displayName, double baseChancePercent,
                                 RewardRarity rarity, List<ItemStack> items, List<String> commands,
                                 int experiencePoints, int experienceLevels, double money, String editor) throws Exception {
-        addBundleReward(crateId, rewardId, displayName, weight, rarity, items, commands, experiencePoints,
+        addBundleReward(crateId, rewardId, displayName, baseChancePercent, rarity, items, commands, experiencePoints,
                 experienceLevels, money, RewardLimits.unlimited(), "", "", "", "", editor);
     }
 
-    public void addBundleReward(String crateId, String rewardId, Component displayName, double weight,
+    public void addBundleReward(String crateId, String rewardId, Component displayName, double baseChancePercent,
                                 RewardRarity rarity, List<ItemStack> items, List<String> commands,
                                 int experiencePoints, int experienceLevels, double money, RewardLimits limits,
                                 String requiredPermission, String blockedPermission, String personalMessage,
                                 String broadcast, String editor) throws Exception {
-        saveBundleReward(crateId, rewardId, displayName, weight, true, rarity, null, items, commands,
+        saveBundleReward(crateId, rewardId, displayName, baseChancePercent, true, rarity, null, items, commands,
                 experiencePoints, experienceLevels, money, limits, requiredPermission, blockedPermission,
                 RewardPresentation.none(), personalMessage, broadcast, editor, false);
     }
 
-    public void addBundleReward(String crateId, String rewardId, Component displayName, double weight,
+    public void addBundleReward(String crateId, String rewardId, Component displayName, double baseChancePercent,
                                 RewardRarity rarity, List<ItemStack> items, List<String> commands,
                                 int experiencePoints, int experienceLevels, double money, RewardLimits limits,
                                 String requiredPermission, String blockedPermission, RewardPresentation presentation,
                                 String personalMessage, String broadcast, String editor) throws Exception {
-        saveBundleReward(crateId, rewardId, displayName, weight, true, rarity, null, items, commands,
+        saveBundleReward(crateId, rewardId, displayName, baseChancePercent, true, rarity, null, items, commands,
                 experiencePoints, experienceLevels, money, limits, requiredPermission, blockedPermission,
                 presentation, personalMessage, broadcast, editor, false);
     }
 
-    public void updateBundleReward(String crateId, String rewardId, Component displayName, double weight,
+    public void updateBundleReward(String crateId, String rewardId, Component displayName, double baseChancePercent,
                                    boolean enabled, RewardRarity rarity, ItemStack displayItem,
                                    List<ItemStack> items, List<String> commands, int experiencePoints,
                                    int experienceLevels, double money, RewardLimits limits,
                                    String requiredPermission, String blockedPermission,
                                    RewardPresentation presentation, String personalMessage, String broadcast,
                                    String editor) throws Exception {
-        saveBundleReward(crateId, rewardId, displayName, weight, enabled, rarity, displayItem, items, commands,
+        saveBundleReward(crateId, rewardId, displayName, baseChancePercent, enabled, rarity, displayItem, items, commands,
                 experiencePoints, experienceLevels, money, limits, requiredPermission, blockedPermission,
                 presentation, personalMessage, broadcast, editor, true);
     }
 
-    private void saveBundleReward(String crateId, String rewardId, Component displayName, double weight,
+    private void saveBundleReward(String crateId, String rewardId, Component displayName, double baseChancePercent,
                                   boolean enabled, RewardRarity rarity, ItemStack displayItem,
                                   List<ItemStack> items, List<String> commands, int experiencePoints,
                                   int experienceLevels, double money, RewardLimits limits,
                                   String requiredPermission, String blockedPermission,
                                   RewardPresentation presentation, String personalMessage, String broadcast,
                                   String editor, boolean updating) throws Exception {
-        validateRewardInput(rewardId, weight);
+        validateRewardInput(rewardId, baseChancePercent);
         if (items.isEmpty() && commands.isEmpty() && experiencePoints <= 0 && experienceLevels <= 0 && money <= 0) {
             throw new IllegalArgumentException("A reward bundle needs at least one delivery action");
         }
@@ -440,13 +476,38 @@ public final class CrateRegistry {
         Text.parse(presentation.title());
         Text.parse(presentation.subtitle());
         mutate(crateId, yaml -> {
+            upgradeChancePool(yaml);
             String path = "rewards." + normalize(rewardId);
             if (updating && !yaml.contains(path)) throw new IllegalArgumentException("Reward no longer exists");
             if (!updating && yaml.contains(path)) throw new IllegalArgumentException("Reward already exists");
+            int requestedBasisPoints = enabled ? percentageToBasisPoints(baseChancePercent) : 0;
+            List<ChanceAllocator.Chance> current = chancePool(yaml);
+            ChanceAllocator.Allocation allocation;
+            if (updating) {
+                if (current.size() == 1 && requestedBasisPoints == 0) {
+                    allocation = new ChanceAllocator.Allocation(List.of(
+                            current.getFirst().withBasisPoints(0)));
+                } else {
+                    allocation = ChanceAllocator.setChance(current, normalize(rewardId), requestedBasisPoints);
+                }
+            } else {
+                if (current.isEmpty() && requestedBasisPoints == 0) {
+                    allocation = new ChanceAllocator.Allocation(List.of(
+                            new ChanceAllocator.Chance(normalize(rewardId), 0, false)));
+                } else {
+                    allocation = ChanceAllocator.addReward(current, normalize(rewardId));
+                }
+                if (allocation.basisPoints(normalize(rewardId)) != requestedBasisPoints
+                        && allocation.chances().size() > 1) {
+                    allocation = ChanceAllocator.setChance(allocation.chances(), normalize(rewardId), requestedBasisPoints);
+                }
+            }
+            applyChancePool(yaml, allocation);
             yaml.set(path + ".enabled", enabled);
             yaml.set(path + ".display-name", Text.serialize(displayName));
             yaml.set(path + ".rarity", rarity.name());
-            yaml.set(path + ".weight", weight);
+            yaml.set(path + ".chance-basis-points", allocation.basisPoints(normalize(rewardId)));
+            yaml.set(path + ".weight", null);
             yaml.set(path + ".display", null);
             ItemStack display = displayItem != null ? displayItem
                     : items.isEmpty() ? new ItemStack(Material.COMMAND_BLOCK) : items.getFirst();
@@ -524,36 +585,103 @@ public final class CrateRegistry {
         ConfigurationSection section = source.getConfigurationSection("rewards." + sourceReward);
         if (section == null) throw new IllegalArgumentException("Unknown source reward");
         mutate(targetId, yaml -> {
+            upgradeChancePool(yaml);
             String targetPath = "rewards." + newReward;
             if (yaml.contains(targetPath)) throw new IllegalArgumentException("Target reward already exists");
+            boolean copiedEnabled = section.getBoolean("enabled", true);
+            List<ChanceAllocator.Chance> current = chancePool(yaml);
+            ChanceAllocator.Allocation allocation;
+            if (current.isEmpty() && !copiedEnabled) {
+                allocation = new ChanceAllocator.Allocation(List.of(
+                        new ChanceAllocator.Chance(newReward, 0, false)));
+            } else {
+                allocation = ChanceAllocator.addReward(current, newReward);
+                if (!copiedEnabled) {
+                    allocation = ChanceAllocator.setChance(allocation.chances(), newReward, 0);
+                }
+            }
             for (Map.Entry<String, Object> entry : section.getValues(true).entrySet()) {
-                if (!(entry.getValue() instanceof ConfigurationSection)) {
+                if (!(entry.getValue() instanceof ConfigurationSection)
+                        && !entry.getKey().equals("weight")
+                        && !entry.getKey().equals("chance-basis-points")
+                        && !entry.getKey().equals("chance-locked")) {
                     yaml.set(targetPath + "." + entry.getKey(), entry.getValue());
                 }
             }
+            applyChancePool(yaml, allocation);
             touch(yaml, editor);
         });
     }
 
     public void removeReward(String crateId, String rewardId) throws Exception {
         mutate(crateId, yaml -> {
+            upgradeChancePool(yaml);
             String path = "rewards." + normalize(rewardId);
             if (!yaml.contains(path)) throw new IllegalArgumentException("Reward not found");
             yaml.set(path, null);
+            List<ChanceAllocator.Chance> remaining = chancePool(yaml);
+            if (!remaining.isEmpty() && remaining.stream().anyMatch(chance -> chance.basisPoints() > 0)) {
+                applyChancePool(yaml, ChanceAllocator.normalizeUnlocked(remaining));
+            }
             touch(yaml, "CONSOLE");
         });
     }
 
-    public void setWeight(String crateId, String rewardId, double weight) throws Exception {
-        if (!Double.isFinite(weight) || weight <= 0 || weight > 1_000_000_000) {
-            throw new IllegalArgumentException("Weight must be positive and finite");
+    /** @deprecated Use {@link #setChanceBasisPoints(String, String, int)}. */
+    @Deprecated(forRemoval = false)
+    public void setWeight(String crateId, String rewardId, double legacyChanceValue) throws Exception {
+        setChanceBasisPoints(crateId, rewardId, percentageToBasisPoints(legacyChanceValue));
+    }
+
+    public void setChanceBasisPoints(String crateId, String rewardId, int basisPoints) throws Exception {
+        if (basisPoints < 0 || basisPoints > ChanceAllocator.TOTAL_BASIS_POINTS) {
+            throw new IllegalArgumentException("Chance must be between 0.00% and 100.00%");
         }
         mutate(crateId, yaml -> {
+            upgradeChancePool(yaml);
             String path = "rewards." + normalize(rewardId);
             if (!yaml.contains(path)) throw new IllegalArgumentException("Reward not found");
-            yaml.set(path + ".weight", weight);
+            if (!yaml.getBoolean(path + ".enabled", true) && basisPoints > 0) {
+                throw new IllegalArgumentException("Enable the reward before assigning a positive chance");
+            }
+            ChanceAllocator.Allocation allocation = ChanceAllocator.setChance(chancePool(yaml),
+                    normalize(rewardId), basisPoints);
+            applyChancePool(yaml, allocation);
             touch(yaml, "CONSOLE");
         });
+    }
+
+    public void balanceChances(String crateId, ChanceBalanceMode mode, String editor) throws Exception {
+        mutate(crateId, yaml -> {
+            upgradeChancePool(yaml);
+            List<ChanceAllocator.Chance> current = enabledChancePool(yaml);
+            ChanceAllocator.Allocation allocation = switch (mode) {
+                case PRESERVE_RELATIVE -> ChanceAllocator.normalize(current);
+                case EQUAL -> ChanceAllocator.equalize(current);
+                case NORMALIZE_UNLOCKED -> ChanceAllocator.normalizeUnlocked(current);
+                case RARITY_CURVE -> rarityCurve(yaml, current);
+            };
+            applyChancePool(yaml, allocation);
+            zeroDisabledChances(yaml);
+            touch(yaml, editor);
+        });
+    }
+
+    public void setChanceLocked(String crateId, String rewardId, boolean locked, String editor) throws Exception {
+        mutate(crateId, yaml -> {
+            upgradeChancePool(yaml);
+            String path = "rewards." + normalize(rewardId);
+            if (!yaml.contains(path)) throw new IllegalArgumentException("Reward not found");
+            yaml.set(path + ".chance-locked", locked);
+            touch(yaml, editor);
+        });
+    }
+
+    public enum ChanceBalanceMode {
+        PRESERVE_RELATIVE,
+        EQUAL,
+        NORMALIZE_UNLOCKED,
+        RARITY_CURVE
     }
 
     public static boolean validId(String value) {
@@ -605,7 +733,10 @@ public final class CrateRegistry {
     }
 
     private static Crate parse(Path file, YamlConfiguration yaml) {
-        if (yaml.getInt("config-version") != 2) throw path(file, "unsupported config-version; expected 2");
+        int configVersion = yaml.getInt("config-version");
+        if (configVersion != 2 && configVersion != 3) {
+            throw path(file, "unsupported config-version; expected 2 or 3");
+        }
         String id = normalize(yaml.getString("id", file.getFileName().toString().replaceFirst("\\.yml$", "")));
         if (!validId(id)) throw path(file, "invalid crate ID");
         CrateState state = enumValue(CrateState.class, yaml.getString("state", "DRAFT"), file, "state");
@@ -649,6 +780,15 @@ public final class CrateRegistry {
         if (state == CrateState.PUBLISHED && rewards.values().stream().noneMatch(reward -> reward.enabled() && reward.hasDelivery())) {
             throw path(file, "published crate needs at least one enabled deliverable reward");
         }
+        if (state == CrateState.PUBLISHED
+                && rewards.values().stream().anyMatch(reward -> reward.enabled() && !reward.hasDelivery())) {
+            throw path(file, "every enabled reward needs a deliverable action");
+        }
+        int publishedTotal = rewards.values().stream().filter(CrateReward::enabled)
+                .mapToInt(CrateReward::chanceBasisPoints).sum();
+        if (state == CrateState.PUBLISHED && publishedTotal != ChanceAllocator.TOTAL_BASIS_POINTS) {
+            throw path(file, "published reward chances must total exactly 100.00%");
+        }
         return new Crate(id, state, displayOrder, display, description, icon, permission, worlds, excludedWorlds,
                 acceptedKeys, keyCost, cooldown, bulkEnabled, bulkMaximum, animation, hologram, crateBroadcast, pity, rewards);
     }
@@ -656,14 +796,37 @@ public final class CrateRegistry {
     private static Map<String, CrateReward> parseRewards(Path file, YamlConfiguration yaml) {
         ConfigurationSection rewardsSection = yaml.getConfigurationSection("rewards");
         if (rewardsSection == null) throw path(file, "missing rewards section");
+        boolean anyBasisPoints = rewardsSection.getKeys(false).stream().anyMatch(id ->
+                yaml.contains("rewards." + id + ".chance-basis-points"));
+        boolean allBasisPoints = rewardsSection.getKeys(false).stream().allMatch(id ->
+                yaml.contains("rewards." + id + ".chance-basis-points"));
+        if (anyBasisPoints && !allBasisPoints) {
+            throw path(file, "reward pools cannot mix legacy weights and chance-basis-points");
+        }
         var rewards = new LinkedHashMap<String, CrateReward>();
+        var legacyWeights = new LinkedHashMap<String, BigDecimal>();
         for (String rawRewardId : rewardsSection.getKeys(false)) {
             String rewardId = normalize(rawRewardId);
             if (!validId(rewardId) || !rewardId.equals(rawRewardId)) throw path(file, "invalid reward ID " + rawRewardId);
             String path = "rewards." + rewardId;
             ConfigurationSection rewardSection = yaml.getConfigurationSection(path);
             if (rewardSection == null) throw path(file, path + " must be a section");
-            double weight = number(rewardSection.get("weight"), file, path + ".weight", 0, 1_000_000_000, false);
+            boolean enabled = yaml.getBoolean(path + ".enabled", true);
+            double chancePercent;
+            if (allBasisPoints) {
+                int basisPoints = integer(rewardSection.get("chance-basis-points"), file,
+                        path + ".chance-basis-points", 0, ChanceAllocator.TOTAL_BASIS_POINTS);
+                chancePercent = enabled ? basisPoints / 100.0 : 0.0;
+            } else {
+                if (enabled) {
+                    double legacyWeight = number(rewardSection.get("weight"), file, path + ".weight",
+                            0, 1_000_000_000, false);
+                    legacyWeights.put(rewardId, BigDecimal.valueOf(legacyWeight));
+                } else {
+                    legacyWeights.put(rewardId, BigDecimal.ZERO);
+                }
+                chancePercent = 0.0;
+            }
             Component rewardName = Text.parse(required(yaml, file, path + ".display-name"));
             RewardRarity rarity = enumValue(RewardRarity.class, yaml.getString(path + ".rarity", "COMMON"), file, path + ".rarity");
             var items = new ArrayList<ItemStack>();
@@ -715,10 +878,23 @@ public final class CrateRegistry {
             Text.parse(broadcast);
             Text.parse(presentation.title());
             Text.parse(presentation.subtitle());
-            rewards.put(rewardId, new CrateReward(rewardId, rewardName, weight,
-                    yaml.getBoolean(path + ".enabled", true), rarity, rewardDisplay, items, commands, points, levels,
+            rewards.put(rewardId, new CrateReward(rewardId, rewardName, chancePercent,
+                    enabled, rarity, rewardDisplay, items, commands, points, levels,
                     money, yaml.getString(path + ".required-permission", ""),
                     yaml.getString(path + ".blocked-permission", ""), limits, presentation, personal, broadcast));
+        }
+        if (!allBasisPoints) {
+            List<ChanceAllocator.WeightedChance> activeWeights = rewards.values().stream()
+                    .filter(CrateReward::enabled)
+                    .map(reward -> new ChanceAllocator.WeightedChance(reward.id(), legacyWeights.get(reward.id())))
+                    .toList();
+            if (!activeWeights.isEmpty()) {
+                ChanceAllocator.Allocation converted = ChanceAllocator.fromWeights(activeWeights);
+                var migrated = new LinkedHashMap<String, CrateReward>();
+                rewards.forEach((id, reward) -> migrated.put(id,
+                        reward.withChanceBasisPoints(reward.enabled() ? converted.basisPoints(id) : 0)));
+                rewards = migrated;
+            }
         }
         return rewards;
     }
@@ -730,11 +906,115 @@ public final class CrateRegistry {
         return yaml;
     }
 
-    private static void validateRewardInput(String id, double weight) {
-        if (!validId(normalize(id))) throw new IllegalArgumentException("Invalid reward ID");
-        if (!Double.isFinite(weight) || weight <= 0 || weight > 1_000_000_000) {
-            throw new IllegalArgumentException("Weight must be positive and finite");
+    private static void upgradeChancePool(YamlConfiguration yaml) {
+        ConfigurationSection rewards = yaml.getConfigurationSection("rewards");
+        if (rewards == null || rewards.getKeys(false).isEmpty()) return;
+        boolean any = rewards.getKeys(false).stream().anyMatch(id ->
+                yaml.contains("rewards." + id + ".chance-basis-points"));
+        boolean all = rewards.getKeys(false).stream().allMatch(id ->
+                yaml.contains("rewards." + id + ".chance-basis-points"));
+        if (any && !all) throw new IllegalArgumentException("Reward pool mixes weights and percentages");
+        if (all) {
+            zeroDisabledChances(yaml);
+            return;
         }
+
+        var weighted = new ArrayList<ChanceAllocator.WeightedChance>();
+        for (String id : rewards.getKeys(false)) {
+            if (!yaml.getBoolean("rewards." + id + ".enabled", true)) continue;
+            Object raw = yaml.get("rewards." + id + ".weight");
+            if (!(raw instanceof Number number) || !Double.isFinite(number.doubleValue()) || number.doubleValue() <= 0) {
+                throw new IllegalArgumentException("Legacy reward weight must be positive and finite: " + id);
+            }
+            weighted.add(new ChanceAllocator.WeightedChance(id, new BigDecimal(number.toString())));
+        }
+        ChanceAllocator.Allocation allocation = weighted.isEmpty() ? null : ChanceAllocator.fromWeights(weighted);
+        for (String id : rewards.getKeys(false)) {
+            int basisPoints = allocation != null && yaml.getBoolean("rewards." + id + ".enabled", true)
+                    ? allocation.basisPoints(id) : 0;
+            yaml.set("rewards." + id + ".chance-basis-points", basisPoints);
+            yaml.set("rewards." + id + ".weight", null);
+        }
+    }
+
+    private static List<ChanceAllocator.Chance> chancePool(YamlConfiguration yaml) {
+        ConfigurationSection rewards = yaml.getConfigurationSection("rewards");
+        if (rewards == null) return List.of();
+        var result = new ArrayList<ChanceAllocator.Chance>();
+        for (String id : rewards.getKeys(false)) {
+            Object raw = yaml.get("rewards." + id + ".chance-basis-points");
+            if (!(raw instanceof Number number) || number.doubleValue() != Math.rint(number.doubleValue())) {
+                throw new IllegalArgumentException("Invalid chance basis points for reward " + id);
+            }
+            int basisPoints = number.intValue();
+            result.add(new ChanceAllocator.Chance(id, basisPoints,
+                    yaml.getBoolean("rewards." + id + ".chance-locked", false)));
+        }
+        return List.copyOf(result);
+    }
+
+    private static List<ChanceAllocator.Chance> enabledChancePool(YamlConfiguration yaml) {
+        return chancePool(yaml).stream().filter(chance ->
+                yaml.getBoolean("rewards." + chance.id() + ".enabled", true)).toList();
+    }
+
+    private static void zeroDisabledChances(YamlConfiguration yaml) {
+        ConfigurationSection rewards = yaml.getConfigurationSection("rewards");
+        if (rewards == null) return;
+        for (String id : rewards.getKeys(false)) {
+            if (!yaml.getBoolean("rewards." + id + ".enabled", true)) {
+                yaml.set("rewards." + id + ".chance-basis-points", 0);
+            }
+        }
+    }
+
+    private static ChanceAllocator.Allocation rarityCurve(YamlConfiguration yaml,
+                                                            List<ChanceAllocator.Chance> chances) {
+        List<ChanceAllocator.WeightedChance> weights = chances.stream().map(chance -> {
+            RewardRarity rarity;
+            try {
+                rarity = RewardRarity.valueOf(yaml.getString(
+                        "rewards." + chance.id() + ".rarity", "COMMON").toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException error) {
+                throw new IllegalArgumentException("Invalid rarity for reward " + chance.id(), error);
+            }
+            long weight = switch (rarity) {
+                case COMMON -> 64;
+                case UNCOMMON -> 32;
+                case RARE -> 16;
+                case EPIC -> 8;
+                case LEGENDARY -> 4;
+                case MYTHIC -> 2;
+            };
+            return new ChanceAllocator.WeightedChance(chance.id(), weight);
+        }).toList();
+        return ChanceAllocator.fromWeights(weights);
+    }
+
+    private static void applyChancePool(YamlConfiguration yaml, ChanceAllocator.Allocation allocation) {
+        for (ChanceAllocator.Chance chance : allocation.chances()) {
+            String path = "rewards." + chance.id();
+            yaml.set(path + ".chance-basis-points", chance.basisPoints());
+            yaml.set(path + ".chance-locked", chance.locked());
+            yaml.set(path + ".weight", null);
+        }
+    }
+
+    private static int percentageToBasisPoints(double percentage) {
+        if (!Double.isFinite(percentage) || percentage < 0 || percentage > 100) {
+            throw new IllegalArgumentException("Chance must be between 0.00% and 100.00%");
+        }
+        try {
+            return BigDecimal.valueOf(percentage).movePointRight(2)
+                    .setScale(0, java.math.RoundingMode.UNNECESSARY).intValueExact();
+        } catch (ArithmeticException error) {
+            throw new IllegalArgumentException("Chance supports exact 0.01% precision", error);
+        }
+    }
+
+    private static void validateRewardInput(String id, double baseChancePercent) {
+        if (!validId(normalize(id))) throw new IllegalArgumentException("Invalid reward ID");
+        percentageToBasisPoints(baseChancePercent);
     }
 
     private static String required(YamlConfiguration yaml, Path file, String path) {
@@ -780,6 +1060,7 @@ public final class CrateRegistry {
     }
 
     private static void touch(YamlConfiguration yaml, String editor) {
+        yaml.set("config-version", 3);
         yaml.set("audit.updated-at", Instant.now().toString());
         yaml.set("audit.last-editor", editor);
     }

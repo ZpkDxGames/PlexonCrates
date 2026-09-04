@@ -33,9 +33,29 @@ class ChanceAllocatorTest {
     }
 
     @Test
+    void newRewardNeverChangesLockedChances() {
+        var result = ChanceAllocator.addReward(List.of(
+                new ChanceAllocator.Chance("locked", 2_000, true),
+                chance("common", 5_000), chance("rare", 3_000)), "new_reward");
+
+        assertEquals(2_000, result.basisPoints("locked"));
+        assertEquals(4_375, result.basisPoints("common"));
+        assertEquals(2_625, result.basisPoints("rare"));
+        assertEquals(1_000, result.basisPoints("new_reward"));
+    }
+
+    @Test
     void firstRewardGetsTheCompletePool() {
         var result = ChanceAllocator.addReward(List.of(), "first");
         assertEquals(10_000, result.basisPoints("first"));
+    }
+
+    @Test
+    void firstPositiveRewardLeavesPreparedZeroEntriesAtZero() {
+        var result = ChanceAllocator.addReward(List.of(chance("disabled", 0)), "first_live");
+
+        assertEquals(0, result.basisPoints("disabled"));
+        assertEquals(10_000, result.basisPoints("first_live"));
     }
 
     @Test

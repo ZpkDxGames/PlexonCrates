@@ -67,7 +67,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 case "additem" -> addItem(sender, args);
                 case "addcommand" -> addCommand(sender, args);
                 case "remove" -> remove(sender, args);
-                case "weight" -> weight(sender, args);
+                case "chance", "weight" -> chance(sender, args);
                 case "givekey" -> giveKey(sender, args);
                 case "open" -> forceOpen(sender, args);
                 default -> help(sender);
@@ -192,15 +192,16 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
         String rewardId = args[2].toLowerCase(Locale.ROOT);
-        double weight = weight(args[3]);
+        double chance = chance(args[3]);
         ItemStack held = player.getInventory().getItemInMainHand();
         if (held.getType().isAir()) {
             plugin.messages().send(sender, "hold-item");
             return;
         }
-        plugin.crates().addCapturedReward(crate.id(), rewardId, weight, held);
+        plugin.crates().addCapturedReward(crate.id(), rewardId, chance, held);
         plugin.messages().send(sender, "reward-added", Text.value("reward", rewardId),
-                Text.component("crate", crate.displayName()), Text.value("weight", weight));
+                Text.component("crate", crate.displayName()), Text.value("chance", formatChance(chance)),
+                Text.value("weight", formatChance(chance)));
     }
 
     private void addCommand(CommandSender sender, String[] args) throws Exception {
@@ -210,9 +211,9 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
         String rewardId = args[2].toLowerCase(Locale.ROOT);
-        double weight = weight(args[3]);
+        double chance = chance(args[3]);
         String rewardCommand = String.join(" ", Arrays.copyOfRange(args, 4, args.length));
-        plugin.crates().addCommandReward(crate.id(), rewardId, weight, rewardCommand);
+        plugin.crates().addCommandReward(crate.id(), rewardId, chance, rewardCommand);
         plugin.messages().send(sender, "command-reward-added", Text.value("reward", rewardId),
                 Text.component("crate", crate.displayName()));
     }
@@ -229,17 +230,18 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 Text.component("crate", crate.displayName()));
     }
 
-    private void weight(CommandSender sender, String[] args) throws Exception {
+    private void chance(CommandSender sender, String[] args) throws Exception {
         Crate crate = crate(sender, args, 1);
         if (crate == null || args.length < 4) {
             help(sender);
             return;
         }
         String rewardId = args[2].toLowerCase(Locale.ROOT);
-        double value = weight(args[3]);
-        plugin.crates().setWeight(crate.id(), rewardId, value);
-        plugin.messages().send(sender, "weight-updated", Text.value("reward", rewardId),
-                Text.component("crate", crate.displayName()), Text.value("weight", value));
+        double value = chance(args[3]);
+        plugin.crates().setChanceBasisPoints(crate.id(), rewardId, (int) Math.round(value * 100.0));
+        plugin.messages().send(sender, "chance-updated", Text.value("reward", rewardId),
+                Text.component("crate", crate.displayName()), Text.value("chance", formatChance(value)),
+                Text.value("weight", formatChance(value)));
     }
 
     private void giveKey(CommandSender sender, String[] args) {
@@ -304,7 +306,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             case "gui", "help", "status" -> "plexoncrates.admin.gui";
             case "create", "edit", "clone", "import", "export", "delete" -> "plexoncrates.admin.crates";
             case "keys" -> "plexoncrates.admin.keys";
-            case "additem", "addcommand", "remove", "weight" -> "plexoncrates.admin.rewards";
+            case "additem", "addcommand", "remove", "chance", "weight" -> "plexoncrates.admin.rewards";
             case "wand", "link", "unlink", "set", "unset" -> "plexoncrates.admin.locations";
             case "givekey", "open" -> "plexoncrates.admin.give";
             case "reload", "validate", "save" -> "plexoncrates.admin.reload";
@@ -338,14 +340,23 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         throw new PlayersOnly();
     }
 
-    private static double weight(String raw) {
+    private static double chance(String raw) {
         try {
-            double value = Double.parseDouble(raw);
-            if (!Double.isFinite(value) || value <= 0 || value > 1_000_000_000) throw new NumberFormatException();
+            String normalized = raw.trim();
+            if (normalized.endsWith("%")) normalized = normalized.substring(0, normalized.length() - 1).trim();
+            if (normalized.contains("%")) throw new NumberFormatException();
+            double value = Double.parseDouble(normalized);
+            if (!Double.isFinite(value) || value < 0 || value > 100) throw new NumberFormatException();
+            java.math.BigDecimal.valueOf(value).movePointRight(2)
+                    .setScale(0, java.math.RoundingMode.UNNECESSARY).intValueExact();
             return value;
-        } catch (NumberFormatException error) {
-            throw new IllegalArgumentException("Weight must be a finite number greater than zero");
+        } catch (NumberFormatException | ArithmeticException error) {
+            throw new IllegalArgumentException("Chance must be from 0.00% to 100.00% with at most two decimals");
         }
+    }
+
+    private static String formatChance(double value) {
+        return String.format(Locale.ROOT, "%.2f", value);
     }
 
     private static int positive(String raw, int maximum) {
@@ -370,9 +381,9 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(Text.parse("<white>/pcrates delete <crate></white> <dark_gray>•</dark_gray> <white>keys [sync]</white> <dark_gray>•</dark_gray> <white>wand [crate]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates link <crate></white> <dark_gray>—</dark_gray> <gray>Link the block you are looking at.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates unlink</white> <dark_gray>—</dark_gray> <gray>Confirm unlinking the target block.</gray>"));
-        sender.sendMessage(Text.parse("<white>/pcrates additem <crate> <id> <weight></white> <dark_gray>—</dark_gray> <gray>Capture the held item.</gray>"));
-        sender.sendMessage(Text.parse("<white>/pcrates addcommand <crate> <id> <weight> <command></white>"));
-        sender.sendMessage(Text.parse("<white>/pcrates remove <crate> <reward></white> <dark_gray>•</dark_gray> <white>weight <crate> <reward> <weight></white>"));
+        sender.sendMessage(Text.parse("<white>/pcrates additem [crate] [id] [chance%]</white> <dark_gray>—</dark_gray> <gray>Capture the held item.</gray>"));
+        sender.sendMessage(Text.parse("<white>/pcrates addcommand [crate] [id] [chance%] [command]</white>"));
+        sender.sendMessage(Text.parse("<white>/pcrates remove [crate] [reward]</white> <dark_gray>•</dark_gray> <white>chance [crate] [reward] [percent]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates givekey <player> <key> [amount]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates open <player> <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Administrative keyless opening.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates validate</white> <dark_gray>•</dark_gray> <white>reload</white> <dark_gray>•</dark_gray> <white>backup</white> <dark_gray>•</dark_gray> <white>status</white> <dark_gray>•</dark_gray> <white>diagnose</white>"));
@@ -383,10 +394,10 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                                                  @NotNull String alias, @NotNull String[] args) {
         if (!sender.hasPermission("plexoncrates.admin") && !sender.hasPermission("plexoncrates.admin.gui")) return List.of();
         if (args.length == 1) return filter(List.of("gui", "create", "edit", "clone", "import", "export", "delete", "keys", "wand",
-                "link", "unlink", "set", "unset", "additem", "addcommand", "remove", "weight", "givekey",
+                "link", "unlink", "set", "unset", "additem", "addcommand", "remove", "chance", "givekey",
                 "open", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
         String action = args[0].toLowerCase(Locale.ROOT);
-        if (args.length == 2 && List.of("edit", "export", "delete", "link", "set", "additem", "addcommand", "remove", "weight").contains(action)) {
+        if (args.length == 2 && List.of("edit", "export", "delete", "link", "set", "additem", "addcommand", "remove", "chance", "weight").contains(action)) {
             return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[1]);
         }
         if (args.length == 2 && action.equals("clone")) return filter(plugin.crates().orderedAdmin().stream().map(Crate::id).toList(), args[1]);
@@ -401,10 +412,10 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (args.length == 3 && action.equals("open")) {
             return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[2]);
         }
-        if (args.length == 3 && List.of("remove", "weight").contains(action)) {
+        if (args.length == 3 && List.of("remove", "chance", "weight").contains(action)) {
             return plugin.crates().find(args[1]).map(crate -> filter(new ArrayList<>(crate.rewards().keySet()), args[2])).orElse(List.of());
         }
-        if ((args.length == 4 && List.of("additem", "addcommand", "weight").contains(action))
+        if ((args.length == 4 && List.of("additem", "addcommand", "chance", "weight").contains(action))
                 || (args.length == 4 && List.of("givekey", "open").contains(action))) {
             return filter(List.of("1", "5", "10", "64"), args[3]);
         }

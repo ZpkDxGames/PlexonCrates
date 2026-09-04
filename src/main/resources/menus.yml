@@ -30,8 +30,8 @@ preview:
   reward-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34]
   reward-lore:
   - ''
-  - <gray>Chance</gray> <dark_gray>»</dark_gray> <yellow><chance>%</yellow>
-  - <gray>Weight</gray> <dark_gray>»</dark_gray> <white><weight></white>
+  - <gray>Eligible chance</gray> <dark_gray>»</dark_gray> <yellow><eligible_chance>%</yellow>
+  - <gray>Base chance</gray> <dark_gray>»</dark_gray> <white><base_chance>%</white>
   open:
     slot: 49
     material: TRIPWIRE_HOOK
@@ -241,13 +241,40 @@ key-select:
   back: {slot: 49, material: OAK_DOOR, name: <gray>Back</gray>, lore: []}
   next: {slot: 51, material: ARROW, name: <gray>Next</gray>, lore: []}
 
+reward-pool:
+  title: <crate> <dark_gray>›</dark_gray> <yellow>Rewards</yellow>
+  size: 54
+  reward-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39, 40, 41, 42, 43]
+  empty: {material: HOPPER, name: <gray>Drop an item here</gray>, lore: [<dark_gray>Your item is copied, never moved.</dark_gray>]}
+  add-special: {slot: 45, material: COMMAND_BLOCK, name: <gold>Add Special Reward</gold>, lore: [<gray>Create a command, XP, level, money, or mixed reward.</gray>]}
+  search: {slot: 46, material: COMPASS, name: <aqua>Search / Filter</aqua>, lore: [<gray>Filter by display name or internal ID.</gray>]}
+  previous: {slot: 47, material: ARROW, name: <gray>Previous Page</gray>, lore: [<dark_gray>This position remains stable on every page.</dark_gray>]}
+  back: {slot: 48, material: OAK_DOOR, name: <gray>Back to Crate Studio</gray>, lore: []}
+  status:
+    slot: 49
+    material: FILLED_MAP
+    name: <yellow>Pool Health</yellow>
+    lore:
+    - '<gray>Rewards:</gray> <white><count></white>'
+    - '<gray>Base total:</gray> <white><total>%</white>'
+    - '<gray>State:</gray> <state>'
+    - <dark_gray>Drag or shift-click to copy an exact item.</dark_gray>
+  preview: {slot: 50, material: ENDER_EYE, name: <aqua>Preview Pool</aqua>, lore: []}
+  next: {slot: 51, material: ARROW, name: <gray>Next Page</gray>, lore: [<dark_gray>This position remains stable on every page.</dark_gray>]}
+  balance:
+    slot: 52
+    material: COMPARATOR
+    name: <light_purple>Balance Chances</light_purple>
+    lore: [<gray>Left relative • Right equal</gray>, <gray>Shift-left rarity • Shift-right unlocked</gray>]
+  done: {slot: 53, material: LIME_CONCRETE, name: <green>Done</green>, lore: []}
+
 reward-builder:
   title: <light_purple>Reward Builder</light_purple> <dark_gray>•</dark_gray> <white><reward_id></white>
   size: 54
   item-slots: [10, 11, 12, 13, 14, 15, 16]
   input-placeholder: {slot: 4, material: HOPPER, name: <yellow>Drop Exact Reward Items Here</yellow>, lore: [<gray>Drag, cursor-click, or shift-click.</gray>, <dark_gray>Original items remain untouched.</dark_gray>]}
   name: {slot: 19, material: NAME_TAG, name: <white>Display Name</white>, lore: []}
-  weight: {slot: 21, material: HEAVY_WEIGHTED_PRESSURE_PLATE, name: <yellow>Weight</yellow>, lore: ['<gray>Current:</gray> <white><weight></white>', '<gray>Base chance:</gray> <white><chance>%</white>', <dark_gray>Left +1 • Right -1 • Shift direct</dark_gray>]}
+  chance: {slot: 21, material: LIME_DYE, name: <yellow>Base Chance</yellow>, lore: ['<gray>Current:</gray> <white><chance>%</white>', <dark_gray>Left +1% • Right -1% • Shift exact</dark_gray>, <gray>Other unlocked rewards rebalance automatically.</gray>]}
   command: {slot: 23, material: COMMAND_BLOCK, name: <gold>Console Commands</gold>, lore: ['<gray>Commands:</gray> <white><commands></white>', <dark_gray>Left add • Right remove • Shift-left edit</dark_gray>, <dark_gray>Shift-right reorder</dark_gray>]}
   experience: {slot: 25, material: EXPERIENCE_BOTTLE, name: <green>Experience</green>, lore: ['<gray>Left: points • Right: levels</gray>', '<gray>Points:</gray> <white><points></white> <gray>Levels:</gray> <white><levels></white>']}
   money: {slot: 29, material: GOLD_INGOT, name: <gold>Vault Money</gold>, lore: ['<gray>Amount:</gray> <white><money></white>']}

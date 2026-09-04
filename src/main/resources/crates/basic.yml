@@ -1,4 +1,4 @@
-config-version: 2
+config-version: 3
 id: basic
 state: PUBLISHED
 display-order: 10
@@ -42,7 +42,7 @@ rewards:
   coal_cache:
     enabled: true
     display-name: <white><bold>Coal Cache</bold></white>
-    weight: 28
+    chance-basis-points: 2800
     items:
       coal:
         material: COAL
@@ -51,7 +51,7 @@ rewards:
   iron_supplies:
     enabled: true
     display-name: <white><bold>Iron Supplies</bold></white>
-    weight: 24
+    chance-basis-points: 2400
     items:
       iron:
         material: IRON_INGOT
@@ -60,7 +60,7 @@ rewards:
   explorers_meal:
     enabled: true
     display-name: <gold><bold>Explorer's Meal</bold></gold>
-    weight: 18
+    chance-basis-points: 1800
     items:
       food:
         material: COOKED_BEEF
@@ -69,7 +69,7 @@ rewards:
   redstone_parts:
     enabled: true
     display-name: <red><bold>Redstone Parts</bold></red>
-    weight: 12
+    chance-basis-points: 1200
     items:
       redstone:
         material: REDSTONE
@@ -78,7 +78,7 @@ rewards:
   lapis_pouch:
     enabled: true
     display-name: <blue><bold>Lapis Pouch</bold></blue>
-    weight: 8
+    chance-basis-points: 800
     items:
       lapis:
         material: LAPIS_LAZULI
@@ -87,7 +87,7 @@ rewards:
   experience_boost:
     enabled: true
     display-name: <green><bold>150 Experience</bold></green>
-    weight: 6
+    chance-basis-points: 600
     display:
       material: EXPERIENCE_BOTTLE
       amount: 1
@@ -97,7 +97,7 @@ rewards:
   emerald_find:
     enabled: true
     display-name: <green><bold>Emerald Find</bold></green>
-    weight: 3
+    chance-basis-points: 300
     items:
       emeralds:
         material: EMERALD
@@ -106,7 +106,7 @@ rewards:
   diamond_spark:
     enabled: true
     display-name: <aqua><bold>Diamond Spark</bold></aqua>
-    weight: 1
+    chance-basis-points: 100
     broadcast: <gray><player> uncovered a <aqua><bold>Diamond Spark</bold></aqua> <gray>from <crate><gray>!</gray>
     items:
       diamonds:

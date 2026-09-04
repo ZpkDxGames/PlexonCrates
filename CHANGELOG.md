@@ -12,6 +12,13 @@ All notable PlexonCrates changes are documented here.
 - Added the integer `ChanceAllocator` with exact basis-point totals, stable largest-remainder migration/normalization, predictable new-reward allocation, locked edits, balancing tools, and integer ticket boundaries.
 - Added `ItemSnapshotCodec` for non-destructive amount-one Paper byte snapshots, SHA-256 verification, diagnostic metadata, payload bounds, and exact maximum-stack-size delivery splitting.
 
+### Percentage runtime
+
+- Replaced normal reward weights with exact base-chance percentages and `chance-basis-points` in bundled version 3 definitions.
+- Added proportional add/edit/remove redistribution, disabled-reward zeroing, lock support, equal/relative/unlocked/rarity balance modes, and exact publication validation.
+- Converted legacy version 2 weights deterministically while retaining deprecated API and command aliases for 3.x compatibility.
+- Switched runtime selection to unbiased integer tickets and clearly separated configured base chance from the player's current eligible chance.
+
 ### Documentation
 
 - Adopted the expanded 3.0 implementation specification, including the one-edition/unlimited-definition contract and the original PhoenixCrates-benchmarked GUI usability boundary.

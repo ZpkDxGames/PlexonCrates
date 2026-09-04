@@ -1,4 +1,4 @@
-config-version: 2
+config-version: 3
 id: rare
 state: PUBLISHED
 display-order: 20
@@ -42,7 +42,7 @@ rewards:
   iron_reserve:
     enabled: true
     display-name: <white><bold>Iron Reserve</bold></white>
-    weight: 27
+    chance-basis-points: 2700
     items:
       iron:
         material: IRON_INGOT
@@ -51,7 +51,7 @@ rewards:
   golden_cache:
     enabled: true
     display-name: <gold><bold>Golden Cache</bold></gold>
-    weight: 22
+    chance-basis-points: 2200
     items:
       gold:
         material: GOLD_INGOT
@@ -60,7 +60,7 @@ rewards:
   emerald_bundle:
     enabled: true
     display-name: <green><bold>Emerald Bundle</bold></green>
-    weight: 17
+    chance-basis-points: 1700
     items:
       emeralds:
         material: EMERALD
@@ -69,7 +69,7 @@ rewards:
   experience_surge:
     enabled: true
     display-name: <green><bold>500 Experience</bold></green>
-    weight: 14
+    chance-basis-points: 1400
     display:
       material: EXPERIENCE_BOTTLE
       amount: 1
@@ -79,7 +79,7 @@ rewards:
   diamond_bundle:
     enabled: true
     display-name: <aqua><bold>Diamond Bundle</bold></aqua>
-    weight: 10
+    chance-basis-points: 1000
     items:
       diamonds:
         material: DIAMOND
@@ -88,7 +88,7 @@ rewards:
   gilded_apples:
     enabled: true
     display-name: <gold><bold>Gilded Apples</bold></gold>
-    weight: 6
+    chance-basis-points: 600
     items:
       apples:
         material: GOLDEN_APPLE
@@ -97,7 +97,7 @@ rewards:
   miners_pickaxe:
     enabled: true
     display-name: <aqua><bold>Miner's Pickaxe</bold></aqua>
-    weight: 3
+    chance-basis-points: 300
     items:
       pickaxe:
         material: DIAMOND_PICKAXE
@@ -112,7 +112,7 @@ rewards:
   ancient_fragments:
     enabled: true
     display-name: <dark_purple><bold>Ancient Fragments</bold></dark_purple>
-    weight: 1
+    chance-basis-points: 100
     broadcast: <gray><player> recovered <dark_purple><bold>Ancient Fragments</bold></dark_purple> <gray>from <crate><gray>!</gray>
     items:
       debris:

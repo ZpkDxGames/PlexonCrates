@@ -41,7 +41,7 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 
-/** Complete 2.0 administrative menu router. Functional actions live in holders, never display text. */
+/** Administrative menu router. Functional actions live in holders, never display text. */
 public final class AdminMenuService {
     private final PlexonCrates plugin;
     private final NamespacedKey editorItem;
@@ -197,11 +197,6 @@ public final class AdminMenuService {
     public void openRewardBuilder(Player player) {
         EditSessionService.RewardDraft draft = plugin.editSessions().reward(player);
         if (draft == null) { openDashboard(player); return; }
-        Crate crate = plugin.crates().find(draft.crateId()).orElseThrow();
-        double otherWeight = crate.orderedRewards().stream()
-                .filter(CrateReward::enabled).filter(reward -> !reward.id().equals(draft.id()))
-                .mapToDouble(CrateReward::weight).sum();
-        double chance = draft.enabled() ? draft.weight() / (otherWeight + draft.weight()) * 100.0 : 0.0;
         MenuConfig menus = plugin.menusConfig();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.REWARD_BUILDER, draft.crateId(), draft.id(), 0, true);
         Inventory inventory = create(holder, menus.size("reward-builder"),
@@ -217,8 +212,8 @@ public final class AdminMenuService {
         }
         for (int slot : itemSlots) holder.bind(slot, "reward-input", draft.id());
         put(inventory, holder, "reward-builder", "name", "name");
-        put(inventory, holder, "reward-builder", "weight", "weight", Text.value("weight", format(draft.weight())),
-                Text.value("chance", format(chance)));
+        put(inventory, holder, "reward-builder", "chance", "chance",
+                Text.value("chance", format(draft.baseChancePercent())));
         put(inventory, holder, "reward-builder", "command", "command", Text.value("commands", draft.commands().size()));
         put(inventory, holder, "reward-builder", "experience", "experience", Text.value("points", draft.experiencePoints()), Text.value("levels", draft.experienceLevels()));
         put(inventory, holder, "reward-builder", "money", "money", Text.value("money", format(draft.money())));
@@ -242,6 +237,18 @@ public final class AdminMenuService {
     public void editReward(Player player, Crate crate, CrateReward reward) {
         int index = crate.orderedRewards().indexOf(reward);
         plugin.editSessions().beginReward(player, crate.id(), reward, Math.max(0, index));
+        openRewardBuilder(player);
+    }
+
+    public void beginSpecialReward(Player player, String crateId) {
+        Crate crate = plugin.crates().find(crateId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown crate"));
+        String id;
+        do {
+            id = "special_reward_" + UUID.randomUUID().toString().replace("-", "").substring(0, 4);
+        } while (crate.rewards().containsKey(id));
+        EditSessionService.RewardDraft draft = plugin.editSessions().beginReward(player, crate.id(), id);
+        draft.displayName(Text.parse("<gold><bold>Special Reward</bold></gold>"));
         openRewardBuilder(player);
     }
 
@@ -311,7 +318,8 @@ public final class AdminMenuService {
             ItemStack icon = entry.reward().displayCopy();
             appendLore(icon, List.of(Component.empty(),
                     Text.parse("<gray>Crate</gray> <dark_gray>»</dark_gray> <white>" + entry.crate().id() + "</white>"),
-                    Text.parse("<gray>Weight</gray> <dark_gray>»</dark_gray> <yellow>" + format(entry.reward().weight()) + "</yellow>")));
+                    Text.parse("<gray>Base chance</gray> <dark_gray>»</dark_gray> <yellow>"
+                            + format(entry.reward().baseChancePercent()) + "%</yellow>")));
             inventory.setItem(slots.get(index), icon);
         }
         addNavigation(inventory, holder, "global-rewards", page, rewards.size(), slots.size());
@@ -442,7 +450,7 @@ public final class AdminMenuService {
             case "confirm" -> confirmDraft(player, holder.kind());
             case "cancel" -> cancelDraft(player, holder.kind(), holder.crateId());
             case "select-key" -> selectKey(player, holder.crateId(), action.value());
-            case "weight" -> editWeight(player, event);
+            case "chance" -> editChance(player, event);
             case "command" -> editCommand(player, event);
             case "experience" -> editExperience(player, event.isRightClick());
             case "money" -> editMoney(player);
@@ -738,14 +746,14 @@ public final class AdminMenuService {
             EditSessionService.RewardDraft draft = plugin.editSessions().reward(player);
             if (draft == null || !draft.deliverable()) throw new IllegalArgumentException("Add an item, command, XP, or money first");
             if (draft.editing()) {
-                plugin.crates().updateBundleReward(draft.crateId(), draft.id(), draft.displayName(), draft.weight(),
+                plugin.crates().updateBundleReward(draft.crateId(), draft.id(), draft.displayName(), draft.baseChancePercent(),
                         draft.enabled(), draft.rarity(), draft.displayItem(), draft.items(), draft.commands(),
                         draft.experiencePoints(), draft.experienceLevels(), draft.money(), draft.limits(),
                         draft.requiredPermission(), draft.blockedPermission(), draft.presentation(),
                         draft.personalMessage(), draft.broadcast(), player.getName());
                 if (draft.orderChanged()) plugin.crates().moveReward(draft.crateId(), draft.id(), draft.orderIndex(), player.getName());
             } else {
-                plugin.crates().addBundleReward(draft.crateId(), draft.id(), draft.displayName(), draft.weight(), draft.rarity(),
+                plugin.crates().addBundleReward(draft.crateId(), draft.id(), draft.displayName(), draft.baseChancePercent(), draft.rarity(),
                         draft.items(), draft.commands(), draft.experiencePoints(), draft.experienceLevels(), draft.money(),
                         draft.limits(), draft.requiredPermission(), draft.blockedPermission(), draft.presentation(),
                         draft.personalMessage(), draft.broadcast(), player.getName());
@@ -767,16 +775,17 @@ public final class AdminMenuService {
         }
     }
 
-    private void editWeight(Player player, InventoryClickEvent event) {
+    private void editChance(Player player, InventoryClickEvent event) {
         EditSessionService.RewardDraft draft = plugin.editSessions().reward(player);
         if (!event.isShiftClick()) {
-            double next = event.isRightClick() ? Math.max(0.001, draft.weight() - 1.0) : draft.weight() + 1.0;
-            draft.weight(next);
+            double delta = event.isRightClick() ? -1.0 : 1.0;
+            double next = Math.max(0.0, Math.min(100.0, draft.baseChancePercent() + delta));
+            draft.baseChancePercent(next);
             openRewardBuilder(player);
             return;
         }
-        plugin.editSessions().request(player, Text.parse("<yellow>Enter the positive relative reward weight:</yellow>"), (target, value) -> {
-            plugin.editSessions().reward(target).weight(Double.parseDouble(value));
+        plugin.editSessions().request(player, Text.parse("<yellow>Enter the exact base chance from 0.00% to 100.00%:</yellow>"), (target, value) -> {
+            plugin.editSessions().reward(target).baseChancePercent(Double.parseDouble(value.replace("%", "").trim()));
             openRewardBuilder(target);
         });
     }
@@ -1060,7 +1069,7 @@ public final class AdminMenuService {
             case "keys", "sync", "key-entry", "duplicate-key", "import-keys", "confirm-key-delete" ->
                     "plexoncrates.admin.keys";
             case "locations", "location", "wand", "wand-select", "confirm-unlink" -> "plexoncrates.admin.locations";
-            case "rewards", "create-reward", "weight", "command", "experience", "money", "rarity",
+            case "rewards", "create-reward", "chance", "command", "experience", "money", "rarity",
                     "permissions", "limits", "messages", "effects", "enabled", "reward-order", "clear" ->
                     "plexoncrates.admin.rewards";
             case "validate", "reload" -> "plexoncrates.admin.reload";

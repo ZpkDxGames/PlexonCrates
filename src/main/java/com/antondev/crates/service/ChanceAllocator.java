@@ -108,18 +108,35 @@ public final class ChanceAllocator {
         }
         if (input.isEmpty()) return complete(List.of(new Chance(id, TOTAL_BASIS_POINTS, false)));
 
-        int newChance = defaultNewRewardBasisPoints(input.size() + 1);
-        int remaining = TOTAL_BASIS_POINTS - newChance;
-        List<BigDecimal> weights = input.stream()
-                .map(chance -> BigDecimal.valueOf(Math.max(0, chance.basisPoints())))
-                .toList();
-        if (weights.stream().allMatch(weight -> weight.signum() == 0)) {
-            weights = input.stream().map(ignored -> BigDecimal.ONE).toList();
+        List<Integer> positive = indexes(input, chance -> chance.basisPoints() > 0);
+        if (positive.isEmpty()) {
+            var output = zeroed(input);
+            output.add(new Chance(id, TOTAL_BASIS_POINTS, false));
+            return complete(output);
         }
-        int[] allocated = apportion(remaining, weights, input.stream().map(Chance::id).toList());
-        var output = new ArrayList<Chance>(input.size() + 1);
+
+        int lockedTotal = input.stream().filter(Chance::locked).mapToInt(Chance::basisPoints).sum();
+        if (lockedTotal >= TOTAL_BASIS_POINTS) {
+            throw new IllegalArgumentException("Unlock an existing reward before adding another positive chance");
+        }
+        List<Integer> adjustable = indexes(input,
+                chance -> !chance.locked() && chance.basisPoints() > 0);
+        int newChance = adjustable.isEmpty()
+                ? TOTAL_BASIS_POINTS - lockedTotal
+                : Math.min(defaultNewRewardBasisPoints(input.size() + 1), TOTAL_BASIS_POINTS - lockedTotal);
+        int remaining = TOTAL_BASIS_POINTS - lockedTotal - newChance;
+        var output = zeroed(input);
         for (int index = 0; index < input.size(); index++) {
-            output.add(input.get(index).withBasisPoints(allocated[index]));
+            if (input.get(index).locked()) output.set(index, input.get(index));
+        }
+        if (!adjustable.isEmpty()) {
+            int[] allocated = apportion(remaining,
+                    adjustable.stream().map(index -> BigDecimal.valueOf(input.get(index).basisPoints())).toList(),
+                    adjustable.stream().map(index -> input.get(index).id()).toList());
+            for (int index = 0; index < adjustable.size(); index++) {
+                int sourceIndex = adjustable.get(index);
+                output.set(sourceIndex, input.get(sourceIndex).withBasisPoints(allocated[index]));
+            }
         }
         output.add(new Chance(id, newChance, false));
         return complete(output);

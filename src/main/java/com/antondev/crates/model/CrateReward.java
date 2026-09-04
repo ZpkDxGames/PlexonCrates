@@ -11,7 +11,7 @@ import org.bukkit.inventory.ItemStack;
 public record CrateReward(
         String id,
         Component displayName,
-        double weight,
+        double baseChancePercent,
         boolean enabled,
         RewardRarity rarity,
         ItemStack displayItem,
@@ -32,16 +32,18 @@ public record CrateReward(
         items = items.stream().map(ItemStack::clone).toList();
         commands = List.copyOf(commands);
         presentation = java.util.Objects.requireNonNull(presentation, "presentation");
-        if (!Double.isFinite(weight) || weight <= 0) throw new IllegalArgumentException("Reward weight must be positive and finite");
+        if (!Double.isFinite(baseChancePercent) || baseChancePercent < 0 || baseChancePercent > 100) {
+            throw new IllegalArgumentException("Reward chance must be between 0.00% and 100.00%");
+        }
         if (!Double.isFinite(money) || money < 0) throw new IllegalArgumentException("Reward money cannot be negative");
         if (experiencePoints < 0 || experienceLevels < 0) throw new IllegalArgumentException("Reward experience cannot be negative");
     }
 
     /** Source-compatible constructor retained for the 1.0 public model/tests. */
-    public CrateReward(String id, Component displayName, double weight, boolean enabled,
+    public CrateReward(String id, Component displayName, double legacyChanceValue, boolean enabled,
                        ItemStack displayItem, List<ItemStack> items, List<String> commands,
                        String requiredPermission, String blockedPermission, String broadcast) {
-        this(id, displayName, weight, enabled, RewardRarity.COMMON, displayItem, items, commands,
+        this(id, displayName, legacyChanceValue, enabled, RewardRarity.COMMON, displayItem, items, commands,
                 0, 0, 0.0, requiredPermission, blockedPermission, RewardLimits.unlimited(),
                 RewardPresentation.none(), "", broadcast);
     }
@@ -49,11 +51,29 @@ public record CrateReward(
     @Override public ItemStack displayItem() { return displayItem.clone(); }
     @Override public List<ItemStack> items() { return items.stream().map(ItemStack::clone).toList(); }
 
+    /**
+     * Compatibility accessor retained through 3.x. The value is now a base
+     * percentage, not an arbitrary relative weight.
+     */
+    @Deprecated(forRemoval = false)
+    public double weight() { return baseChancePercent; }
+
+    public int chanceBasisPoints() { return (int) Math.round(baseChancePercent * 100.0); }
+
+    public CrateReward withChanceBasisPoints(int basisPoints) {
+        if (basisPoints < 0 || basisPoints > 10_000) {
+            throw new IllegalArgumentException("Reward chance must be between 0 and 10,000 basis points");
+        }
+        return new CrateReward(id, displayName, basisPoints / 100.0, enabled, rarity, displayItem, items, commands,
+                experiencePoints, experienceLevels, money, requiredPermission, blockedPermission, limits,
+                presentation, personalMessage, broadcast);
+    }
+
     public ItemStack displayCopy() { return displayItem.clone(); }
     public List<ItemStack> itemCopies() { return items.stream().map(ItemStack::clone).toList(); }
 
     public boolean eligible(Player player) {
-        return enabled
+        return enabled && chanceBasisPoints() > 0
                 && (requiredPermission.isBlank() || player.hasPermission(requiredPermission))
                 && (blockedPermission.isBlank() || !player.hasPermission(blockedPermission));
     }

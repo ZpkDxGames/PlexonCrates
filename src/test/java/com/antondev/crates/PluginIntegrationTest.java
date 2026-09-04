@@ -44,7 +44,7 @@ class PluginIntegrationTest {
         assertEquals("exact cached/configured templates", plugin.keys().sourceLabel());
         for (var crate : plugin.crates().ordered()) {
             assertTrue(crate.enabled());
-            assertEquals(100.0, crate.rewards().values().stream().mapToDouble(reward -> reward.weight()).sum(), 0.00001);
+            assertEquals(10_000, crate.rewards().values().stream().mapToInt(reward -> reward.chanceBasisPoints()).sum());
             assertTrue(plugin.keys().template(crate.keyId()).isPresent());
         }
         var shulkers = plugin.crates().find("epic").orElseThrow().rewards().get("shulker_pack").itemCopies();
@@ -88,6 +88,44 @@ class PluginIntegrationTest {
         assertEquals(1, stored.size());
         assertEquals(7, stored.getFirst().getAmount());
         assertTrue(stored.getFirst().isSimilar(original));
+        var updated = plugin.crates().find("basic").orElseThrow();
+        assertEquals(1_000, updated.rewards().get("external_reward").chanceBasisPoints());
+        assertEquals(10_000, updated.rewards().values().stream()
+                .filter(reward -> reward.enabled()).mapToInt(reward -> reward.chanceBasisPoints()).sum());
+        String serialized = plugin.crates().serialized("basic");
+        assertTrue(serialized.contains("chance-basis-points:"));
+        assertFalse(serialized.contains("weight:"));
+    }
+
+    @Test
+    void firstRewardAndExactChanceEditsMaintainCompleteTicketPools() throws Exception {
+        plugin.crates().createDraft("chance_test", "TEST");
+        plugin.crates().addCapturedReward("chance_test", "first", 1.0, new ItemStack(Material.STONE));
+        assertEquals(10_000, plugin.crates().find("chance_test").orElseThrow()
+                .rewards().get("first").chanceBasisPoints());
+
+        plugin.crates().addCapturedReward("chance_test", "second", 10.0, new ItemStack(Material.DIAMOND));
+        plugin.crates().setChanceBasisPoints("chance_test", "second", 1);
+
+        var rewards = plugin.crates().find("chance_test").orElseThrow().rewards();
+        assertEquals(9_999, rewards.get("first").chanceBasisPoints());
+        assertEquals(1, rewards.get("second").chanceBasisPoints());
+        assertEquals(10_000, rewards.values().stream().mapToInt(reward -> reward.chanceBasisPoints()).sum());
+    }
+
+    @Test
+    void chanceBalancePresetsRemainExact() throws Exception {
+        plugin.crates().balanceChances("basic",
+                com.antondev.crates.service.CrateRegistry.ChanceBalanceMode.EQUAL, "TEST");
+        var equal = plugin.crates().find("basic").orElseThrow().orderedRewards();
+        assertEquals(List.of(1_250, 1_250, 1_250, 1_250, 1_250, 1_250, 1_250, 1_250),
+                equal.stream().map(reward -> reward.chanceBasisPoints()).toList());
+
+        plugin.crates().balanceChances("basic",
+                com.antondev.crates.service.CrateRegistry.ChanceBalanceMode.RARITY_CURVE, "TEST");
+        var curved = plugin.crates().find("basic").orElseThrow().orderedRewards();
+        assertEquals(10_000, curved.stream().mapToInt(reward -> reward.chanceBasisPoints()).sum());
+        assertTrue(curved.getFirst().chanceBasisPoints() > curved.getLast().chanceBasisPoints());
     }
 
     @Test

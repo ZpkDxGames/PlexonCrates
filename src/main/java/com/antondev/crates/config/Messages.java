@@ -14,7 +14,7 @@ public final class Messages {
             "invalid-amount", "no-key", "no-eligible-rewards", "inventory-full", "already-opening",
             "cooldown", "opened", "bulk-opened", "reward-overflow", "reloaded", "config-error",
             "target-required", "location-set", "location-removed", "location-not-found", "location-protected",
-            "reward-added", "command-reward-added", "reward-removed", "weight-updated", "hold-item",
+            "reward-added", "command-reward-added", "reward-removed", "chance-updated", "hold-item",
             "key-given", "forced-open", "player-not-found", "statistics-saved", "status");
     private static final List<String> REQUIRED_2 = List.of(
             "opening-cancelled", "opening-state-changed", "opening-failed", "database-error",
@@ -26,6 +26,12 @@ public final class Messages {
 
     private Messages(YamlConfiguration yaml) {
         this.yaml = yaml;
+        if (!yaml.contains("chance-updated") && yaml.contains("weight-updated")) {
+            yaml.set("chance-updated", yaml.get("weight-updated"));
+        }
+        if (!yaml.contains("invalid-chance") && yaml.contains("invalid-weight")) {
+            yaml.set("invalid-chance", yaml.get("invalid-weight"));
+        }
         this.prefix = yaml.getString("prefix", "");
         for (String key : REQUIRED) {
             if (!(yaml.get(key) instanceof String)) throw new IllegalArgumentException("Missing text in messages.yml: " + key);

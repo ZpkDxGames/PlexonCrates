@@ -81,7 +81,7 @@ public final class EditSessionService implements Listener {
         draft.displayItem = source.displayCopy();
         source.itemCopies().forEach(item -> draft.items.add(item.clone()));
         draft.commands.addAll(source.commands());
-        draft.weight = source.weight();
+        draft.baseChancePercent = source.baseChancePercent();
         draft.rarity = source.rarity();
         draft.experiencePoints = source.experiencePoints();
         draft.experienceLevels = source.experienceLevels();
@@ -209,7 +209,7 @@ public final class EditSessionService implements Listener {
         private ItemStack displayItem;
         private boolean editing;
         private boolean enabled = true;
-        private double weight = 10.0;
+        private double baseChancePercent = 10.0;
         private RewardRarity rarity = RewardRarity.COMMON;
         private final List<ItemStack> items = new ArrayList<>();
         private final List<String> commands = new ArrayList<>();
@@ -239,11 +239,24 @@ public final class EditSessionService implements Listener {
         public boolean editing() { return editing; }
         public boolean enabled() { return enabled; }
         public void toggleEnabled() { enabled = !enabled; touch(); }
-        public double weight() { return weight; }
-        public void weight(double value) {
-            if (!Double.isFinite(value) || value <= 0 || value > 1_000_000_000) throw new IllegalArgumentException("Weight must be positive and finite");
-            weight = value; touch();
+        public double baseChancePercent() { return baseChancePercent; }
+        public void baseChancePercent(double value) {
+            if (!Double.isFinite(value) || value < 0 || value > 100) {
+                throw new IllegalArgumentException("Chance must be between 0.00% and 100.00%");
+            }
+            try {
+                java.math.BigDecimal.valueOf(value).movePointRight(2)
+                        .setScale(0, java.math.RoundingMode.UNNECESSARY).intValueExact();
+            } catch (ArithmeticException error) {
+                throw new IllegalArgumentException("Chance supports exact 0.01% precision", error);
+            }
+            baseChancePercent = value;
+            touch();
         }
+        /** @deprecated Use {@link #baseChancePercent()}. */
+        @Deprecated(forRemoval = false) public double weight() { return baseChancePercent(); }
+        /** @deprecated Use {@link #baseChancePercent(double)}. */
+        @Deprecated(forRemoval = false) public void weight(double value) { baseChancePercent(value); }
         public RewardRarity rarity() { return rarity; }
         public void rarity(RewardRarity value) { rarity = value; touch(); }
         public List<ItemStack> items() { return items.stream().map(ItemStack::clone).toList(); }

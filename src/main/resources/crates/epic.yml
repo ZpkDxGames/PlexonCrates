@@ -1,4 +1,4 @@
-config-version: 2
+config-version: 3
 id: epic
 state: PUBLISHED
 display-order: 30
@@ -42,7 +42,7 @@ rewards:
   diamond_reserve:
     enabled: true
     display-name: <aqua><bold>Diamond Reserve</bold></aqua>
-    weight: 27
+    chance-basis-points: 2700
     items:
       diamonds:
         material: DIAMOND
@@ -51,7 +51,7 @@ rewards:
   emerald_treasury:
     enabled: true
     display-name: <green><bold>Emerald Treasury</bold></green>
-    weight: 22
+    chance-basis-points: 2200
     items:
       emeralds:
         material: EMERALD
@@ -60,7 +60,7 @@ rewards:
   experience_wave:
     enabled: true
     display-name: <green><bold>1,500 Experience</bold></green>
-    weight: 18
+    chance-basis-points: 1800
     display:
       material: EXPERIENCE_BOTTLE
       amount: 1
@@ -70,7 +70,7 @@ rewards:
   ancient_haul:
     enabled: true
     display-name: <dark_purple><bold>Ancient Haul</bold></dark_purple>
-    weight: 14
+    chance-basis-points: 1400
     items:
       debris:
         material: ANCIENT_DEBRIS
@@ -79,7 +79,7 @@ rewards:
   shulker_pack:
     enabled: true
     display-name: <light_purple><bold>Shulker Pack</bold></light_purple>
-    weight: 9
+    chance-basis-points: 900
     items:
       shulkers:
         material: SHULKER_BOX
@@ -88,7 +88,7 @@ rewards:
   master_pickaxe:
     enabled: true
     display-name: <light_purple><bold>Master Pickaxe</bold></light_purple>
-    weight: 6
+    chance-basis-points: 600
     items:
       pickaxe:
         material: DIAMOND_PICKAXE
@@ -105,7 +105,7 @@ rewards:
   enchanted_apples:
     enabled: true
     display-name: <light_purple><bold>Enchanted Apples</bold></light_purple>
-    weight: 3
+    chance-basis-points: 300
     items:
       apples:
         material: ENCHANTED_GOLDEN_APPLE
@@ -114,7 +114,7 @@ rewards:
   beacon_core:
     enabled: true
     display-name: <aqua><bold>Beacon Core</bold></aqua>
-    weight: 1
+    chance-basis-points: 100
     broadcast: <gray><player> awakened a <aqua><bold>Beacon Core</bold></aqua> <gray>inside <crate><gray>!</gray>
     items:
       beacon:

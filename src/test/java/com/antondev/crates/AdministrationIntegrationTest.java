@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.gui.MenuHolder;
@@ -20,7 +21,10 @@ import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryAction;
+import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import org.junit.jupiter.api.AfterEach;
@@ -90,6 +94,71 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void rewardPoolMultiSlotDragCapturesExactlyOnceWithoutChangingTheSource() {
+        var player = server.addPlayer("PoolDragEditor");
+        player.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+        plugin.menus().openRewards(player, crate, 0);
+        MenuHolder holder = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+        List<Integer> slots = plugin.menusConfig().slots("reward-pool.reward-slots");
+        ItemStack original = exactReward(Material.NETHER_STAR, 7);
+        byte[] before = original.serializeAsBytes();
+
+        var targets = new LinkedHashMap<Integer, ItemStack>();
+        targets.put(slots.getFirst(), original.clone()); // occupied
+        targets.put(slots.get(10), original.clone()); // empty
+        targets.put(slots.get(11), original.clone()); // empty
+        InventoryDragEvent drag = new InventoryDragEvent(player.getOpenInventory(), null,
+                original, false, targets);
+        plugin.menus().drag(drag);
+
+        var updated = plugin.crates().find("basic").orElseThrow();
+        var captured = updated.rewards().values().stream()
+                .filter(reward -> reward.id().startsWith("nether_star_")).toList();
+        assertTrue(drag.isCancelled());
+        assertEquals(1, captured.size());
+        assertEquals(7, captured.getFirst().itemCopies().getFirst().getAmount());
+        assertTrue(captured.getFirst().itemCopies().getFirst().isSimilar(original));
+        assertEquals(10_000, updated.rewards().values().stream()
+                .filter(reward -> reward.enabled()).mapToInt(reward -> reward.chanceBasisPoints()).sum());
+        assertEquals(7, original.getAmount());
+        assertArrayEquals(before, original.serializeAsBytes());
+        assertEquals(MenuHolder.Kind.REWARDS,
+                ((MenuHolder) player.getOpenInventory().getTopInventory().getHolder()).kind());
+    }
+
+    @Test
+    void rewardPoolCursorAndShiftCaptureAreCopyOnly() {
+        var player = server.addPlayer("PoolClickEditor");
+        player.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+        List<Integer> slots = plugin.menusConfig().slots("reward-pool.reward-slots");
+
+        ItemStack cursorSource = exactReward(Material.DIAMOND_SWORD, 1);
+        byte[] cursorBefore = cursorSource.serializeAsBytes();
+        plugin.menus().openRewards(player, crate, 0);
+        player.setItemOnCursor(cursorSource);
+        InventoryClickEvent cursorClick = new InventoryClickEvent(player.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, slots.get(8), ClickType.LEFT, InventoryAction.SWAP_WITH_CURSOR);
+        plugin.menus().click(cursorClick);
+        assertTrue(cursorClick.isCancelled());
+        assertArrayEquals(cursorBefore, cursorSource.serializeAsBytes());
+        assertEquals(9, plugin.crates().find("basic").orElseThrow().rewards().size());
+
+        ItemStack shiftSource = exactReward(Material.EMERALD, 13);
+        byte[] shiftBefore = shiftSource.serializeAsBytes();
+        player.getInventory().setItem(9, shiftSource);
+        InventoryClickEvent shiftClick = new InventoryClickEvent(player.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, player.getOpenInventory().getTopInventory().getSize(),
+                ClickType.SHIFT_LEFT, InventoryAction.MOVE_TO_OTHER_INVENTORY);
+        plugin.menus().click(shiftClick);
+        assertTrue(shiftClick.isCancelled());
+        assertArrayEquals(shiftBefore, shiftSource.serializeAsBytes());
+        assertEquals(13, player.getInventory().getItem(9).getAmount());
+        assertEquals(10, plugin.crates().find("basic").orElseThrow().rewards().size());
+    }
+
+    @Test
     void existingRewardCanBeFullyEditedAndReorderedThroughTheBuilder() throws Exception {
         var player = server.addPlayer("RewardEditor");
         player.setOp(true);
@@ -97,7 +166,7 @@ class AdministrationIntegrationTest {
         var original = crate.orderedRewards().getFirst();
         plugin.adminMenus().editReward(player, crate, original);
         var draft = plugin.editSessions().reward(player);
-        draft.weight(42.5);
+        draft.baseChancePercent(42.5);
         draft.toggleEnabled();
         draft.addCommand("say reward-editor-test");
         draft.presentation(new RewardPresentation("<gold>Winner</gold>", "<gray>Well done</gray>",
@@ -110,7 +179,7 @@ class AdministrationIntegrationTest {
         var updatedCrate = plugin.crates().find("basic").orElseThrow();
         var updated = updatedCrate.rewards().get(original.id());
         assertFalse(updated.enabled());
-        assertEquals(42.5, updated.weight());
+        assertEquals(0.0, updated.baseChancePercent());
         assertTrue(updated.commands().contains("say reward-editor-test"));
         assertEquals("minecraft:entity.player.levelup", updated.presentation().sound());
         assertTrue(updated.presentation().firework());
@@ -122,16 +191,16 @@ class AdministrationIntegrationTest {
     void invalidReloadLeavesThePublishedRuntimeSnapshotUntouched() throws Exception {
         var player = server.addPlayer("ReloadEditor");
         player.setOp(true);
-        double originalWeight = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").weight();
+        double originalChance = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").baseChancePercent();
         Path file = plugin.getDataFolder().toPath().resolve("crates/basic.yml");
         String valid = Files.readString(file);
-        String invalid = valid.replaceFirst("weight: 28(?:\\.0)?", "weight: 0");
+        String invalid = valid.replaceFirst("chance-basis-points: 2800", "chance-basis-points: 0");
         assertFalse(valid.equals(invalid));
         Files.writeString(file, invalid);
         try {
             assertFalse(plugin.reloadFor(player));
-            assertEquals(originalWeight,
-                    plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").weight());
+            assertEquals(originalChance,
+                    plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").baseChancePercent());
             assertTrue(plugin.crates().find("basic").orElseThrow().enabled());
         } finally {
             Files.writeString(file, valid);
@@ -178,5 +247,15 @@ class AdministrationIntegrationTest {
         BlockPistonExtendEvent extend = new BlockPistonExtendEvent(piston, List.of(linked), BlockFace.EAST);
         server.getPluginManager().callEvent(extend);
         assertTrue(extend.isCancelled());
+    }
+
+    private ItemStack exactReward(Material material, int amount) {
+        ItemStack item = new ItemStack(material, amount);
+        item.editMeta(meta -> {
+            meta.displayName(Component.text("Exact " + material));
+            meta.getPersistentDataContainer().set(new NamespacedKey(plugin, "reward_capture_" + material.name().toLowerCase()),
+                    PersistentDataType.STRING, "preserve-me");
+        });
+        return item;
     }
 }

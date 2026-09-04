@@ -1,4 +1,4 @@
-config-version: 2
+config-version: 3
 id: legendary
 state: PUBLISHED
 display-order: 40
@@ -42,7 +42,7 @@ rewards:
   diamond_vault:
     enabled: true
     display-name: <aqua><bold>Diamond Vault</bold></aqua>
-    weight: 28
+    chance-basis-points: 2800
     items:
       diamonds:
         material: DIAMOND
@@ -51,7 +51,7 @@ rewards:
   netherite_forge:
     enabled: true
     display-name: <dark_gray><bold>Netherite Forge</bold></dark_gray>
-    weight: 22
+    chance-basis-points: 2200
     items:
       ingots:
         material: NETHERITE_INGOT
@@ -60,7 +60,7 @@ rewards:
   experience_torrent:
     enabled: true
     display-name: <green><bold>5,000 Experience</bold></green>
-    weight: 17
+    chance-basis-points: 1700
     display:
       material: EXPERIENCE_BOTTLE
       amount: 1
@@ -70,7 +70,7 @@ rewards:
   smithing_archive:
     enabled: true
     display-name: <gold><bold>Smithing Archive</bold></gold>
-    weight: 13
+    chance-basis-points: 1300
     items:
       templates:
         material: NETHERITE_UPGRADE_SMITHING_TEMPLATE
@@ -79,7 +79,7 @@ rewards:
   enchanted_feast:
     enabled: true
     display-name: <light_purple><bold>Enchanted Feast</bold></light_purple>
-    weight: 9
+    chance-basis-points: 900
     items:
       apples:
         material: ENCHANTED_GOLDEN_APPLE
@@ -88,7 +88,7 @@ rewards:
   mythic_pickaxe:
     enabled: true
     display-name: <gradient:#FF9F2E:#FFF0B2><bold>Mythic Pickaxe</bold></gradient>
-    weight: 6
+    chance-basis-points: 600
     items:
       pickaxe:
         material: NETHERITE_PICKAXE
@@ -107,7 +107,7 @@ rewards:
   twin_beacons:
     enabled: true
     display-name: <aqua><bold>Twin Beacons</bold></aqua>
-    weight: 4
+    chance-basis-points: 400
     items:
       beacons:
         material: BEACON
@@ -116,7 +116,7 @@ rewards:
   sky_relic:
     enabled: true
     display-name: <gradient:#9FE7FF:#FFFFFF><bold>Sky Relic</bold></gradient>
-    weight: 1
+    chance-basis-points: 100
     broadcast: <gold>★</gold> <white><player></white> <gray>found the <gradient:#9FE7FF:#FFFFFF><bold>Sky Relic</bold></gradient> <gray>inside <crate><gray>!</gray>
     items:
       elytra:

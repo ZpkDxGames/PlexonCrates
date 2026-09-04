@@ -3,32 +3,46 @@ package com.antondev.crates.gui;
 import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.config.MenuConfig;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.item.ItemSnapshotCodec;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
+import com.antondev.crates.service.ChanceAllocator;
+import com.antondev.crates.service.CrateRegistry;
 import com.antondev.crates.service.RewardSelector;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
+import org.bukkit.NamespacedKey;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.scheduler.BukkitRunnable;
 
 public final class MenuService implements Listener {
     private final PlexonCrates plugin;
+    private final ItemSnapshotCodec itemSnapshots = new ItemSnapshotCodec();
+    private final NamespacedKey editorItem;
+    private final Map<UUID, String> rewardSearch = new ConcurrentHashMap<>();
 
     public MenuService(PlexonCrates plugin) {
         this.plugin = plugin;
+        this.editorItem = new NamespacedKey(plugin, "editor_item");
     }
 
     public void openBrowser(Player player) {
@@ -71,7 +85,11 @@ public final class MenuService implements Listener {
             double chance = canWin ? RewardSelector.chance(reward, eligible) : 0;
             var lore = new ArrayList<Component>();
             for (String line : menus.strings("preview.reward-lore")) {
-                lore.add(Text.parse(line, Text.value("chance", format(chance)), Text.value("weight", format(reward.weight()))));
+                lore.add(Text.parse(line,
+                        Text.value("eligible_chance", format(chance)),
+                        Text.value("base_chance", format(reward.baseChancePercent())),
+                        Text.value("chance", format(chance)),
+                        Text.value("weight", format(reward.baseChancePercent()))));
             }
             if (!canWin) lore.add(Text.parse("<red>This reward is currently unavailable to you.</red>"));
             if (crate.pity().enabled() && (crate.pity().rewardIds().contains(reward.id())
@@ -114,28 +132,39 @@ public final class MenuService implements Listener {
 
     public void openRewards(Player player, Crate crate, int requestedPage) {
         MenuConfig menus = plugin.menusConfig();
-        List<Integer> slots = menus.slots("preview.reward-slots");
-        List<CrateReward> rewards = crate.orderedRewards();
+        List<Integer> slots = menus.slots("reward-pool.reward-slots");
+        String query = rewardSearch.getOrDefault(player.getUniqueId(), "");
+        List<CrateReward> rewards = crate.orderedRewards().stream().filter(reward -> query.isBlank()
+                || reward.id().contains(query)
+                || Text.serialize(reward.displayName()).toLowerCase(Locale.ROOT).contains(query)).toList();
         int pages = Math.max(1, (rewards.size() + slots.size() - 1) / slots.size());
         int page = Math.max(0, Math.min(requestedPage, pages - 1));
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.REWARDS, crate.id(), "", page, true);
-        Inventory inventory = create(holder, menus.size("preview"),
-                Text.parse("<gold>Rewards</gold> <dark_gray>•</dark_gray> ", Text.component("crate", crate.displayName())).append(crate.displayName()));
+        Inventory inventory = create(holder, menus.size("reward-pool"),
+                menus.title("reward-pool", Text.component("crate", crate.displayName())));
         fill(inventory);
         int start = page * slots.size();
-        for (int index = 0; index < slots.size() && start + index < rewards.size(); index++) {
-            CrateReward reward = rewards.get(start + index);
-            ItemStack display = reward.displayCopy();
-            appendLore(display, List.of(Component.empty(),
-                    Text.parse("<gray>ID</gray> <dark_gray>»</dark_gray> <white>" + reward.id() + "</white>"),
-                    Text.parse("<gray>Weight</gray> <dark_gray>»</dark_gray> <yellow>" + format(reward.weight()) + "</yellow>"),
-                    Text.parse("<aqua>Left-click edit • Right-click test • Shift-left copy</aqua>"),
-                    Text.parse("<red>Shift-right-click to remove.</red>")));
-            inventory.setItem(slots.get(index), display);
+        for (int index = 0; index < slots.size(); index++) {
+            int rewardIndex = start + index;
+            inventory.setItem(slots.get(index), rewardIndex < rewards.size()
+                    ? rewards.get(rewardIndex).displayCopy()
+                    : control("reward-pool.empty"));
         }
-        inventory.setItem(menus.slot("preview.back"), menus.item("preview.back"));
-        if (page > 0) inventory.setItem(menus.slot("preview.previous"), menus.item("preview.previous"));
-        if (page + 1 < pages) inventory.setItem(menus.slot("preview.next"), menus.item("preview.next"));
+        int totalBasisPoints = crate.rewards().values().stream().filter(CrateReward::enabled)
+                .mapToInt(CrateReward::chanceBasisPoints).sum();
+        Component health = totalBasisPoints == ChanceAllocator.TOTAL_BASIS_POINTS
+                ? Text.parse("<green>Healthy</green>") : Text.parse("<yellow>Needs balance</yellow>");
+        inventory.setItem(menus.slot("reward-pool.add-special"), control("reward-pool.add-special"));
+        inventory.setItem(menus.slot("reward-pool.search"), control("reward-pool.search"));
+        inventory.setItem(menus.slot("reward-pool.previous"), control("reward-pool.previous"));
+        inventory.setItem(menus.slot("reward-pool.back"), control("reward-pool.back"));
+        inventory.setItem(menus.slot("reward-pool.status"), control("reward-pool.status",
+                Text.value("count", crate.rewards().size()),
+                Text.value("total", format(totalBasisPoints / 100.0)), Text.component("state", health)));
+        inventory.setItem(menus.slot("reward-pool.preview"), control("reward-pool.preview"));
+        inventory.setItem(menus.slot("reward-pool.next"), control("reward-pool.next"));
+        inventory.setItem(menus.slot("reward-pool.balance"), control("reward-pool.balance"));
+        inventory.setItem(menus.slot("reward-pool.done"), control("reward-pool.done"));
         player.openInventory(inventory);
     }
 
@@ -235,6 +264,10 @@ public final class MenuService implements Listener {
     @EventHandler
     public void click(InventoryClickEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;
+        if (holder.kind() == MenuHolder.Kind.REWARDS) {
+            rewardPoolClick(event, holder);
+            return;
+        }
         if (isAdministrative(holder.kind())) {
             plugin.adminMenus().handleClick(event, holder);
             return;
@@ -257,7 +290,6 @@ public final class MenuService implements Listener {
             }
             case ADMIN -> adminClick(player, slot);
             case EDITOR -> editorClick(player, holder.crateId(), slot);
-            case REWARDS -> rewardsClick(player, holder, slot, event.isRightClick(), event.isShiftClick());
             case CONFIRM_DELETE -> confirmClick(player, holder, slot);
             case OPENING -> { }
             case SUMMARY -> {
@@ -270,8 +302,14 @@ public final class MenuService implements Listener {
     @EventHandler
     public void drag(InventoryDragEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;
-        if (isAdministrative(holder.kind())) plugin.adminMenus().handleDrag(event, holder);
+        if (holder.kind() == MenuHolder.Kind.REWARDS) rewardPoolDrag(event, holder);
+        else if (isAdministrative(holder.kind())) plugin.adminMenus().handleDrag(event, holder);
         else event.setCancelled(true);
+    }
+
+    @EventHandler
+    public void quit(PlayerQuitEvent event) {
+        rewardSearch.remove(event.getPlayer().getUniqueId());
     }
 
     private void browserClick(Player player, int slot, boolean rightClick) {
@@ -324,9 +362,12 @@ public final class MenuService implements Listener {
                     plugin.messages().send(player, "hold-item");
                     return;
                 }
-                String reward = plugin.crates().addGeneratedCapturedReward(crate.id(), held, 10.0);
-                plugin.messages().send(player, "reward-added", Text.value("reward", reward),
-                        Text.component("crate", crate.displayName()), Text.value("weight", 10));
+                String rewardId = plugin.crates().addGeneratedCapturedReward(crate.id(), held);
+                CrateReward reward = plugin.crates().find(crate.id()).orElseThrow().rewards().get(rewardId);
+                plugin.messages().send(player, "reward-added", Text.value("reward", rewardId),
+                        Text.component("crate", crate.displayName()),
+                        Text.value("chance", format(reward.baseChancePercent())),
+                        Text.value("weight", format(reward.baseChancePercent())));
                 openEditor(player, plugin.crates().find(crate.id()).orElseThrow());
             } else if (slot == menus.slot("editor.rewards")) openRewards(player, crate, 0);
             else if (slot == menus.slot("editor.key")) {
@@ -339,7 +380,9 @@ public final class MenuService implements Listener {
         }
     }
 
-    private void rewardsClick(Player player, MenuHolder holder, int slot, boolean rightClick, boolean shiftClick) {
+    private void rewardPoolClick(InventoryClickEvent event, MenuHolder holder) {
+        event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)) return;
         if (!player.hasPermission("plexoncrates.admin.rewards")) {
             plugin.messages().send(player, "no-permission");
             return;
@@ -347,21 +390,174 @@ public final class MenuService implements Listener {
         MenuConfig menus = plugin.menusConfig();
         Crate crate = plugin.crates().find(holder.crateId()).orElse(null);
         if (crate == null) return;
-        if (slot == menus.slot("preview.back")) openEditor(player, crate);
-        else if (slot == menus.slot("preview.previous")) openRewards(player, crate, holder.page() - 1);
-        else if (slot == menus.slot("preview.next")) openRewards(player, crate, holder.page() + 1);
-        else {
-            List<Integer> rewardSlots = menus.slots("preview.reward-slots");
-            int index = rewardSlots.indexOf(slot);
-            int rewardIndex = holder.page() * rewardSlots.size() + index;
-            List<CrateReward> rewards = crate.orderedRewards();
-            if (index < 0 || rewardIndex >= rewards.size()) return;
-            CrateReward reward = rewards.get(rewardIndex);
-            if (rightClick && shiftClick) openConfirmDelete(player, crate, reward, holder.page());
-            else if (rightClick) plugin.openings().testDeliver(player, crate, reward);
-            else if (shiftClick) copyReward(player, crate, reward);
-            else plugin.adminMenus().editReward(player, crate, reward);
+        if (event.isShiftClick() && event.getClickedInventory() == event.getView().getBottomInventory()) {
+            if (event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
+                capturePoolReward(player, crate, event.getCurrentItem());
+            }
+            return;
         }
+        if (event.getClickedInventory() != event.getView().getTopInventory()) return;
+        int slot = event.getRawSlot();
+        List<Integer> rewardSlots = menus.slots("reward-pool.reward-slots");
+        int visibleIndex = rewardSlots.indexOf(slot);
+        if (visibleIndex >= 0) {
+            List<CrateReward> rewards = filteredRewards(player, crate);
+            int rewardIndex = holder.page() * rewardSlots.size() + visibleIndex;
+            ItemStack cursor = event.getCursor();
+            boolean placingCursor = cursor != null && !cursor.getType().isAir() && cursorPlacement(event.getAction());
+            if (rewardIndex >= rewards.size()) {
+                if (placingCursor) capturePoolReward(player, crate, cursor);
+                return;
+            }
+            CrateReward reward = rewards.get(rewardIndex);
+            if (placingCursor) {
+                player.sendMessage(Text.parse("<yellow>That slot already contains a reward. Use an empty slot, or left-click it to edit.</yellow>"));
+            } else if (event.isShiftClick() && event.isRightClick()) {
+                openConfirmDelete(player, crate, reward, holder.page());
+            } else if (event.isShiftClick()) {
+                player.sendMessage(Text.parse("<gray>Reorder mode is not active. Left-click the reward for Quick Details.</gray>"));
+            } else if (event.isRightClick()) {
+                inspectReward(player, reward);
+            } else if (event.isLeftClick()) {
+                plugin.adminMenus().editReward(player, crate, reward);
+            }
+            return;
+        }
+        try {
+            if (slot == menus.slot("reward-pool.add-special")) {
+                plugin.adminMenus().beginSpecialReward(player, crate.id());
+            } else if (slot == menus.slot("reward-pool.search")) {
+                searchRewards(player, crate.id());
+            } else if (slot == menus.slot("reward-pool.previous")) {
+                openRewards(player, crate, holder.page() - 1);
+            } else if (slot == menus.slot("reward-pool.back") || slot == menus.slot("reward-pool.done")) {
+                openEditor(player, crate);
+            } else if (slot == menus.slot("reward-pool.preview")) {
+                openPreview(player, crate, 0, true);
+            } else if (slot == menus.slot("reward-pool.next")) {
+                openRewards(player, crate, holder.page() + 1);
+            } else if (slot == menus.slot("reward-pool.balance")) {
+                balanceRewardPool(player, crate, event);
+            }
+        } catch (Exception error) {
+            plugin.configError(player, error);
+        }
+    }
+
+    private void rewardPoolDrag(InventoryDragEvent event, MenuHolder holder) {
+        event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)
+                || !player.hasPermission("plexoncrates.admin.rewards")) return;
+        Crate crate = plugin.crates().find(holder.crateId()).orElse(null);
+        ItemStack source = event.getOldCursor();
+        if (crate == null || source == null || source.getType().isAir()) return;
+        List<Integer> body = plugin.menusConfig().slots("reward-pool.reward-slots");
+        List<CrateReward> rewards = filteredRewards(player, crate);
+        boolean touchedOccupied = false;
+        for (int rawSlot : event.getRawSlots().stream().sorted().toList()) {
+            int visibleIndex = body.indexOf(rawSlot);
+            if (visibleIndex < 0) continue;
+            int rewardIndex = holder.page() * body.size() + visibleIndex;
+            if (rewardIndex >= rewards.size()) {
+                capturePoolReward(player, crate, source);
+                return;
+            }
+            touchedOccupied = true;
+        }
+        if (touchedOccupied) {
+            player.sendMessage(Text.parse("<yellow>That slot already contains a reward. Drag across an empty slot to add this item.</yellow>"));
+        }
+    }
+
+    private void capturePoolReward(Player player, Crate crate, ItemStack source) {
+        if (source == null || source.getType().isAir() || protectedInput(source)) return;
+        try {
+            itemSnapshots.capture(source);
+            String rewardId = plugin.crates().addGeneratedCapturedReward(crate.id(), source, player.getName());
+            saveCrateDraft(player, crate.id());
+            rewardSearch.remove(player.getUniqueId());
+            Crate updated = plugin.crates().find(crate.id()).orElseThrow();
+            CrateReward reward = updated.rewards().get(rewardId);
+            plugin.messages().send(player, "reward-added", Text.value("reward", rewardId),
+                    Text.component("crate", updated.displayName()),
+                    Text.value("chance", format(reward.baseChancePercent())),
+                    Text.value("weight", format(reward.baseChancePercent())));
+            int index = updated.orderedRewards().indexOf(reward);
+            openRewards(player, updated, Math.max(0, index / plugin.menusConfig().slots("reward-pool.reward-slots").size()));
+        } catch (Exception error) {
+            plugin.configError(player, error);
+        }
+    }
+
+    private void searchRewards(Player player, String crateId) {
+        plugin.editSessions().request(player,
+                Text.parse("<aqua>Enter a reward name/ID search, or <white>-</white> to clear:</aqua>"),
+                (target, value) -> {
+                    String query = value.equals("-") ? "" : value.toLowerCase(Locale.ROOT).trim();
+                    if (query.length() > 64) throw new IllegalArgumentException("Search text is too long");
+                    rewardSearch.put(target.getUniqueId(), query);
+                    Crate current = plugin.crates().find(crateId)
+                            .orElseThrow(() -> new IllegalArgumentException("Crate no longer exists"));
+                    openRewards(target, current, 0);
+                });
+    }
+
+    private void balanceRewardPool(Player player, Crate crate, InventoryClickEvent event) throws Exception {
+        CrateRegistry.ChanceBalanceMode mode;
+        if (event.isShiftClick() && event.isRightClick()) {
+            mode = CrateRegistry.ChanceBalanceMode.NORMALIZE_UNLOCKED;
+        } else if (event.isShiftClick()) {
+            mode = CrateRegistry.ChanceBalanceMode.RARITY_CURVE;
+        } else if (event.isRightClick()) {
+            mode = CrateRegistry.ChanceBalanceMode.EQUAL;
+        } else {
+            mode = CrateRegistry.ChanceBalanceMode.PRESERVE_RELATIVE;
+        }
+        plugin.crates().balanceChances(crate.id(), mode, player.getName());
+        saveCrateDraft(player, crate.id());
+        player.sendMessage(Text.parse("<green>Balanced reward chances:</green> <white>" + mode.name()
+                .toLowerCase(Locale.ROOT).replace('_', ' ') + "</white><green>.</green>"));
+        openRewards(player, plugin.crates().find(crate.id()).orElseThrow(), 0);
+    }
+
+    private List<CrateReward> filteredRewards(Player player, Crate crate) {
+        String query = rewardSearch.getOrDefault(player.getUniqueId(), "");
+        return crate.orderedRewards().stream().filter(reward -> query.isBlank()
+                || reward.id().contains(query)
+                || Text.serialize(reward.displayName()).toLowerCase(Locale.ROOT).contains(query)).toList();
+    }
+
+    private boolean protectedInput(ItemStack item) {
+        return plugin.wand().isWand(item) || (item.hasItemMeta() && item.getItemMeta().getPersistentDataContainer()
+                .has(editorItem, PersistentDataType.BYTE));
+    }
+
+    private static boolean cursorPlacement(InventoryAction action) {
+        return action == InventoryAction.PLACE_ALL || action == InventoryAction.PLACE_ONE
+                || action == InventoryAction.PLACE_SOME || action == InventoryAction.SWAP_WITH_CURSOR;
+    }
+
+    private void saveCrateDraft(Player player, String crateId) {
+        try {
+            plugin.database().saveDraft(crateId, plugin.crates().serialized(crateId), player.getUniqueId());
+        } catch (Exception error) {
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "Could not queue the crate draft snapshot", error);
+        }
+    }
+
+    private void inspectReward(Player player, CrateReward reward) {
+        String fingerprint = "not an item reward";
+        int size = 0;
+        if (!reward.itemCopies().isEmpty()) {
+            ItemSnapshotCodec.Snapshot snapshot = itemSnapshots.capture(reward.itemCopies().getFirst());
+            fingerprint = snapshot.shortFingerprint();
+            size = snapshot.serializedSize();
+        }
+        player.sendMessage(Text.parse("<aqua>Reward inspector:</aqua> <white>" + reward.id()
+                + "</white> <dark_gray>•</dark_gray> <gray>base chance</gray> <yellow>"
+                + format(reward.baseChancePercent()) + "%</yellow> <dark_gray>•</dark_gray> <gray>fingerprint</gray> <white>"
+                + fingerprint + "</white> <dark_gray>•</dark_gray> <gray>bytes</gray> <white>" + size + "</white>"));
     }
 
     private void copyReward(Player player, Crate source, CrateReward reward) {
@@ -413,6 +609,14 @@ public final class MenuService implements Listener {
     private void fill(Inventory inventory) {
         ItemStack filler = plugin.menusConfig().item("filler");
         for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
+    }
+
+    private ItemStack control(String path,
+                              net.kyori.adventure.text.minimessage.tag.resolver.TagResolver... tags) {
+        ItemStack item = plugin.menusConfig().item(path, tags);
+        item.editMeta(meta -> meta.getPersistentDataContainer()
+                .set(editorItem, PersistentDataType.BYTE, (byte) 1));
+        return item;
     }
 
     private static void appendLore(ItemStack item, List<Component> additions) {

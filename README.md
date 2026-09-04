@@ -5,16 +5,17 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/ZpkDxGames/PlexonCrates/build.yml?branch=main&style=for-the-badge&label=Build)](https://github.com/ZpkDxGames/PlexonCrates/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/ZpkDxGames/PlexonCrates?style=for-the-badge)](https://github.com/ZpkDxGames/PlexonCrates/releases/latest)
 
-PlexonCrates 2.0 is a safe, GUI-first crate system created by **Tonim (ZpkDxGames)** for Paper and the Plexon plugin family. It combines exact physical keys, guided crate/reward editing, protected world links, journaled openings, persistent limits and pity, and readable YAML definitions without requiring a framework plugin.
+PlexonCrates 3.0 is the active development line of the safe, GUI-first crate system created by **Tonim (ZpkDxGames)** for Paper and the Plexon plugin family. It combines exact physical keys, percentage-first rewards, guided crate editing, protected world links, journaled openings, persistent limits and pity, and portable definitions without requiring a framework plugin.
 
 This is an independent implementation inspired by the usability goals and feature concepts of [ExcellentCrates](https://github.com/nulli0n/ExcellentCrates-spigot). No ExcellentCrates source code is included or modified.
 
-## 2.0 highlights
+## Highlights
 
 - Four zero-setup defaults: `basic`, `rare`, `epic`, and `legendary`, with 32 bundled rewards.
 - Live PlexonKeys `CONFIG` and `CAPTURED` templates, last-known-good caching, exact fallbacks, and controlled legacy templates.
 - Exact item matching that preserves PDC, custom metadata, components, enchantments, lore, names, and other Bukkit item data.
 - Non-destructive drag/cursor capture for custom keys, crate icons, and reward items.
+- Exact `0.01%` base chances backed by a 10,000-ticket allocator, automatic proportional rebalancing, and eligible-pool normalization.
 - Persistent crate drafts with publish validation, cloning, search, archive/delete confirmation, and safe YAML import/export.
 - Item, console-command, experience, level, and Vault money actions in one reward bundle.
 - Permission filters, player/global lifetime and rolling-window limits, reward cooldowns, rarities, and deterministic pity guarantees.
@@ -101,9 +102,9 @@ At a linked block, left-click previews, right-click opens one, and sneak-right-c
 | `/pcrates status` | Show a concise runtime summary |
 | `/pcrates diagnose` | Show provider, schema, collision, queue, location, draft, and journal details |
 
-Compatibility editing commands remain available: `/pcrates set`, `unset`, `additem`, `addcommand`, `remove`, `weight`, and `save`.
+Compatibility editing commands remain available: `/pcrates set`, `unset`, `additem`, `addcommand`, `remove`, `chance`, and `save`. The old `/pcrates weight` spelling remains a deprecated alias during 3.x.
 
-In the Crates menu, shift-left-click a crate to export it. Imported definitions must be 2.0 YAML and always enter the `DRAFT` state under a new safe ID; publishing performs the normal key/reward checks.
+In the Crates menu, shift-left-click a crate to export it. Imported version 2 or 3 definitions always enter the `DRAFT` state under a new safe ID; publishing performs the normal key/reward checks.
 
 ## Permissions
 
@@ -148,10 +149,10 @@ SQLite writes use one bounded worker. World interaction, GUI clicks, animations,
 
 ## Crate and reward definitions
 
-Weights are relative. A player sees percentages calculated only from enabled rewards they are currently eligible to receive. Limits can be omitted or set to `0` for unlimited behavior.
+Base chances are stored as integer basis points (`10,000 = 100.00%`). For each player, the currently eligible subset is renormalized into exactly 10,000 unbiased integer tickets. Limits can be omitted or set to `0` for unlimited behavior. Version 2 relative weights are converted with stable largest-remainder allocation when imported or edited.
 
 ```yaml
-config-version: 2
+config-version: 3
 id: vote
 state: PUBLISHED
 display-order: 50
@@ -175,7 +176,7 @@ rewards:
     enabled: true
     display-name: <aqua><bold>Custom Drill</bold></aqua>
     rarity: EPIC
-    weight: 5
+    chance-basis-points: 500
     required-permission: ''
     blocked-permission: ''
     limits:

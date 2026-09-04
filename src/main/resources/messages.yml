@@ -33,14 +33,14 @@ location-set: <green>Linked this block to <crate><green>.</green>
 location-removed: <green>Removed the crate link from this block.</green>
 location-not-found: <yellow>That block is not linked to a crate.</yellow>
 location-protected: <yellow>This crate block is protected. Use <white>/pcrates unset</white> before breaking it.</yellow>
-reward-added: <green>Captured reward</green> <white><reward></white> <green>for <crate><green> with weight <yellow><weight></yellow>.</green>
+reward-added: <green>Captured</green> <white><reward></white> <green>for <crate><green> at <yellow><chance>%</yellow>; existing chances were rebalanced.</green>
 command-reward-added: <green>Added command reward</green> <white><reward></white> <green>to <crate><green>.</green>
 reward-removed: <green>Removed reward</green> <white><reward></white> <green>from <crate><green>.</green>
-weight-updated: <green>Updated</green> <white><reward></white> <green>in <crate><green> to weight <yellow><weight></yellow>.</green>
+chance-updated: <green>Updated</green> <white><reward></white> <green>in <crate><green> to <yellow><chance>%</yellow>; other unlocked chances were rebalanced.</green>
 reward-not-found: <red>That reward does not exist in this crate.</red>
 reward-exists: <red>That reward ID already exists.</red>
 invalid-reward-id: <red>Reward IDs may contain lowercase letters, numbers, underscores, and hyphens only.</red>
-invalid-weight: <red>Weight must be a finite number greater than zero.</red>
+invalid-chance: <red>Chance must be from 0.00% to 100.00% with at most two decimal places.</red>
 hold-item: <yellow>Hold the exact reward item in your main hand first.</yellow>
 key-given: <green>Delivered <amount>x <key> <green>to <player><green>.</green>
 forced-open: <green>Opened <amount>x <crate> <green>for <player><green> without consuming keys.</green>

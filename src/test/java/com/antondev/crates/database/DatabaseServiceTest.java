@@ -169,6 +169,36 @@ class DatabaseServiceTest {
     }
 
     @Test
+    void canonicalKeyDefinitionsAndTemplatesCanBeReadWithoutYaml() throws Exception {
+        UUID editor = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-04T12:00:00Z");
+        var template = new DatabaseService.DefinitionKeyTemplateData("FALLBACK", 0,
+                bytes("exact-key"), "minecraft:tripwire_hook", 9,
+                "0123456789012345678901234567890123456789012345678901234567890123", now);
+        var key = new DatabaseService.DefinitionKeyData("basic", "CAPTURED", "Basic Key", "RESOLVED",
+                false, bytes("match-mode=EXACT\ncache-last-known-good=false\n"), List.of(template));
+        var reward = new DatabaseService.DefinitionRewardData("winner", 0, true, "Winner", "common",
+                10_000, false, bytes("settings"), List.of(),
+                List.of(new DatabaseService.DefinitionActionData(0, "COMMAND", bytes("say winner"))));
+        var definition = new DatabaseService.DefinitionBundle("canonical-key", "PUBLISHED", 10, "Canonical",
+                "Canonical key", bytes("icon"), bytes("payload"), List.of(reward), List.of(key),
+                List.of("basic"), 1, now, now);
+
+        try (DatabaseService database = database()) {
+            var draft = database.createOrResumeDefinitionDraft("CRATE", "canonical-key", editor, "Editor", 0,
+                    bytes("draft")).join();
+            database.publishDefinitionDraft(new DatabaseService.PublishRequest(draft.draftId(), draft.revision(),
+                    draft.leaseToken(), editor, "Editor", draft.payload(), definition, now)).join();
+
+            var loaded = database.loadDefinitionKeys().join();
+            assertEquals(1, loaded.size());
+            assertEquals("basic", loaded.getFirst().keyId());
+            assertEquals("FALLBACK", loaded.getFirst().templates().getFirst().templateKind());
+            assertArrayEquals(bytes("exact-key"), loaded.getFirst().templates().getFirst().bytes());
+        }
+    }
+
+    @Test
     void archivedCanonicalDefinitionCanBeDeletedTransactionally() throws Exception {
         UUID editor = UUID.randomUUID();
         Instant now = Instant.parse("2026-09-04T12:00:00Z");

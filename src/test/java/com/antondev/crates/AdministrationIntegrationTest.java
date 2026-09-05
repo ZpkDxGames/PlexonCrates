@@ -438,6 +438,24 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void canonicalKeyDefinitionsSurviveAMissingYamlMirror() throws Exception {
+        var player = server.addPlayer("CanonicalKeyEditor");
+        player.setOp(true);
+        Path file = plugin.getDataFolder().toPath().resolve("keys.yml");
+        String valid = Files.readString(file);
+        try {
+            Files.delete(file);
+
+            assertTrue(plugin.reloadFor(player));
+            ItemStack template = plugin.keys().template("basic").orElseThrow();
+            assertTrue(plugin.keys().matches(template, "basic"));
+            assertEquals("basic", plugin.keys().definition("basic").orElseThrow().id());
+        } finally {
+            Files.writeString(file, valid);
+        }
+    }
+
+    @Test
     void wandLinkPersistsAndProtectsTheBlockFromWorldMutations() throws Exception {
         var player = server.addPlayer("Builder");
         player.setOp(true);

@@ -193,6 +193,48 @@ public final class DatabaseService implements AutoCloseable {
         @Override public byte[] settingsPayload() { return settingsPayload.clone(); }
     }
 
+    /**
+     * Canonical key metadata read from SQLite.  This is deliberately separate
+     * from {@link DefinitionKeyData}: publication DTOs describe the incoming
+     * graph, while these records describe the durable graph used during restart
+     * and reload when the optional YAML mirror is unavailable.
+     */
+    public record StoredKeyTemplate(
+            String templateKind, int sequence, byte[] bytes, String material,
+            int serializedSize, String sha256, Instant capturedAt) {
+        public StoredKeyTemplate {
+            templateKind = requiredText(templateKind, "templateKind").toUpperCase(java.util.Locale.ROOT);
+            bytes = copyBytes(bytes, "key template bytes");
+            material = requiredText(material, "material");
+            sha256 = requiredText(sha256, "sha256");
+            capturedAt = java.util.Objects.requireNonNull(capturedAt, "capturedAt");
+            if (sequence < 0 || serializedSize != bytes.length) {
+                throw new IllegalArgumentException("Invalid stored key template");
+            }
+        }
+
+        @Override public byte[] bytes() { return bytes.clone(); }
+    }
+
+    public record StoredKeyDefinition(
+            String keyId, String sourceType, String displayName, String resolutionState,
+            boolean archived, long revision, byte[] settingsPayload,
+            List<StoredKeyTemplate> templates, Instant createdAt, Instant updatedAt) {
+        public StoredKeyDefinition {
+            keyId = requiredText(keyId, "keyId");
+            sourceType = requiredText(sourceType, "sourceType");
+            displayName = requiredText(displayName, "displayName");
+            resolutionState = requiredText(resolutionState, "resolutionState");
+            settingsPayload = copyBytes(settingsPayload, "key settings payload");
+            templates = List.copyOf(templates);
+            createdAt = java.util.Objects.requireNonNull(createdAt, "createdAt");
+            updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+            if (revision < 0) throw new IllegalArgumentException("Key revision cannot be negative");
+        }
+
+        @Override public byte[] settingsPayload() { return settingsPayload.clone(); }
+    }
+
     public record DefinitionBundle(
             String crateId, String lifecycle, int displayOrder, String displayName, String description,
             byte[] iconBytes, byte[] settingsPayload, List<DefinitionRewardData> rewards,
@@ -807,6 +849,56 @@ public final class DatabaseService implements AutoCloseable {
             }
         }
         return Map.copyOf(result);
+    }
+
+    /**
+     * Loads the canonical key registry and exact templates.  The query is
+     * intentionally bounded to the definition tables; YAML mirrors are not
+     * consulted here and therefore cannot override a published key on restart.
+     */
+    public CompletableFuture<List<StoredKeyDefinition>> loadDefinitionKeys() {
+        return submitQuery("load canonical key definitions", connection -> {
+            var definitions = new ArrayList<StoredKeyDefinition>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT key_id, source_type, display_name, resolution_state, archived, revision,
+                           settings_payload, created_at, updated_at
+                    FROM key_definition_v3 ORDER BY display_name COLLATE NOCASE, key_id
+                    """); ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    definitions.add(new StoredKeyDefinition(rows.getString(1), rows.getString(2),
+                            rows.getString(3), rows.getString(4), rows.getInt(5) != 0, rows.getLong(6),
+                            rows.getBytes(7), List.of(), Instant.ofEpochMilli(rows.getLong(8)),
+                            Instant.ofEpochMilli(rows.getLong(9))));
+                }
+            }
+            var templates = new LinkedHashMap<String, List<StoredKeyTemplate>>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT key_id, template_kind, sequence, item_bytes, material, serialized_size,
+                           sha256, captured_at
+                    FROM key_template_v3 ORDER BY key_id, template_kind, sequence
+                    """); ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    byte[] bytes = rows.getBytes(4);
+                    if (bytes == null || bytes.length == 0) {
+                        logger.warning("Ignoring empty canonical key template for " + rows.getString(1));
+                        continue;
+                    }
+                    try {
+                        templates.computeIfAbsent(rows.getString(1), ignored -> new ArrayList<>())
+                                .add(new StoredKeyTemplate(rows.getString(2), rows.getInt(3), bytes,
+                                        rows.getString(5), rows.getInt(6), rows.getString(7),
+                                        Instant.ofEpochMilli(rows.getLong(8))));
+                    } catch (IllegalArgumentException error) {
+                        logger.log(Level.WARNING, "Ignoring invalid canonical key template for " + rows.getString(1), error);
+                    }
+                }
+            }
+            return definitions.stream().map(definition -> new StoredKeyDefinition(definition.keyId(),
+                    definition.sourceType(), definition.displayName(), definition.resolutionState(),
+                    definition.archived(), definition.revision(), definition.settingsPayload(),
+                    templates.getOrDefault(definition.keyId(), List.of()), definition.createdAt(),
+                    definition.updatedAt())).toList();
+        });
     }
 
     public int pendingJournalCount() throws SQLException {

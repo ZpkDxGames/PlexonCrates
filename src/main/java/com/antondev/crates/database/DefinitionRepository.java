@@ -27,6 +27,10 @@ public final class DefinitionRepository {
         return database.loadDefinitionDrafts();
     }
 
+    public CompletableFuture<List<DatabaseService.StoredKeyDefinition>> loadKeys() {
+        return database.loadDefinitionKeys();
+    }
+
     public CompletableFuture<DatabaseService.PublishResult> publish(DatabaseService.PublishRequest request) {
         return database.publishDefinitionDraft(request);
     }

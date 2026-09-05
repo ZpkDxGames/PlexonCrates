@@ -44,6 +44,7 @@ import java.time.format.DateTimeFormatter;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.ServicePriority;
 
@@ -98,9 +99,11 @@ public class PlexonCrates extends JavaPlugin {
             }
             LocationStore.Snapshot locationSnapshot = LocationStore.fromDatabase(database.loadLocations(), crates);
             locations = new LocationStore(database, getLogger(), locationSnapshot);
-            KeyService.Snapshot keySnapshot = KeyService.load(file(settings.fallbackFile()));
+            KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(
+                    definitionRepository.loadKeys().join(), getLogger());
+            KeyService.Snapshot keySnapshot = loadKeySnapshot(settings.fallbackFile(), canonicalKeys);
             keys = new KeyService(this, database, file(settings.fallbackFile()).toPath(), keySnapshot,
-                    database.loadKeyTemplateCache());
+                    mergeKeyCaches(canonicalKeys));
             runtime = new RuntimeRegistry(DefinitionPublisher.bootstrap(definitionRepository, crates, keys));
             if (canonical.definitions().isEmpty()) {
                 runtime.all().forEach(crate -> recordDefinitionRevision(crate.id(), runtime.crateRevision(crate.id())));
@@ -191,7 +194,9 @@ public class PlexonCrates extends JavaPlugin {
                     throw new IllegalArgumentException("Linked location references a crate missing from the reload: " + link.crateId());
                 }
             }
-            KeyService.Snapshot nextKeys = KeyService.load(new File(getDataFolder(), nextSettings.fallbackFile()));
+            KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(
+                    definitionRepository.loadKeys().join(), getLogger());
+            KeyService.Snapshot nextKeys = loadKeySnapshot(nextSettings.fallbackFile(), canonicalKeys);
             if (!nextSettings.databaseFile().equals(settings.databaseFile())) {
                 throw new IllegalArgumentException("database.file cannot be changed by reload; restart the server after moving data safely");
             }
@@ -201,12 +206,13 @@ public class PlexonCrates extends JavaPlugin {
             MenuConfig previousMenus = menusConfig;
             CrateRegistry.Snapshot previousCrates = crates.snapshot();
             KeyService.Snapshot previousKeys = keys.snapshot();
+            Map<String, ItemStack> previousKeyCache = keys.lastKnownGoodSnapshot();
             try {
                 settings = nextSettings;
                 messages = nextMessages;
                 menusConfig = nextMenus;
                 crates.apply(nextCrates);
-                keys.apply(nextKeys);
+                keys.apply(nextKeys, mergeKeyCaches(canonicalKeys));
                 for (var crate : crates.ordered()) {
                     List<String> issues = crates.publishingIssues(crate.id(), keys);
                     if (!issues.isEmpty()) throw new IllegalArgumentException("crates/" + crate.id()
@@ -225,7 +231,7 @@ public class PlexonCrates extends JavaPlugin {
                 messages = previousMessages;
                 menusConfig = previousMenus;
                 crates.apply(previousCrates);
-                keys.apply(previousKeys);
+                keys.apply(previousKeys, previousKeyCache);
                 try { displays.refresh(); }
                 catch (RuntimeException refreshError) { error.addSuppressed(refreshError); }
                 throw error;
@@ -415,5 +421,41 @@ public class PlexonCrates extends JavaPlugin {
 
     public void forgetDefinitionRevision(String crateId) {
         if (crateId != null) definitionRevisions.remove(crateId.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Builds the editable key view with canonical SQLite rows taking priority
+     * over a compatibility YAML mirror.  YAML-only keys remain available for
+     * unpublished drafts, while a missing/corrupt mirror cannot invalidate a
+     * published key that is already durable in the normalized store.
+     */
+    private KeyService.Snapshot loadKeySnapshot(String fallbackFile,
+                                                KeyService.CanonicalSnapshot canonical) throws Exception {
+        Path path = new File(getDataFolder(), fallbackFile).toPath();
+        KeyService.Snapshot mirror = null;
+        Exception mirrorFailure = null;
+        if (Files.isRegularFile(path)) {
+            try {
+                mirror = KeyService.load(path);
+            } catch (Exception error) {
+                mirrorFailure = error;
+                getLogger().log(Level.WARNING,
+                        "Ignoring an invalid optional key YAML mirror; SQLite definitions remain authoritative", error);
+            }
+        }
+        var merged = new java.util.LinkedHashMap<String, com.antondev.crates.domain.key.KeyDefinition>();
+        if (mirror != null) merged.putAll(mirror.definitions());
+        merged.putAll(canonical.definitions().definitions());
+        if (merged.isEmpty()) {
+            if (mirrorFailure != null) throw mirrorFailure;
+            throw new IllegalArgumentException("No key definitions were found in SQLite or " + fallbackFile);
+        }
+        return new KeyService.Snapshot(merged);
+    }
+
+    private Map<String, ItemStack> mergeKeyCaches(KeyService.CanonicalSnapshot canonical) throws Exception {
+        var merged = new java.util.LinkedHashMap<String, ItemStack>(database.loadKeyTemplateCache());
+        merged.putAll(canonical.lastKnownGood());
+        return merged;
     }
 }

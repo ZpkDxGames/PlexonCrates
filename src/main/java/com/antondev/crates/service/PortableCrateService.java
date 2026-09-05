@@ -99,7 +99,7 @@ public final class PortableCrateService {
         return secretLoad.thenCompose(key -> {
             PortableCrateCodec.Token token = PortableCrateCodec.issue(
                     crate.id(), policy, revision, issuedTo, key);
-            Instant now = Instant.now();
+            Instant now = Instant.ofEpochMilli(System.currentTimeMillis());
             DatabaseService.PortableIssue record = new DatabaseService.PortableIssue(
                     token.payload().issueId(), token.payload().crateId(), policy.name(), revision,
                     issuedTo, issuedBy, PortableCrateCodec.VERSION, "UNUSED", null, now, now);

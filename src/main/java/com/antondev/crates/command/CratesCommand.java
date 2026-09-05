@@ -49,6 +49,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
             player.sendMessage(Text.parse("<white>/crates open <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Open using physical PlexonKeys keys.</gray>"));
             player.sendMessage(Text.parse("<white>/crates history [page]</white> <dark_gray>—</dark_gray> <gray>Review recent wins.</gray>"));
             player.sendMessage(Text.parse("<white>/crates claim [page|id]</white> <dark_gray>—</dark_gray> <gray>Deliver exact pending claims.</gray>"));
+            player.sendMessage(Text.parse("<white>/crates keys</white> <dark_gray>—</dark_gray> <gray>View physical and optional virtual-key balances.</gray>"));
             return true;
         }
         if (action.equals("history")) {
@@ -69,6 +70,11 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
                 int requested = page(player, args[1]);
                 if (requested > 0) claims(player, requested);
             }
+            return true;
+        }
+        if (action.equals("keys")) {
+            if (!allowed(player, "plexoncrates.use")) return denied(player);
+            keys(player);
             return true;
         }
         if (action.equals("preview") || action.equals("open")) {
@@ -148,6 +154,38 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
         });
     }
 
+    private void keys(Player player) {
+        plugin.database().loadVirtualKeyBalances(player.getUniqueId(), 50, 0).whenComplete((virtual, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (error != null) {
+                    plugin.messages().send(player, "database-error");
+                    return;
+                }
+                player.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Key Balances</bold></gradient>"));
+                plugin.keys().definitions().values().stream()
+                        .sorted(java.util.Comparator.comparing(definition -> definition.id()))
+                        .forEach(definition -> player.sendMessage(Text.parse("<gray>Physical " + definition.id()
+                                + ":</gray> <white>" + plugin.keys().count(player, definition.id()) + "</white>")));
+                if (virtual == null || virtual.isEmpty()) {
+                    player.sendMessage(Text.parse("<gray>Virtual:</gray> <white>none</white>"));
+                } else {
+                    virtual.forEach(balance -> player.sendMessage(Text.parse("<gray>Virtual " + balance.keyId()
+                            + ":</gray> <white>" + balance.balance() + "</white>")));
+                }
+                plugin.claims().pendingCount(player.getUniqueId()).whenComplete((pending, pendingError) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (player.isOnline() && pendingError == null) {
+                            player.sendMessage(Text.parse("<gray>Claim Inbox:</gray> <white>" + pending + " pending</white>"));
+                        }
+                    });
+                });
+            });
+        });
+    }
+
     private int page(Player player, String raw) {
         try {
             int page = Integer.parseInt(raw);
@@ -187,7 +225,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                                  @NotNull String alias, @NotNull String[] args) {
         if (args.length == 1) {
-            var values = new ArrayList<>(List.of("preview", "open", "history", "claim", "help"));
+            var values = new ArrayList<>(List.of("preview", "open", "history", "claim", "keys", "help"));
             values.addAll(plugin.runtime().ordered().stream().map(Crate::id).toList());
             return filter(values, args[0]);
         }

@@ -361,6 +361,59 @@ public final class DatabaseService implements AutoCloseable {
         @Override public byte[] itemBytes() { return itemBytes == null ? null : itemBytes.clone(); }
     }
 
+    public record ClaimCounts(int pending, int claiming, int claimed, int review) {
+        public ClaimCounts {
+            if (pending < 0 || claiming < 0 || claimed < 0 || review < 0) {
+                throw new IllegalArgumentException("Claim counts cannot be negative");
+            }
+        }
+
+        public int unresolved() {
+            return Math.addExact(Math.addExact(pending, claiming), review);
+        }
+    }
+
+    /** Optional per-player virtual key balance, separate from exact physical items. */
+    public record VirtualKeyBalance(UUID playerId, String keyId, long balance, long revision, Instant updatedAt) {
+        public VirtualKeyBalance {
+            playerId = java.util.Objects.requireNonNull(playerId, "playerId");
+            keyId = requiredText(keyId, "keyId");
+            updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+            if (balance < 0 || revision < 0) throw new IllegalArgumentException("Virtual-key balance cannot be negative");
+        }
+    }
+
+    public record LedgerEntry(UUID entryId, String idempotencyToken, UUID playerId, String ledgerType,
+                              String keyId, long delta, long balanceAfter, String sourceType, String sourceId,
+                              UUID actorId, Instant createdAt) {
+        public LedgerEntry {
+            entryId = java.util.Objects.requireNonNull(entryId, "entryId");
+            idempotencyToken = requiredText(idempotencyToken, "idempotencyToken");
+            playerId = java.util.Objects.requireNonNull(playerId, "playerId");
+            ledgerType = requiredText(ledgerType, "ledgerType").toUpperCase(java.util.Locale.ROOT);
+            if (!List.of("VIRTUAL_KEY", "REROLL").contains(ledgerType)) {
+                throw new IllegalArgumentException("Unsupported ledger type: " + ledgerType);
+            }
+            keyId = optionalText(keyId);
+            sourceType = requiredText(sourceType, "sourceType");
+            sourceId = requiredText(sourceId, "sourceId");
+            if (delta == 0 || balanceAfter < 0) throw new IllegalArgumentException("Invalid ledger delta or balance");
+            createdAt = java.util.Objects.requireNonNull(createdAt, "createdAt");
+        }
+    }
+
+    public record LedgerMutation(boolean applied, long balanceAfter, UUID entryId, long delta) {
+        public LedgerMutation {
+            if (balanceAfter < 0) throw new IllegalArgumentException("Ledger balance cannot be negative");
+            if (applied && (entryId == null || delta == 0)) {
+                throw new IllegalArgumentException("Applied ledger mutations need an entry and delta");
+            }
+            if (!applied && (entryId != null || delta != 0)) {
+                throw new IllegalArgumentException("Unapplied ledger mutations cannot have an entry or delta");
+            }
+        }
+    }
+
     public record DefinitionCounts(int rewards, int items, int actions, int keyLinks) {}
 
     private final Logger logger;
@@ -1039,7 +1092,47 @@ public final class DatabaseService implements AutoCloseable {
                 statement.setLong(12, created.toEpochMilli());
                 statement.executeUpdate();
             }
-            return loadClaimByToken(connection, token).orElseThrow();
+            ClaimEntry existing = loadClaimByToken(connection, token).orElseThrow();
+            ensureItemClaimMatch(existing, owner, source, origin, crateId, rewardId, bytes, itemAmount, fingerprint);
+            return existing;
+        });
+    }
+
+    /** Inserts an idempotent typed virtual-key credit claim for an offline player. */
+    public CompletableFuture<ClaimEntry> createVirtualKeyClaim(
+            UUID playerId, String sourceType, String sourceId, String crateId, String rewardId,
+            String idempotencyToken, String virtualKeyId, int virtualKeyAmount, Instant createdAt) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        String source = requiredText(sourceType, "sourceType");
+        String origin = requiredText(sourceId, "sourceId");
+        String token = requiredText(idempotencyToken, "idempotencyToken");
+        String key = requiredText(virtualKeyId, "virtualKeyId");
+        if (virtualKeyAmount < 1) throw new IllegalArgumentException("Virtual-key claim amount must be positive");
+        Instant created = java.util.Objects.requireNonNull(createdAt, "createdAt");
+        return submitTransactionQuery("create virtual-key claim", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO claim_entry(claim_id, idempotency_token, player_uuid, source_type, source_id,
+                        crate_id, reward_id, virtual_key_id, virtual_key_amount, state, last_result,
+                        created_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?)
+                    ON CONFLICT(idempotency_token) DO NOTHING
+                    """)) {
+                statement.setString(1, UUID.randomUUID().toString());
+                statement.setString(2, token);
+                statement.setString(3, owner.toString());
+                statement.setString(4, source);
+                statement.setString(5, origin);
+                nullableText(statement, 6, crateId);
+                nullableText(statement, 7, rewardId);
+                statement.setString(8, key);
+                statement.setInt(9, virtualKeyAmount);
+                statement.setLong(10, created.toEpochMilli());
+                statement.setLong(11, created.toEpochMilli());
+                statement.executeUpdate();
+            }
+            ClaimEntry existing = loadClaimByToken(connection, token).orElseThrow();
+            ensureVirtualClaimMatch(existing, owner, source, origin, crateId, rewardId, key, virtualKeyAmount);
+            return existing;
         });
     }
 
@@ -1075,6 +1168,135 @@ public final class DatabaseService implements AutoCloseable {
                     return rows.next() ? rows.getInt(1) : 0;
                 }
             }
+        });
+    }
+
+    /** Returns bounded diagnostic counts without loading claim payloads. */
+    public CompletableFuture<ClaimCounts> claimCounts() {
+        return submitQuery("count claims by state", connection -> {
+            int pending = 0;
+            int claiming = 0;
+            int claimed = 0;
+            int review = 0;
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT state, COUNT(*) FROM claim_entry GROUP BY state");
+                 ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    int count = rows.getInt(2);
+                    switch (rows.getString(1)) {
+                        case "PENDING" -> pending = count;
+                        case "CLAIMING" -> claiming = count;
+                        case "CLAIMED" -> claimed = count;
+                        case "REVIEW" -> review = count;
+                        default -> logger.warning("Ignoring unknown claim state in diagnostics: " + rows.getString(1));
+                    }
+                }
+            }
+            return new ClaimCounts(pending, claiming, claimed, review);
+        });
+    }
+
+    public CompletableFuture<VirtualKeyBalance> loadVirtualKeyBalance(UUID playerId, String keyId) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        String key = requiredText(keyId, "keyId");
+        return submitQuery("load virtual-key balance", connection -> loadVirtualKeyBalance(connection, owner, key));
+    }
+
+    public CompletableFuture<List<VirtualKeyBalance>> loadVirtualKeyBalances(UUID playerId, int limit, int offset) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        return submitQuery("load virtual-key balances", connection -> {
+            var result = new ArrayList<VirtualKeyBalance>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT player_uuid, key_id, balance, revision, updated_at
+                    FROM virtual_key_balance WHERE player_uuid = ?
+                    ORDER BY key_id LIMIT ? OFFSET ?
+                    """)) {
+                statement.setString(1, owner.toString());
+                statement.setInt(2, Math.max(1, Math.min(limit, 100)));
+                statement.setInt(3, Math.max(0, offset));
+                try (ResultSet rows = statement.executeQuery()) {
+                    while (rows.next()) result.add(virtualKeyBalance(rows));
+                }
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    /** Applies a positive virtual-key credit exactly once for an idempotency token. */
+    public CompletableFuture<LedgerMutation> creditVirtualKeys(
+            UUID playerId, String keyId, long amount, String idempotencyToken,
+            String sourceType, String sourceId, UUID actorId) {
+        return mutateVirtualKeys(playerId, keyId, amount, idempotencyToken, sourceType, sourceId, actorId, true);
+    }
+
+    /** Debits virtual keys only when the full amount is available; no partial debit occurs. */
+    public CompletableFuture<LedgerMutation> debitVirtualKeys(
+            UUID playerId, String keyId, long amount, String idempotencyToken,
+            String sourceType, String sourceId, UUID actorId) {
+        return mutateVirtualKeys(playerId, keyId, amount, idempotencyToken, sourceType, sourceId, actorId, false);
+    }
+
+    private CompletableFuture<LedgerMutation> mutateVirtualKeys(
+            UUID playerId, String keyId, long amount, String idempotencyToken,
+            String sourceType, String sourceId, UUID actorId, boolean credit) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        String key = requiredText(keyId, "keyId");
+        if (amount < 1) throw new IllegalArgumentException("Virtual-key amount must be positive");
+        String token = requiredText(idempotencyToken, "idempotencyToken");
+        String source = requiredText(sourceType, "sourceType");
+        String origin = requiredText(sourceId, "sourceId");
+        return submitTransactionQuery((credit ? "credit" : "debit") + " virtual keys", connection -> {
+            LedgerEntry existing = loadLedgerByToken(connection, token).orElse(null);
+            long signed = credit ? amount : -amount;
+            if (existing != null) {
+                if (!existing.ledgerType().equals("VIRTUAL_KEY") || !existing.playerId().equals(owner)
+                        || !key.equals(existing.keyId()) || existing.delta() != signed
+                        || !source.equals(existing.sourceType()) || !origin.equals(existing.sourceId())) {
+                    throw new IllegalStateException("Ledger idempotency token was already used for a different mutation");
+                }
+                return new LedgerMutation(true, existing.balanceAfter(), existing.entryId(), existing.delta());
+            }
+            VirtualKeyBalance current = loadVirtualKeyBalance(connection, owner, key);
+            long next;
+            if (credit) next = Math.addExact(current.balance(), amount);
+            else {
+                if (current.balance() < amount) return new LedgerMutation(false, current.balance(), null, 0);
+                next = current.balance() - amount;
+            }
+            long now = System.currentTimeMillis();
+            long nextRevision = Math.addExact(current.revision(), 1);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO virtual_key_balance(player_uuid, key_id, balance, revision, updated_at)
+                    VALUES(?, ?, ?, ?, ?)
+                    ON CONFLICT(player_uuid, key_id) DO UPDATE SET balance=excluded.balance,
+                        revision=excluded.revision, updated_at=excluded.updated_at
+                    """)) {
+                statement.setString(1, owner.toString());
+                statement.setString(2, key);
+                statement.setLong(3, next);
+                statement.setLong(4, nextRevision);
+                statement.setLong(5, now);
+                statement.executeUpdate();
+            }
+            UUID entryId = UUID.randomUUID();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO ledger_entry(entry_id, idempotency_token, player_uuid, ledger_type, key_id,
+                        delta, balance_after, source_type, source_id, actor_uuid, created_at)
+                    VALUES(?, ?, ?, 'VIRTUAL_KEY', ?, ?, ?, ?, ?, ?, ?)
+                    """)) {
+                statement.setString(1, entryId.toString());
+                statement.setString(2, token);
+                statement.setString(3, owner.toString());
+                statement.setString(4, key);
+                statement.setLong(5, signed);
+                statement.setLong(6, next);
+                statement.setString(7, source);
+                statement.setString(8, origin);
+                nullableUuid(statement, 9, actorId);
+                statement.setLong(10, now);
+                statement.executeUpdate();
+            }
+            return new LedgerMutation(true, next, entryId, signed);
         });
     }
 
@@ -1267,6 +1489,7 @@ public final class DatabaseService implements AutoCloseable {
                     INSERT INTO opening_journal(transaction_id, player_uuid, player_name, crate_id, key_id,
                         key_amount, opening_count, source, reward_ids, stage, created_at, updated_at)
                     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'PREPARED', ?, ?)
+                    ON CONFLICT(transaction_id) DO NOTHING
                     """)) {
                 statement.setString(1, journal.transactionId().toString());
                 statement.setString(2, journal.playerId().toString());
@@ -1307,7 +1530,13 @@ public final class DatabaseService implements AutoCloseable {
                 history.setString(10, record.location());
                 history.setInt(11, record.overflowCount());
                 history.setLong(12, record.completedAt().toEpochMilli());
-                history.executeUpdate();
+                if (history.executeUpdate() == 0) {
+                    // The finalization was already committed for this transaction.
+                    // Treat a repeated completion call as an idempotent no-op and
+                    // never apply statistics, limits, or pity a second time.
+                    updateJournal(connection, record.transactionId(), "COMPLETED", "");
+                    return;
+                }
             }
             try (PreparedStatement global = connection.prepareStatement("""
                     INSERT INTO statistics_global(crate_id, openings) VALUES(?, ?)
@@ -2429,6 +2658,67 @@ public final class DatabaseService implements AutoCloseable {
             try (ResultSet rows = statement.executeQuery()) {
                 return rows.next() ? Optional.of(claimEntry(rows)) : Optional.empty();
             }
+        }
+    }
+
+    private static VirtualKeyBalance loadVirtualKeyBalance(Connection connection, UUID playerId, String keyId)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT player_uuid, key_id, balance, revision, updated_at
+                FROM virtual_key_balance WHERE player_uuid = ? AND key_id = ?
+                """)) {
+            statement.setString(1, playerId.toString());
+            statement.setString(2, keyId);
+            try (ResultSet rows = statement.executeQuery()) {
+                if (rows.next()) return virtualKeyBalance(rows);
+            }
+        }
+        return new VirtualKeyBalance(playerId, keyId, 0, 0, Instant.EPOCH);
+    }
+
+    private static VirtualKeyBalance virtualKeyBalance(ResultSet rows) throws SQLException {
+        return new VirtualKeyBalance(UUID.fromString(rows.getString(1)), rows.getString(2),
+                rows.getLong(3), rows.getLong(4), Instant.ofEpochMilli(rows.getLong(5)));
+    }
+
+    private static Optional<LedgerEntry> loadLedgerByToken(Connection connection, String token) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT entry_id, idempotency_token, player_uuid, ledger_type, key_id, delta, balance_after,
+                       source_type, source_id, actor_uuid, created_at
+                FROM ledger_entry WHERE idempotency_token = ?
+                """)) {
+            statement.setString(1, token);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(ledgerEntry(rows)) : Optional.empty();
+            }
+        }
+    }
+
+    private static LedgerEntry ledgerEntry(ResultSet rows) throws SQLException {
+        return new LedgerEntry(UUID.fromString(rows.getString(1)), rows.getString(2),
+                UUID.fromString(rows.getString(3)), rows.getString(4), rows.getString(5), rows.getLong(6),
+                rows.getLong(7), rows.getString(8), rows.getString(9), nullableUuid(rows.getString(10)),
+                Instant.ofEpochMilli(rows.getLong(11)));
+    }
+
+    private static void ensureItemClaimMatch(ClaimEntry existing, UUID playerId, String sourceType, String sourceId,
+                                             String crateId, String rewardId, byte[] bytes, int amount, String sha256) {
+        if (!existing.playerId().equals(playerId) || !existing.sourceType().equals(sourceType)
+                || !existing.sourceId().equals(sourceId) || !java.util.Objects.equals(existing.crateId(), optionalText(crateId))
+                || !java.util.Objects.equals(existing.rewardId(), optionalText(rewardId)) || existing.itemBytes() == null
+                || !java.util.Arrays.equals(existing.itemBytes(), bytes) || existing.itemAmount() != amount
+                || !existing.itemSha256().equalsIgnoreCase(sha256)) {
+            throw new IllegalStateException("Claim idempotency token was already used for a different item");
+        }
+    }
+
+    private static void ensureVirtualClaimMatch(ClaimEntry existing, UUID playerId, String sourceType, String sourceId,
+                                                String crateId, String rewardId, String keyId, int amount) {
+        if (!existing.playerId().equals(playerId) || !existing.sourceType().equals(sourceType)
+                || !existing.sourceId().equals(sourceId) || !java.util.Objects.equals(existing.crateId(), optionalText(crateId))
+                || !java.util.Objects.equals(existing.rewardId(), optionalText(rewardId)) || existing.itemBytes() != null
+                || !keyId.equals(existing.virtualKeyId()) || existing.virtualKeyAmount() != amount) {
+            throw new IllegalStateException("Claim idempotency token was already used for a different virtual key");
         }
     }
 

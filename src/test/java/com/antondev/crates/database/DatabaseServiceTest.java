@@ -228,6 +228,65 @@ class DatabaseServiceTest {
             assertTrue(database.reserveClaim(player, second.claimId(), "attempt-4").join().isPresent());
             assertTrue(database.completeClaim(second.claimId(), "attempt-4").join().isPresent());
             assertEquals("CLAIMED", database.completeClaim(second.claimId(), "attempt-4").join().orElseThrow().state());
+            var counts = database.claimCounts().join();
+            assertEquals(0, counts.pending());
+            assertEquals(0, counts.claiming());
+            assertEquals(1, counts.claimed());
+            assertEquals(1, counts.review());
+        }
+    }
+
+    @Test
+    void journalAndOpeningFinalizationAreIdempotent() throws Exception {
+        UUID transaction = UUID.randomUUID();
+        UUID player = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-04T12:00:00Z");
+        var journal = new DatabaseService.JournalRecord(transaction, player, "Player", "basic", "basic",
+                1, 1, "COMMAND", "winner", now);
+        var opening = new DatabaseService.OpeningRecord(transaction, player, "Player", "basic", "basic",
+                1, 1, "COMMAND", "winner", "world:1,2,3", 0, now.plusSeconds(1));
+        try (DatabaseService database = database()) {
+            database.prepareJournal(journal).join();
+            database.prepareJournal(journal).join();
+            database.completeOpening(opening).join();
+            database.completeOpening(opening).join();
+
+            assertEquals(1, database.history(player, 10, 0).size());
+            assertEquals(1, database.loadStatistics().global().get("basic"));
+            assertEquals(1, database.loadStatistics().players().get(player).get("basic"));
+            assertEquals(0, database.pendingJournalCount());
+        }
+    }
+
+    @Test
+    void virtualKeyLedgerIsAtomicAndIdempotentWithoutOverdrafts() throws Exception {
+        UUID player = UUID.randomUUID();
+        UUID actor = UUID.randomUUID();
+        try (DatabaseService database = database()) {
+            var grant = database.creditVirtualKeys(player, "basic", 5, "grant-1", "ADMIN", "ticket-1", actor).join();
+            assertTrue(grant.applied());
+            assertEquals(5, grant.balanceAfter());
+            var duplicateGrant = database.creditVirtualKeys(player, "basic", 5, "grant-1", "ADMIN", "ticket-1", actor).join();
+            assertEquals(grant.entryId(), duplicateGrant.entryId());
+            assertEquals(5, database.loadVirtualKeyBalance(player, "basic").join().balance());
+
+            var insufficient = database.debitVirtualKeys(player, "basic", 6, "debit-too-much", "OPENING", "tx-1", null).join();
+            assertFalse(insufficient.applied());
+            assertEquals(5, insufficient.balanceAfter());
+            var debit = database.debitVirtualKeys(player, "basic", 3, "debit-1", "OPENING", "tx-2", null).join();
+            assertTrue(debit.applied());
+            assertEquals(2, debit.balanceAfter());
+            var duplicateDebit = database.debitVirtualKeys(player, "basic", 3, "debit-1", "OPENING", "tx-2", null).join();
+            assertEquals(debit.entryId(), duplicateDebit.entryId());
+            assertEquals(2, database.loadVirtualKeyBalance(player, "basic").join().balance());
+            assertThrows(CompletionException.class, () -> database.creditVirtualKeys(player, "basic", 1,
+                    "debit-1", "OTHER", "different", actor).join());
+
+            var claim = database.createVirtualKeyClaim(player, "MILESTONE", "milestone-1", "basic", null,
+                    "claim-virtual-1", "basic", 2, java.time.Instant.now()).join();
+            assertEquals("basic", claim.virtualKeyId());
+            assertEquals(2, claim.virtualKeyAmount());
+            assertEquals("PENDING", claim.state());
         }
     }
 

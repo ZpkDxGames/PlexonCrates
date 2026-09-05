@@ -9,11 +9,11 @@ softdepend: [PlexonKeys, PlaceholderAPI, Vault]
 commands:
   crates:
     description: Browse crates, preview rewards, or open a crate.
-    usage: /crates [crate|preview|open|history|claim] [crate|page|id] [amount]
+    usage: /crates [crate|preview|open|history|claim|keys] [crate|page|id] [amount]
     aliases: [crate, plexoncrates]
   cratesadmin:
     description: Configure PlexonCrates in game.
-    usage: /pcrates [create|edit|clone|import|export|publish|delete|keys|wand|link|unlink|givekey|open|validate|reload|backup|status|diagnose]
+    usage: /pcrates [create|edit|clone|import|export|publish|delete|keys|wand|link|unlink|givekey|virtualgrant|open|validate|reload|backup|status|diagnose]
     aliases: [pcrates, pca]
 permissions:
   plexoncrates.use:

@@ -57,6 +57,7 @@ invalid-reward-id: <red>Reward IDs may contain lowercase letters, numbers, under
 invalid-chance: <red>Chance must be from 0.00% to 100.00% with at most two decimal places.</red>
 hold-item: <yellow>Hold the exact reward item in your main hand first.</yellow>
 key-given: <green>Delivered <amount>x <key> <green>to <player><green>.</green>
+virtual-key-granted: <green>Credited <amount>x virtual <key> keys to <player>.</green>
 forced-open: <green>Opened <amount>x <crate> <green>for <player><green> without consuming keys.</green>
 player-not-found: <red>That player is not online.</red>
 statistics-saved: <green>Statistics saved.</green>

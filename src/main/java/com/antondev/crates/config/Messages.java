@@ -15,7 +15,7 @@ public final class Messages {
             "cooldown", "opened", "bulk-opened", "reward-overflow", "reloaded", "config-error",
             "target-required", "location-set", "location-removed", "location-not-found", "location-protected",
             "reward-added", "command-reward-added", "reward-removed", "chance-updated", "hold-item",
-            "key-given", "forced-open", "player-not-found", "statistics-saved", "status");
+            "key-given", "virtual-key-granted", "forced-open", "player-not-found", "statistics-saved", "status");
     private static final List<String> REQUIRED_2 = List.of(
             "opening-cancelled", "opening-state-changed", "opening-failed", "database-error",
             "input-cancelled", "input-timeout", "input-invalid");
@@ -90,6 +90,8 @@ public final class Messages {
         fallback(yaml, "key-replacement-drafted", "<green>Saved replacement-key drafts for <white><count></white> crate(s).</green> <yellow>Publish those crates before deleting the active key.</yellow>");
         fallback(yaml, "key-replacement-awaiting-publish", "<yellow>This key is still used by a published crate. Publish its pending replacement draft before deleting the key.</yellow>");
         fallback(yaml, "gui-stale", "<yellow>This menu is out of date. Reopen it before trying that action again.</yellow>");
+        fallback(yaml, "reward-claim-pending", "<yellow>Your exact reward was placed in Claim Inbox. Use <white>/crates claim</white> to deliver it safely.</yellow>");
+        fallback(yaml, "virtual-key-granted", "<green>Credited <amount>x virtual <key> keys to <player>.</green>");
     }
 
     private static void fallback(YamlConfiguration yaml, String key, String value) {

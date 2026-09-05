@@ -58,6 +58,13 @@ public final class ClaimService {
                 idempotencyToken, snapshot.bytes(), snapshot.capturedAmount(), snapshot.sha256(), Instant.now());
     }
 
+    public CompletableFuture<DatabaseService.ClaimEntry> enqueueVirtualKey(
+            UUID playerId, String sourceType, String sourceId, String crateId, String rewardId,
+            String idempotencyToken, String keyId, int amount) {
+        return plugin.database().createVirtualKeyClaim(playerId, sourceType, sourceId, crateId, rewardId,
+                idempotencyToken, keyId, amount, Instant.now());
+    }
+
     /**
      * Attempts one pending claim. All Bukkit inventory work stays on the primary
      * thread; database reservation/completion remains on the bounded writer.
@@ -68,7 +75,16 @@ public final class ClaimService {
         plugin.database().reserveClaim(player.getUniqueId(), claimId, attempt).whenComplete((reserved, error) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!player.isOnline()) return;
+                if (!player.isOnline()) {
+                    // Reservation happened, but no inventory mutation could have
+                    // started while the player was offline. Release it for a
+                    // later deliberate attempt instead of leaving a false
+                    // CLAIMING entry behind until the next restart.
+                    if (error == null && reserved != null && reserved.isPresent()) {
+                        plugin.database().releaseClaim(claimId, attempt, "Player disconnected before claim delivery");
+                    }
+                    return;
+                }
                 if (error != null) {
                     plugin.messages().send(player, "database-error");
                     return;
@@ -77,7 +93,35 @@ public final class ClaimService {
                     player.sendMessage(Text.parse("<yellow>That claim is no longer pending, or it needs administrator review.</yellow>"));
                     return;
                 }
-                deliverReserved(player, reserved.get(), attempt);
+                if (reserved.get().virtualKeyId() != null) {
+                    deliverVirtualReserved(player, reserved.get(), attempt);
+                } else {
+                    deliverReserved(player, reserved.get(), attempt);
+                }
+            });
+        });
+    }
+
+    private void deliverVirtualReserved(Player player, DatabaseService.ClaimEntry claim, String attempt) {
+        String creditToken = "claim:" + claim.claimId() + ":credit";
+        plugin.database().creditVirtualKeys(player.getUniqueId(), claim.virtualKeyId(), claim.virtualKeyAmount(),
+                creditToken, "CLAIM", claim.claimId().toString(), null).whenComplete((credited, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (error != null || credited == null || !credited.applied()) {
+                    review(player, claim, attempt, "Virtual-key credit could not be finalized", error);
+                    return;
+                }
+                plugin.database().completeClaim(claim.claimId(), attempt).whenComplete((completed, completionError) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (completionError != null || completed == null || completed.isEmpty()) {
+                            player.sendMessage(Text.parse("<red>The virtual-key claim was credited but needs administrator review.</red>"));
+                        } else if (player.isOnline()) {
+                            player.sendMessage(Text.parse("<green>Virtual-key claim delivered exactly.</green>"));
+                        }
+                    });
+                });
             });
         });
     }

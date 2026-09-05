@@ -320,6 +320,9 @@ public class PlexonCrates extends JavaPlugin {
         int pendingJournals;
         try { pendingJournals = database.pendingJournalCount(); }
         catch (Exception error) { pendingJournals = -1; }
+        DatabaseService.ClaimCounts claimCounts = null;
+        try { claimCounts = database.claimCounts().join(); }
+        catch (Exception error) { getLogger().log(Level.WARNING, "Could not read Claim Inbox diagnostics", error); }
         sender.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>PlexonCrates Diagnostics</bold></gradient>"));
         sender.sendMessage(Text.parse("<gray>Plugin:</gray> <white>" + getPluginMeta().getVersion() + "</white> <dark_gray>•</dark_gray> <gray>Paper API:</gray> <white>26.2</white> <dark_gray>•</dark_gray> <gray>Java:</gray> <white>" + Runtime.version().feature() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Crates:</gray> <white>" + crates.all().size() + "</white> <dark_gray>(" + drafts + " drafts)</dark_gray> <dark_gray>•</dark_gray> <gray>Rewards:</gray> <white>" + crates.rewardCount() + "</white>"));
@@ -328,6 +331,12 @@ public class PlexonCrates extends JavaPlugin {
         sender.sendMessage(Text.parse("<gray>Unresolved:</gray> <white>" + keys.unresolved().size() + "</white> <dark_gray>•</dark_gray> <gray>Collisions:</gray> <white>" + keys.collisions().size() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Locations:</gray> <white>" + locations.all().size() + "</white> <dark_gray>(" + onlineLocations + " online)</dark_gray>"));
         sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + pendingJournals + "</white>"));
+        sender.sendMessage(Text.parse(claimCounts == null
+                ? "<gray>Claim Inbox:</gray> <red>diagnostic unavailable</red>"
+                : "<gray>Claim Inbox:</gray> <white>" + claimCounts.pending()
+                + " pending</white> <dark_gray>•</dark_gray> <white>" + claimCounts.review()
+                + " review</white> <dark_gray>•</dark_gray> <gray>claimed:</gray> <white>"
+                + claimCounts.claimed() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Runtime snapshot:</gray> <white>" + runtime.snapshot().revision()
                 + "</white> <dark_gray>•</dark_gray> <gray>Published crates:</gray> <white>"
                 + runtime.all().size() + "</white>"));

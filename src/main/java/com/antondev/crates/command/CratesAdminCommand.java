@@ -74,6 +74,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 case "remove" -> remove(sender, args);
                 case "chance", "weight" -> chance(sender, args);
                 case "givekey" -> giveKey(sender, args);
+                case "virtualgrant" -> virtualGrant(sender, args);
                 case "open" -> forceOpen(sender, args);
                 default -> help(sender);
             }
@@ -301,6 +302,45 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 Text.value("player", target.getName()));
     }
 
+    private void virtualGrant(CommandSender sender, String[] args) {
+        if (args.length < 4) {
+            help(sender);
+            return;
+        }
+        UUID target = resolveUuid(args[1]);
+        String keyId = args[2].toLowerCase(Locale.ROOT);
+        if (plugin.keys().definition(keyId).isEmpty()) {
+            throw new IllegalArgumentException("Unknown key ID");
+        }
+        long amount;
+        try {
+            amount = Long.parseLong(args[3]);
+            if (amount < 1 || amount > 1_000_000_000L) throw new NumberFormatException();
+        } catch (NumberFormatException error) {
+            throw new IllegalArgumentException("Virtual-key amount must be between 1 and 1000000000");
+        }
+        String token = "admin-grant:" + UUID.randomUUID();
+        plugin.database().creditVirtualKeys(target, keyId, amount, token, "ADMIN_GRANT", token, actorId(sender))
+                .whenComplete((mutation, error) -> runSync(() -> {
+                    if (error != null) {
+                        plugin.configError(sender, asException(error));
+                        return;
+                    }
+                    plugin.messages().send(sender, "virtual-key-granted", Text.value("amount", amount),
+                            Text.value("key", keyId), Text.value("player", target));
+                }));
+    }
+
+    private UUID resolveUuid(String raw) {
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ignored) {
+            Player online = Bukkit.getPlayerExact(raw);
+            if (online == null) throw new IllegalArgumentException("Use an online player name or UUID");
+            return online.getUniqueId();
+        }
+    }
+
     private void forceOpen(CommandSender sender, String[] args) {
         if (args.length < 3) {
             help(sender);
@@ -422,7 +462,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             case "keys" -> "plexoncrates.admin.keys";
             case "additem", "addcommand", "remove", "chance", "weight" -> "plexoncrates.admin.rewards";
             case "wand", "link", "unlink", "set", "unset" -> "plexoncrates.admin.locations";
-            case "givekey", "open" -> "plexoncrates.admin.give";
+            case "givekey", "virtualgrant", "open" -> "plexoncrates.admin.give";
             case "reload", "validate", "save" -> "plexoncrates.admin.reload";
             case "backup" -> "plexoncrates.admin.backup";
             case "diagnose" -> "plexoncrates.admin.diagnose";
@@ -504,6 +544,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(Text.parse("<white>/pcrates addcommand [crate] [id] [chance%] [command]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates remove [crate] [reward]</white> <dark_gray>•</dark_gray> <white>chance [crate] [reward] [percent]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates givekey <player> <key> [amount]</white>"));
+        sender.sendMessage(Text.parse("<white>/pcrates virtualgrant <player|uuid> <key> <amount></white> <dark_gray>—</dark_gray> <gray>Credit the optional virtual-key wallet.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates open <player> <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Administrative keyless opening.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates validate</white> <dark_gray>•</dark_gray> <white>reload</white> <dark_gray>•</dark_gray> <white>backup</white> <dark_gray>•</dark_gray> <white>status</white> <dark_gray>•</dark_gray> <white>diagnose</white>"));
     }
@@ -514,7 +555,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (!sender.hasPermission("plexoncrates.admin") && !sender.hasPermission("plexoncrates.admin.gui")) return List.of();
         if (args.length == 1) return filter(List.of("gui", "create", "edit", "clone", "import", "export", "publish", "delete", "keys", "wand",
                 "link", "unlink", "set", "unset", "additem", "addcommand", "remove", "chance", "givekey",
-                "open", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
+                "open", "virtualgrant", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
         String action = args[0].toLowerCase(Locale.ROOT);
         if (args.length == 2 && List.of("edit", "export", "publish", "delete", "link", "set", "additem", "addcommand", "remove", "chance", "weight").contains(action)) {
             return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[1]);

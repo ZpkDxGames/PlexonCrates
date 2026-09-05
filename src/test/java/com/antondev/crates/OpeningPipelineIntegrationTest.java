@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.antondev.crates.api.event.CratePreOpenEvent;
+import com.antondev.crates.api.event.PortableCrateUseEvent;
 import java.util.Arrays;
 import java.util.List;
 import org.bukkit.Material;
@@ -47,6 +48,28 @@ class OpeningPipelineIntegrationTest {
         assertEquals(1, plugin.keys().count(player, crate.keyId()));
         assertEquals(0, plugin.statistics().player(player.getUniqueId(), crate.id()));
         assertTrue(plugin.database().history(player.getUniqueId(), 10, 0).isEmpty());
+        assertFalse(plugin.openings().isOpening(player.getUniqueId()));
+    }
+
+    @Test
+    void cancelledPortableUseConsumesNeitherIssuanceNorItem() {
+        var player = server.addPlayer("PortableCancelled");
+        player.setOp(true);
+        var crate = plugin.runtime().find("basic").orElseThrow();
+        ItemStack item = plugin.portables().issue(
+                crate, com.antondev.crates.service.PortableCrateCodec.RevisionPolicy.LATEST_PUBLISHED,
+                0, player.getUniqueId(), null).join();
+        var issue = plugin.portables().verify(item).join().orElseThrow();
+        player.getInventory().setItemInMainHand(item);
+        server.getPluginManager().registerEvents(new PortableCanceller(), plugin);
+
+        assertFalse(plugin.openings().openPortable(player, crate, issue, item.clone()));
+
+        assertEquals("UNUSED", plugin.database().loadPortableIssue(issue.issueId())
+                .join().orElseThrow().state());
+        assertTrue(plugin.portables().isPortable(player.getInventory().getItemInMainHand()));
+        assertEquals(1, player.getInventory().getItemInMainHand().getAmount());
+        assertEquals(0, plugin.statistics().player(player.getUniqueId(), crate.id()));
         assertFalse(plugin.openings().isOpening(player.getUniqueId()));
     }
 
@@ -135,6 +158,13 @@ class OpeningPipelineIntegrationTest {
     private static final class Canceller implements Listener {
         @EventHandler
         public void cancel(CratePreOpenEvent event) {
+            event.setCancelled(true);
+        }
+    }
+
+    private static final class PortableCanceller implements Listener {
+        @EventHandler
+        public void cancel(PortableCrateUseEvent event) {
             event.setCancelled(true);
         }
     }

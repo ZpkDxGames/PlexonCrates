@@ -5,6 +5,7 @@ import com.antondev.crates.api.event.CrateKeyConsumeEvent;
 import com.antondev.crates.api.event.CrateOpenEvent;
 import com.antondev.crates.api.event.CratePreOpenEvent;
 import com.antondev.crates.api.event.CrateRewardSelectEvent;
+import com.antondev.crates.api.event.PortableCrateUseEvent;
 import com.antondev.crates.config.OverflowPolicy;
 import com.antondev.crates.config.Text;
 import com.antondev.crates.database.DatabaseService;
@@ -95,6 +96,13 @@ public final class OpeningService {
         if (issue.revisionPolicy().equals("PINNED_REVISION")
                 && issue.pinnedRevision() != plugin.runtime().crateRevision(issue.crateId())) {
             plugin.messages().send(player, "opening-state-changed");
+            return false;
+        }
+        PortableCrateUseEvent useEvent = new PortableCrateUseEvent(
+                player, issue.issueId(), issue.crateId(), issue.revisionPolicy(), issue.pinnedRevision());
+        Bukkit.getPluginManager().callEvent(useEvent);
+        if (useEvent.isCancelled()) {
+            plugin.messages().send(player, "opening-cancelled");
             return false;
         }
         String reservation = UUID.randomUUID().toString();

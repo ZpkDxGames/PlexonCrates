@@ -21,8 +21,8 @@ public final class AlternativeRewardResolver<T> {
             rewardId = normalizeId(rewardId);
             value = Objects.requireNonNull(value, "value");
             fallbackId = fallbackId == null || fallbackId.isBlank() ? null : normalizeId(fallbackId);
-            var reasons = fallbackReasons == null ? EnumSet.noneOf(Reason.class)
-                    : EnumSet.copyOf(fallbackReasons);
+            var reasons = EnumSet.noneOf(Reason.class);
+            if (fallbackReasons != null) reasons.addAll(fallbackReasons);
             fallbackReasons = Set.copyOf(reasons);
         }
     }

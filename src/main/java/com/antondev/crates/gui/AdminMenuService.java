@@ -16,6 +16,7 @@ import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
+import com.antondev.crates.service.AlternativeRewardResolver;
 import com.antondev.crates.service.CrateRegistry;
 import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.LocationStore;
@@ -24,10 +25,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
@@ -249,7 +252,15 @@ public final class AdminMenuService {
                 Text.value("required", draft.requiredPermission().isBlank() ? "none" : draft.requiredPermission()),
                 Text.value("blocked", draft.blockedPermission().isBlank() ? "none" : draft.blockedPermission()));
         put(inventory, holder, "reward-builder", "limits", "limits");
+        put(inventory, holder, "reward-builder", "alternative", "alternative",
+                Text.value("alternative", draft.alternativeRewardId() == null ? "none" : draft.alternativeRewardId()),
+                Text.value("reasons", draft.alternativeReasons().isEmpty() ? "none"
+                        : draft.alternativeReasons().stream().map(Enum::name).sorted()
+                        .collect(java.util.stream.Collectors.joining(", "))));
         put(inventory, holder, "reward-builder", "messages", "messages");
+        put(inventory, holder, "reward-builder", "availability", "availability",
+                Text.value("starts", draft.availableFrom() == null ? "always" : draft.availableFrom()),
+                Text.value("ends", draft.availableUntil() == null ? "never" : draft.availableUntil()));
         put(inventory, holder, "reward-builder", "effects", "effects",
                 Text.value("title", draft.presentation().title().isBlank() ? "none" : "configured"),
                 Text.value("sound", draft.presentation().sound().isBlank() ? "none" : draft.presentation().sound()),
@@ -496,7 +507,9 @@ public final class AdminMenuService {
             case "rarity" -> cycleRarity(player);
             case "permissions" -> editRewardPermissions(player);
             case "limits" -> editRewardLimits(player);
+            case "alternative" -> editRewardAlternative(player);
             case "messages" -> editRewardMessages(player);
+            case "availability" -> editRewardAvailability(player);
             case "effects" -> editRewardEffects(player);
             case "enabled" -> { plugin.editSessions().reward(player).toggleEnabled(); openRewardBuilder(player); }
             case "reward-order" -> editRewardOrder(player);
@@ -905,6 +918,10 @@ public final class AdminMenuService {
                         draft.limits(), draft.requiredPermission(), draft.blockedPermission(), draft.presentation(),
                         draft.personalMessage(), draft.broadcast(), player.getName());
             }
+            plugin.crates().setAlternativeReward(draft.crateId(), draft.id(), draft.alternativeRewardId(),
+                    draft.alternativeReasons(), player.getName());
+            plugin.crates().setRewardAvailability(draft.crateId(), draft.id(), draft.availableFrom(),
+                    draft.availableUntil(), player.getName());
             String crateId = draft.crateId();
             plugin.editSessions().clearReward(player);
             saveDraftRevision(player, crateId, "REWARD", draft.editing()
@@ -1019,6 +1036,63 @@ public final class AdminMenuService {
                     numbers[3], numbers[4], numbers[5], numbers[6]));
             openRewardBuilder(target);
         });
+    }
+
+    private void editRewardAlternative(Player player) {
+        plugin.editSessions().request(player, Text.parse(
+                "<gold>Enter <white>fallback reward ID | reasons</white> (PLAYER_LIMIT, GLOBAL_LIMIT, PERMISSION, COOLDOWN, DATE_WINDOW), or <white>none</white>:</gold>"),
+                (target, value) -> {
+                    EditSessionService.RewardDraft draft = plugin.editSessions().reward(target);
+                    if (value.equalsIgnoreCase("none") || value.equals("-")) {
+                        draft.alternative(null, Set.of());
+                        openRewardBuilder(target);
+                        return;
+                    }
+                    if (!plugin.settings().alternativeRewardsEnabled()) {
+                        throw new IllegalStateException("Alternative rewards are disabled globally; only removal is available");
+                    }
+                    String[] parts = value.split("\\|", -1);
+                    if (parts.length != 2) throw new IllegalArgumentException("Use fallback reward ID | comma-separated reasons");
+                    String fallbackId = parts[0].trim().toLowerCase(Locale.ROOT);
+                    var reasons = new LinkedHashSet<AlternativeRewardResolver.Reason>();
+                    for (String raw : parts[1].split(",")) {
+                        AlternativeRewardResolver.Reason reason = AlternativeRewardResolver.Reason.valueOf(
+                                raw.trim().toUpperCase(Locale.ROOT));
+                        if (!AlternativeRewardResolver.fallbackReasonAllowed(reason)) {
+                            throw new IllegalArgumentException("Unsupported alternative reason: " + raw.trim());
+                        }
+                        reasons.add(reason);
+                    }
+                    Crate crate = plugin.crates().find(draft.crateId()).orElseThrow();
+                    if (!crate.rewards().containsKey(fallbackId)) {
+                        throw new IllegalArgumentException("The fallback reward must already exist in this crate");
+                    }
+                    var nodes = new LinkedHashMap<String, AlternativeRewardResolver.Node<String>>();
+                    for (CrateReward reward : crate.orderedRewards()) {
+                        if (reward.id().equals(draft.id())) continue;
+                        nodes.put(reward.id(), new AlternativeRewardResolver.Node<>(reward.id(), reward.id(),
+                                reward.alternativeRewardId(), reward.alternativeReasons()));
+                    }
+                    nodes.put(draft.id(), new AlternativeRewardResolver.Node<>(draft.id(), draft.id(),
+                            fallbackId, reasons));
+                    List<String> errors = AlternativeRewardResolver.validate(nodes);
+                    if (!errors.isEmpty()) throw new IllegalArgumentException(
+                            "Invalid alternative graph: " + String.join(", ", errors));
+                    draft.alternative(fallbackId, reasons);
+                    openRewardBuilder(target);
+                });
+    }
+
+    private void editRewardAvailability(Player player) {
+        plugin.editSessions().request(player, Text.parse(
+                "<yellow>Enter <white>start UTC instant | end UTC instant</white>. Use - for an open boundary (example 2026-12-01T00:00:00Z):</yellow>"),
+                (target, value) -> {
+                    String[] parts = value.split("\\|", -1);
+                    if (parts.length != 2) throw new IllegalArgumentException("Use exactly two | separated boundaries");
+                    plugin.editSessions().reward(target).availability(
+                            optionalInstant(parts[0]), optionalInstant(parts[1]));
+                    openRewardBuilder(target);
+                });
     }
 
     private void editRewardMessages(Player player) {
@@ -1580,6 +1654,16 @@ public final class AdminMenuService {
     private static String dash(String value) {
         String trimmed = value.trim();
         return trimmed.equals("-") ? "" : trimmed;
+    }
+
+    private static Instant optionalInstant(String value) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.isEmpty() || normalized.equals("-") || normalized.equalsIgnoreCase("none")) return null;
+        try {
+            return Instant.parse(normalized);
+        } catch (RuntimeException error) {
+            throw new IllegalArgumentException("Use an ISO-8601 UTC instant such as 2026-12-01T00:00:00Z", error);
+        }
     }
 
     private record KeyEntry(String id, String source, ItemStack icon, boolean resolved) {

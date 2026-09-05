@@ -6,8 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.antondev.crates.domain.crate.CrateState;
+import com.antondev.crates.service.AlternativeRewardResolver;
 import java.nio.file.Files;
+import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Material;
@@ -127,6 +130,32 @@ class PluginIntegrationTest {
         var curved = plugin.crates().find("basic").orElseThrow().orderedRewards();
         assertEquals(10_000, curved.stream().mapToInt(reward -> reward.chanceBasisPoints()).sum());
         assertTrue(curved.stream().allMatch(reward -> reward.chanceBasisPoints() == 1_250));
+    }
+
+    @Test
+    void alternativePolicyAndAvailabilityRoundTripAndRejectCycles() throws Exception {
+        Instant starts = Instant.parse("2026-09-01T00:00:00Z");
+        Instant ends = Instant.parse("2027-01-01T00:00:00Z");
+        plugin.crates().setAlternativeReward("basic", "coal_cache", "iron_supplies",
+                Set.of(AlternativeRewardResolver.Reason.PLAYER_LIMIT,
+                        AlternativeRewardResolver.Reason.PERMISSION), "TEST");
+        plugin.crates().setRewardAvailability("basic", "coal_cache", starts, ends, "TEST");
+
+        var reward = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache");
+        assertEquals("iron_supplies", reward.alternativeRewardId());
+        assertEquals(Set.of(AlternativeRewardResolver.Reason.PLAYER_LIMIT,
+                AlternativeRewardResolver.Reason.PERMISSION), reward.alternativeReasons());
+        assertEquals(starts, reward.availableFrom());
+        assertEquals(ends, reward.availableUntil());
+        String serialized = plugin.crates().serialized("basic");
+        assertTrue(serialized.contains("reward-id: iron_supplies"));
+        assertTrue(serialized.contains("starts-at:") && serialized.contains("2026-09-01T00:00:00Z"));
+
+        assertThrows(IllegalArgumentException.class, () -> plugin.crates().setAlternativeReward(
+                "basic", "iron_supplies", "coal_cache",
+                Set.of(AlternativeRewardResolver.Reason.GLOBAL_LIMIT), "TEST"));
+        assertTrue(plugin.crates().find("basic").orElseThrow().rewards()
+                .get("iron_supplies").alternativeRewardId() == null);
     }
 
     @Test

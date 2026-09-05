@@ -102,6 +102,10 @@ public final class DefinitionPublisher {
         CrateRegistry.PreparedPublication publication = crates.preparePublished(
                 frozen.crateId(), frozen.payload(), actorName);
         if (publication.crate().state() == CrateState.PUBLISHED) {
+            if (!plugin.settings().alternativeRewardsEnabled()
+                    && publication.crate().rewards().values().stream().anyMatch(CrateReward::hasAlternative)) {
+                throw new IllegalStateException("Alternative rewards are disabled globally; remove their mappings or enable the feature before publishing");
+            }
             List<String> issues = crates.publishingIssues(publication.crate(), keys);
             if (!issues.isEmpty()) throw new IllegalStateException(String.join(" ", issues));
         }
@@ -253,7 +257,12 @@ public final class DefinitionPublisher {
                 + "\npresentation-sound=" + reward.presentation().sound()
                 + "\npresentation-volume=" + reward.presentation().soundVolume()
                 + "\npresentation-pitch=" + reward.presentation().soundPitch()
-                + "\npresentation-firework=" + reward.presentation().firework() + "\n";
+                + "\npresentation-firework=" + reward.presentation().firework()
+                + "\nalternative-reward-id=" + (reward.alternativeRewardId() == null ? "" : reward.alternativeRewardId())
+                + "\nalternative-reasons=" + reward.alternativeReasons().stream().map(Enum::name).sorted()
+                        .collect(java.util.stream.Collectors.joining(","))
+                + "\navailable-from=" + (reward.availableFrom() == null ? "" : reward.availableFrom())
+                + "\navailable-until=" + (reward.availableUntil() == null ? "" : reward.availableUntil()) + "\n";
         return settings.getBytes(StandardCharsets.UTF_8);
     }
 

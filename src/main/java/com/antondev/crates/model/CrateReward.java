@@ -3,7 +3,10 @@ package com.antondev.crates.model;
 import com.antondev.crates.domain.reward.RewardLimits;
 import com.antondev.crates.domain.reward.RewardRarity;
 import com.antondev.crates.domain.reward.RewardPresentation;
+import com.antondev.crates.service.AlternativeRewardResolver;
+import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -25,13 +28,31 @@ public record CrateReward(
         RewardLimits limits,
         RewardPresentation presentation,
         String personalMessage,
-        String broadcast) {
+        String broadcast,
+        String alternativeRewardId,
+        Set<AlternativeRewardResolver.Reason> alternativeReasons,
+        Instant availableFrom,
+        Instant availableUntil) {
 
     public CrateReward {
         displayItem = displayItem.clone();
         items = items.stream().map(ItemStack::clone).toList();
         commands = List.copyOf(commands);
         presentation = java.util.Objects.requireNonNull(presentation, "presentation");
+        alternativeRewardId = alternativeRewardId == null || alternativeRewardId.isBlank()
+                ? null : alternativeRewardId.trim().toLowerCase(java.util.Locale.ROOT);
+        alternativeReasons = alternativeReasons == null ? Set.of() : Set.copyOf(alternativeReasons);
+        if (alternativeRewardId == null && !alternativeReasons.isEmpty()) {
+            throw new IllegalArgumentException("Alternative reasons require a fallback reward");
+        }
+        if (alternativeRewardId != null && (!alternativeRewardId.matches("[a-z0-9][a-z0-9_-]{0,63}")
+                || alternativeReasons.isEmpty()
+                || !alternativeReasons.stream().allMatch(AlternativeRewardResolver::fallbackReasonAllowed))) {
+            throw new IllegalArgumentException("Alternative reward policy is incomplete or unsafe");
+        }
+        if (availableFrom != null && availableUntil != null && !availableFrom.isBefore(availableUntil)) {
+            throw new IllegalArgumentException("Reward availability start must precede its end");
+        }
         if (!Double.isFinite(baseChancePercent) || baseChancePercent < 0 || baseChancePercent > 100) {
             throw new IllegalArgumentException("Reward chance must be between 0.00% and 100.00%");
         }
@@ -45,7 +66,18 @@ public record CrateReward(
                        String requiredPermission, String blockedPermission, String broadcast) {
         this(id, displayName, legacyChanceValue, enabled, RewardRarity.COMMON, displayItem, items, commands,
                 0, 0, 0.0, requiredPermission, blockedPermission, RewardLimits.unlimited(),
-                RewardPresentation.none(), "", broadcast);
+                RewardPresentation.none(), "", broadcast, null, Set.of(), null, null);
+    }
+
+    /** Source-compatible constructor for rewards without 3.0 fallback/availability metadata. */
+    public CrateReward(String id, Component displayName, double baseChancePercent, boolean enabled,
+                       RewardRarity rarity, ItemStack displayItem, List<ItemStack> items, List<String> commands,
+                       int experiencePoints, int experienceLevels, double money, String requiredPermission,
+                       String blockedPermission, RewardLimits limits, RewardPresentation presentation,
+                       String personalMessage, String broadcast) {
+        this(id, displayName, baseChancePercent, enabled, rarity, displayItem, items, commands,
+                experiencePoints, experienceLevels, money, requiredPermission, blockedPermission, limits,
+                presentation, personalMessage, broadcast, null, Set.of(), null, null);
     }
 
     @Override public ItemStack displayItem() { return displayItem.clone(); }
@@ -66,7 +98,8 @@ public record CrateReward(
         }
         return new CrateReward(id, displayName, basisPoints / 100.0, enabled, rarity, displayItem, items, commands,
                 experiencePoints, experienceLevels, money, requiredPermission, blockedPermission, limits,
-                presentation, personalMessage, broadcast);
+                presentation, personalMessage, broadcast, alternativeRewardId, alternativeReasons,
+                availableFrom, availableUntil);
     }
 
     public ItemStack displayCopy() { return displayItem.clone(); }
@@ -75,8 +108,17 @@ public record CrateReward(
     public boolean eligible(Player player) {
         return enabled && chanceBasisPoints() > 0
                 && (requiredPermission.isBlank() || player.hasPermission(requiredPermission))
-                && (blockedPermission.isBlank() || !player.hasPermission(blockedPermission));
+                && (blockedPermission.isBlank() || !player.hasPermission(blockedPermission))
+                && availableAt(System.currentTimeMillis());
     }
+
+    public boolean availableAt(long epochMillis) {
+        Instant now = Instant.ofEpochMilli(epochMillis);
+        return (availableFrom == null || !now.isBefore(availableFrom))
+                && (availableUntil == null || now.isBefore(availableUntil));
+    }
+
+    public boolean hasAlternative() { return alternativeRewardId != null; }
 
     public boolean hasDelivery() {
         return !items.isEmpty() || !commands.isEmpty() || experiencePoints > 0 || experienceLevels > 0 || money > 0;

@@ -37,7 +37,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Predicate;
+import java.util.function.Function;
 import java.util.logging.Level;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
@@ -296,12 +296,14 @@ public final class OpeningService {
         boolean forced = source == OpenSource.ADMIN_FORCE;
         boolean portable = source == OpenSource.PORTABLE;
         boolean bypassLimits = forced || player.hasPermission("plexoncrates.bypass.limit");
-        Predicate<CrateReward> eligibility = baseEligibility(player, selectedRewardId != null);
+        long plannedAt = System.currentTimeMillis();
+        Function<CrateReward, AlternativeRewardResolver.Reason> eligibility = baseIneligibility(player, plannedAt);
+        boolean alternativesEnabled = plugin.settings().alternativeRewardsEnabled();
         RewardStateService.Plan rewardPlan = selectedRewardId == null
-                ? plugin.rewardStates().plan(player.getUniqueId(), crate, requested, source,
-                        eligibility, bypassLimits, System.currentTimeMillis())
-                : plugin.rewardStates().planSelected(player.getUniqueId(), crate, selectedRewardId, requested,
-                        source, eligibility, bypassLimits, System.currentTimeMillis());
+                ? plugin.rewardStates().planResolved(player.getUniqueId(), crate, requested, source,
+                        eligibility, alternativesEnabled, bypassLimits, plannedAt)
+                : plugin.rewardStates().planSelectedResolved(player.getUniqueId(), crate, selectedRewardId,
+                        requested, source, eligibility, alternativesEnabled, bypassLimits, plannedAt);
         List<CrateReward> selected = rewardPlan.rewards();
         if (selected.size() != requested) return reject(player, "no-eligible-rewards");
 
@@ -332,12 +334,12 @@ public final class OpeningService {
 
         PortableContext portableContext = portable ? portableRequests.remove(player.getUniqueId()) : null;
         if (portable && portableContext == null) return reject(player, "opening-state-changed");
-        PendingOpening opening = new PendingOpening(plan, crate, selected, payment, milestonePlan, portableContext);
+        PendingOpening opening = new PendingOpening(plan, crate, rewardPlan, payment, milestonePlan, portableContext);
         pending.put(transactionId, opening);
         DatabaseService.JournalRecord journal = new DatabaseService.JournalRecord(transactionId,
                 player.getUniqueId(), player.getName(), crate.id(), payment.keyId(), payment.total(),
                 requested, source.name(), String.join(",", plan.rewardIds()), plan.createdAt());
-        plugin.database().prepareJournal(journal, payment.detail())
+        plugin.database().prepareJournal(journal, transactionDetail(opening))
                 .whenComplete((ignored, error) -> {
                     if (!plugin.isEnabled()) return;
                     Bukkit.getScheduler().runTask(plugin, () -> {
@@ -484,10 +486,12 @@ public final class OpeningService {
                 return;
             }
             boolean bypassLimits = plan.source() == OpenSource.ADMIN_FORCE || player.hasPermission("plexoncrates.bypass.limit");
-            Predicate<CrateReward> eligibility = baseEligibility(player,
-                    current.openingMode() == OpeningMode.SELECTIVE && plan.source() != OpenSource.ADMIN_FORCE);
-            if (!plugin.rewardStates().canApply(player.getUniqueId(), current, opening.selected(), plan.source(),
-                    eligibility, bypassLimits, System.currentTimeMillis())) {
+            long revalidatedAt = System.currentTimeMillis();
+            Function<CrateReward, AlternativeRewardResolver.Reason> eligibility =
+                    baseIneligibility(player, revalidatedAt);
+            if (!plugin.rewardStates().canApplyResolved(player.getUniqueId(), current, opening.rewardPlan(),
+                    plan.source(), eligibility, plugin.settings().alternativeRewardsEnabled(), bypassLimits,
+                    revalidatedAt)) {
                 abortPrepared(transactionId, "Reward limits or pity state changed before consumption", false);
                 plugin.messages().send(player, "no-eligible-rewards");
                 return;
@@ -541,7 +545,8 @@ public final class OpeningService {
     }
 
     private void beginVirtualCommit(UUID transactionId, PendingOpening opening, Player player, Crate current,
-                                    Predicate<CrateReward> eligibility, boolean bypassLimits) {
+                                    Function<CrateReward, AlternativeRewardResolver.Reason> eligibility,
+                                    boolean bypassLimits) {
         PaymentChoice payment = opening.payment();
         String debitToken = "opening-payment:" + transactionId;
         plugin.database().debitVirtualKeys(player.getUniqueId(), payment.keyId(), payment.virtualAmount(),
@@ -582,8 +587,10 @@ public final class OpeningService {
                                 refundVirtualAndAbort(opening, "Inventory capacity changed after virtual debit");
                                 return;
                             }
-                            if (!plugin.rewardStates().canApply(player.getUniqueId(), current, opening.selected(),
-                                    opening.plan().source(), eligibility, bypassLimits, System.currentTimeMillis())) {
+                            if (!plugin.rewardStates().canApplyResolved(player.getUniqueId(), current,
+                                    opening.rewardPlan(), opening.plan().source(), eligibility,
+                                    plugin.settings().alternativeRewardsEnabled(), bypassLimits,
+                                    System.currentTimeMillis())) {
                                 refundVirtualAndAbort(opening, "Reward state changed after virtual debit");
                                 return;
                             }
@@ -614,15 +621,17 @@ public final class OpeningService {
     }
 
     private void finishConsumed(UUID transactionId, PendingOpening opening, Player player, Crate current,
-                                Predicate<CrateReward> eligibility, boolean bypassLimits) {
+                                Function<CrateReward, AlternativeRewardResolver.Reason> eligibility,
+                                boolean bypassLimits) {
         OpeningPlan plan = opening.plan();
         if (opening.payment().physicalAmount() > 0) {
             Bukkit.getPluginManager().callEvent(new CrateKeyConsumeEvent(player, plan));
         }
-        plugin.database().updateJournal(transactionId, "CONSUMED", opening.payment().detail());
+        plugin.database().updateJournal(transactionId, "CONSUMED", transactionDetail(opening));
         DeliveryResult delivered = deliver(player, current, opening.selected(), plan, true);
-        DatabaseService.RewardStateCommit rewardState = plugin.rewardStates().apply(player.getUniqueId(), current,
-                opening.selected(), plan.source(), eligibility, bypassLimits, System.currentTimeMillis());
+        DatabaseService.RewardStateCommit rewardState = plugin.rewardStates().applyResolved(player.getUniqueId(),
+                current, opening.rewardPlan(), plan.source(), eligibility,
+                plugin.settings().alternativeRewardsEnabled(), bypassLimits, System.currentTimeMillis());
         DatabaseService.MilestoneProgressCommit milestoneState = plugin.milestoneProgress().apply(opening.milestones());
         List<DatabaseService.MilestoneItemClaim> milestoneClaims = freezeMilestoneClaims(opening);
         if (!milestoneClaims.isEmpty()) milestoneState = milestoneState.withClaims(milestoneClaims);
@@ -631,7 +640,8 @@ public final class OpeningService {
         DatabaseService.OpeningRecord record = new DatabaseService.OpeningRecord(transactionId,
                 player.getUniqueId(), player.getName(), current.id(), plan.keyId(), plan.keyAmount(),
                 plan.openingCount(), plan.source().name(), String.join(",", plan.rewardIds()),
-                locationText(plan.location()), delivered.overflowCount(), Instant.now());
+                locationText(plan.location()), delivered.overflowCount(), opening.rewardPlan().outcomeDetail(),
+                Instant.now());
         DatabaseService.MilestoneProgressCommit frozenMilestones = milestoneState;
         plugin.database().completeOpening(record, rewardState, frozenMilestones).whenComplete((ignored, error) -> {
             if (!plugin.isEnabled()) return;
@@ -722,7 +732,8 @@ public final class OpeningService {
     }
 
     private void beginPortableCommit(UUID transactionId, PendingOpening opening, Player player, Crate current,
-                                     Predicate<CrateReward> eligibility, boolean bypassLimits) {
+                                     Function<CrateReward, AlternativeRewardResolver.Reason> eligibility,
+                                     boolean bypassLimits) {
         PortableContext context = opening.portable();
         if (!player.isOnline() || !player.getInventory().getItemInMainHand().isSimilar(context.expectedItem())) {
             abortPrepared(transactionId, "Portable item changed before consumption", false);
@@ -918,16 +929,28 @@ public final class OpeningService {
         }
     }
 
-    private Predicate<CrateReward> baseEligibility(Player player, boolean ignoreChance) {
-        return reward -> (ignoreChance ? selectivePermissionEligible(player, reward) : reward.eligible(player))
-                && reward.hasDelivery()
-                && (reward.money() <= 0 || (plugin.settings().vaultEnabled() && economy.available()));
+    private Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility(Player player, long now) {
+        return reward -> {
+            if (!reward.enabled() || !reward.hasDelivery()) {
+                return AlternativeRewardResolver.Reason.TRANSACTION_FAILURE;
+            }
+            if ((!reward.requiredPermission().isBlank() && !player.hasPermission(reward.requiredPermission()))
+                    || (!reward.blockedPermission().isBlank() && player.hasPermission(reward.blockedPermission()))) {
+                return AlternativeRewardResolver.Reason.PERMISSION;
+            }
+            if (!reward.availableAt(now)) return AlternativeRewardResolver.Reason.DATE_WINDOW;
+            if (reward.money() > 0 && (!plugin.settings().vaultEnabled() || !economy.available())) {
+                return AlternativeRewardResolver.Reason.MISSING_INTEGRATION;
+            }
+            return null;
+        };
     }
 
-    private static boolean selectivePermissionEligible(Player player, CrateReward reward) {
-        return reward.enabled()
-                && (reward.requiredPermission().isBlank() || player.hasPermission(reward.requiredPermission()))
-                && (reward.blockedPermission().isBlank() || !player.hasPermission(reward.blockedPermission()));
+    /** Exact current source-to-actual mapping used by preview and confirmation menus. */
+    public Optional<RewardStateService.Outcome> previewOutcome(
+            Player player, Crate crate, CrateReward source, long now, boolean bypassLimits) {
+        return plugin.rewardStates().resolveOutcome(player.getUniqueId(), crate, source,
+                baseIneligibility(player, now), plugin.settings().alternativeRewardsEnabled(), bypassLimits, now);
     }
 
     private void abortPrepared(UUID transactionId, String reason, boolean databaseError) {
@@ -992,14 +1015,20 @@ public final class OpeningService {
         return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
-    private record PendingOpening(OpeningPlan plan, Crate crate, List<CrateReward> selected,
+    private static String transactionDetail(PendingOpening opening) {
+        return opening.payment().detail() + ";" + opening.rewardPlan().outcomeDetail();
+    }
+
+    private record PendingOpening(OpeningPlan plan, Crate crate, RewardStateService.Plan rewardPlan,
                                   PaymentChoice payment, MilestoneProgressService.Plan milestones,
                                   PortableContext portable) {
         private PendingOpening {
-            selected = List.copyOf(selected);
+            rewardPlan = java.util.Objects.requireNonNull(rewardPlan, "rewardPlan");
             payment = java.util.Objects.requireNonNull(payment, "payment");
             milestones = java.util.Objects.requireNonNull(milestones, "milestones");
         }
+
+        private List<CrateReward> selected() { return rewardPlan.rewards(); }
     }
 
     private record PaymentOption(KeyService.KeyTransaction transaction,

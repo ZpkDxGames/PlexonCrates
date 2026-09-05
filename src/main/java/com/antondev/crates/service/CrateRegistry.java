@@ -837,6 +837,56 @@ public final class CrateRegistry {
         });
     }
 
+    /** Configures or clears the one-edge safe alternative for an existing reward. */
+    public void setAlternativeReward(String crateId, String rewardId, String fallbackRewardId,
+                                     Set<AlternativeRewardResolver.Reason> reasons,
+                                     String editor) throws Exception {
+        String sourceId = normalize(rewardId);
+        String fallbackId = normalize(fallbackRewardId);
+        Set<AlternativeRewardResolver.Reason> safeReasons = reasons == null ? Set.of() : Set.copyOf(reasons);
+        if (!validId(sourceId)) throw new IllegalArgumentException("Invalid source reward ID");
+        if (fallbackId.isEmpty()) {
+            if (!safeReasons.isEmpty()) throw new IllegalArgumentException("Clear reasons when removing an alternative");
+        } else {
+            if (!validId(fallbackId) || fallbackId.equals(sourceId)) {
+                throw new IllegalArgumentException("Choose a different reward in the same crate");
+            }
+            if (safeReasons.isEmpty() || !safeReasons.stream()
+                    .allMatch(AlternativeRewardResolver::fallbackReasonAllowed)) {
+                throw new IllegalArgumentException("Choose at least one supported alternative reason");
+            }
+        }
+        mutate(crateId, yaml -> {
+            String path = "rewards." + sourceId;
+            if (!yaml.isConfigurationSection(path)) throw new IllegalArgumentException("Reward not found");
+            if (!fallbackId.isEmpty() && !yaml.isConfigurationSection("rewards." + fallbackId)) {
+                throw new IllegalArgumentException("Alternative reward not found in this crate");
+            }
+            yaml.set(path + ".alternative.reward-id", fallbackId.isEmpty() ? null : fallbackId);
+            yaml.set(path + ".alternative.reasons", fallbackId.isEmpty() ? null
+                    : safeReasons.stream().map(Enum::name).sorted().toList());
+            if (fallbackId.isEmpty()) yaml.set(path + ".alternative", null);
+            touch(yaml, editor);
+        });
+    }
+
+    /** Configures an optional half-open UTC availability window [start, end). */
+    public void setRewardAvailability(String crateId, String rewardId, Instant startsAt, Instant endsAt,
+                                      String editor) throws Exception {
+        if (startsAt != null && endsAt != null && !startsAt.isBefore(endsAt)) {
+            throw new IllegalArgumentException("Availability start must precede its end");
+        }
+        String id = normalize(rewardId);
+        mutate(crateId, yaml -> {
+            String path = "rewards." + id;
+            if (!yaml.isConfigurationSection(path)) throw new IllegalArgumentException("Reward not found");
+            yaml.set(path + ".availability.starts-at", startsAt == null ? null : startsAt.toString());
+            yaml.set(path + ".availability.ends-at", endsAt == null ? null : endsAt.toString());
+            if (startsAt == null && endsAt == null) yaml.set(path + ".availability", null);
+            touch(yaml, editor);
+        });
+    }
+
     public void moveReward(String crateId, String rewardId, int requestedIndex, String editor) throws Exception {
         mutate(crateId, yaml -> {
             ConfigurationSection section = yaml.getConfigurationSection("rewards");
@@ -1199,10 +1249,21 @@ public final class CrateRegistry {
             Text.parse(broadcast);
             Text.parse(presentation.title());
             Text.parse(presentation.subtitle());
+            String fallbackId = normalize(yaml.getString(path + ".alternative.reward-id", ""));
+            var fallbackReasons = new LinkedHashSet<AlternativeRewardResolver.Reason>();
+            for (String rawReason : yaml.getStringList(path + ".alternative.reasons")) {
+                fallbackReasons.add(enumValue(AlternativeRewardResolver.Reason.class, rawReason, file,
+                        path + ".alternative.reasons"));
+            }
+            Instant availableFrom = optionalInstant(yaml.getString(path + ".availability.starts-at", ""),
+                    file, path + ".availability.starts-at");
+            Instant availableUntil = optionalInstant(yaml.getString(path + ".availability.ends-at", ""),
+                    file, path + ".availability.ends-at");
             rewards.put(rewardId, new CrateReward(rewardId, rewardName, chancePercent,
                     enabled, rarity, rewardDisplay, items, commands, points, levels,
                     money, yaml.getString(path + ".required-permission", ""),
-                    yaml.getString(path + ".blocked-permission", ""), limits, presentation, personal, broadcast));
+                    yaml.getString(path + ".blocked-permission", ""), limits, presentation, personal, broadcast,
+                    fallbackId.isEmpty() ? null : fallbackId, fallbackReasons, availableFrom, availableUntil));
         }
         if (!allBasisPoints) {
             List<ChanceAllocator.WeightedChance> activeWeights = rewards.values().stream()
@@ -1216,6 +1277,13 @@ public final class CrateRegistry {
                         reward.withChanceBasisPoints(reward.enabled() ? converted.basisPoints(id) : 0)));
                 rewards = migrated;
             }
+        }
+        var alternativeNodes = new LinkedHashMap<String, AlternativeRewardResolver.Node<CrateReward>>();
+        rewards.forEach((id, reward) -> alternativeNodes.put(id, new AlternativeRewardResolver.Node<>(
+                id, reward, reward.alternativeRewardId(), reward.alternativeReasons())));
+        List<String> alternativeErrors = AlternativeRewardResolver.validate(alternativeNodes);
+        if (!alternativeErrors.isEmpty()) {
+            throw path(file, "invalid alternative reward graph: " + String.join(", ", alternativeErrors));
         }
         return rewards;
     }
@@ -1431,6 +1499,15 @@ public final class CrateRegistry {
     private static <T extends Enum<T>> T enumValue(Class<T> type, String raw, Path file, String path) {
         try { return Enum.valueOf(type, raw.toUpperCase(Locale.ROOT)); }
         catch (RuntimeException error) { throw path(file, "invalid " + path + ": " + raw, error); }
+    }
+
+    private static Instant optionalInstant(String raw, Path file, String path) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return Instant.parse(raw.trim());
+        } catch (RuntimeException error) {
+            throw path(file, path + " must be an ISO-8601 UTC instant", error);
+        }
     }
 
     private static CrateState state(String lifecycle) {

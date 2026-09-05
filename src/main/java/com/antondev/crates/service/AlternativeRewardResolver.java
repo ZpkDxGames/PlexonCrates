@@ -52,6 +52,12 @@ public final class AlternativeRewardResolver<T> {
                 errors.add("ALTERNATIVE_ID_MISMATCH:" + entry.getKey());
             }
             normalized.put(entry.getValue().rewardId(), entry.getValue());
+            if (entry.getValue().fallbackId() == null && !entry.getValue().fallbackReasons().isEmpty()) {
+                errors.add("ALTERNATIVE_ORPHAN_REASONS:" + entry.getValue().rewardId());
+            }
+            if (entry.getValue().fallbackId() != null && entry.getValue().fallbackReasons().isEmpty()) {
+                errors.add("ALTERNATIVE_MISSING_REASONS:" + entry.getValue().rewardId());
+            }
             if (entry.getValue().fallbackId() != null && !entry.getValue().fallbackReasons().stream()
                     .allMatch(AlternativeRewardResolver::fallbackReasonAllowed)) {
                 errors.add("ALTERNATIVE_UNSAFE_REASON:" + entry.getValue().rewardId());
@@ -66,7 +72,21 @@ public final class AlternativeRewardResolver<T> {
                 errors.add("ALTERNATIVE_DEPTH:" + node.rewardId());
             }
         }
-        return List.copyOf(errors);
+        for (Node<T> origin : normalized.values()) {
+            var visited = new java.util.LinkedHashSet<String>();
+            Node<T> cursor = origin;
+            while (cursor != null && cursor.fallbackId() != null) {
+                if (!visited.add(cursor.rewardId())) {
+                    errors.add("ALTERNATIVE_CYCLE:" + origin.rewardId());
+                    break;
+                }
+                cursor = normalized.get(cursor.fallbackId());
+            }
+            if (cursor != null && visited.contains(cursor.rewardId())) {
+                errors.add("ALTERNATIVE_CYCLE:" + origin.rewardId());
+            }
+        }
+        return errors.stream().distinct().toList();
     }
 
     public static <T> Optional<Resolution<T>> resolve(

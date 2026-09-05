@@ -8,12 +8,15 @@ import com.antondev.crates.domain.reward.RewardLimits;
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.domain.key.KeyDefinition;
 import com.antondev.crates.model.CrateReward;
+import com.antondev.crates.service.AlternativeRewardResolver;
+import com.antondev.crates.service.CrateRegistry;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
@@ -92,6 +95,10 @@ public final class EditSessionService implements Listener {
         draft.presentation = source.presentation();
         draft.personalMessage = source.personalMessage();
         draft.broadcast = source.broadcast();
+        draft.alternativeRewardId = source.alternativeRewardId();
+        draft.alternativeReasons = source.alternativeReasons();
+        draft.availableFrom = source.availableFrom();
+        draft.availableUntil = source.availableUntil();
         draft.originalOrderIndex = orderIndex;
         draft.orderIndex = orderIndex;
         rewards.put(player.getUniqueId(), draft);
@@ -224,6 +231,10 @@ public final class EditSessionService implements Listener {
         private RewardPresentation presentation = RewardPresentation.none();
         private String personalMessage = "";
         private String broadcast = "";
+        private String alternativeRewardId;
+        private Set<AlternativeRewardResolver.Reason> alternativeReasons = Set.of();
+        private Instant availableFrom;
+        private Instant availableUntil;
         private int originalOrderIndex = -1;
         private int orderIndex = -1;
         private long updatedAt = System.currentTimeMillis();
@@ -323,6 +334,37 @@ public final class EditSessionService implements Listener {
             broadcast = serverBroadcast == null ? "" : serverBroadcast.trim();
             Text.parse(personalMessage);
             Text.parse(broadcast);
+            touch();
+        }
+        public String alternativeRewardId() { return alternativeRewardId; }
+        public Set<AlternativeRewardResolver.Reason> alternativeReasons() { return alternativeReasons; }
+        public void alternative(String rewardId, Set<AlternativeRewardResolver.Reason> reasons) {
+            String id = rewardId == null || rewardId.isBlank() ? null
+                    : rewardId.trim().toLowerCase(java.util.Locale.ROOT);
+            Set<AlternativeRewardResolver.Reason> selected = reasons == null ? Set.of() : Set.copyOf(reasons);
+            if (id == null) {
+                if (!selected.isEmpty()) throw new IllegalArgumentException("Clear reasons when removing the alternative");
+            } else {
+                if (!CrateRegistry.validId(id) || id.equals(this.id)) {
+                    throw new IllegalArgumentException("Choose a different valid reward ID");
+                }
+                if (selected.isEmpty() || !selected.stream()
+                        .allMatch(AlternativeRewardResolver::fallbackReasonAllowed)) {
+                    throw new IllegalArgumentException("Choose at least one supported alternative reason");
+                }
+            }
+            alternativeRewardId = id;
+            alternativeReasons = selected;
+            touch();
+        }
+        public Instant availableFrom() { return availableFrom; }
+        public Instant availableUntil() { return availableUntil; }
+        public void availability(Instant startsAt, Instant endsAt) {
+            if (startsAt != null && endsAt != null && !startsAt.isBefore(endsAt)) {
+                throw new IllegalArgumentException("Availability start must precede its end");
+            }
+            availableFrom = startsAt;
+            availableUntil = endsAt;
             touch();
         }
         public int orderIndex() { return orderIndex; }

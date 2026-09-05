@@ -40,7 +40,8 @@ public final class MenuConfig {
         validateMenu("reward-pool", List.of("empty", "add-special", "search", "previous", "back",
                 "status", "preview", "next", "balance", "done"));
         validateMenu("reward-builder", List.of("name", "chance", "command", "experience", "money", "rarity",
-                "clear", "permissions", "limits", "messages", "effects", "enabled", "order", "confirm", "cancel", "input-placeholder"));
+                "clear", "permissions", "limits", "alternative", "messages", "availability", "effects",
+                "enabled", "order", "confirm", "cancel", "input-placeholder"));
         validateMenu("locations", List.of("wand", "previous", "back", "next"));
         validateMenu("statistics", List.of("summary", "back"));
         validateMenu("system", List.of("validate", "reload", "backup", "diagnose", "back"));

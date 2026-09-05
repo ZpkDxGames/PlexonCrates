@@ -79,7 +79,19 @@ public final class DatabaseService implements AutoCloseable {
             String rewardIds,
             String location,
             int overflowCount,
-            Instant completedAt) {}
+            String outcomeDetail,
+            Instant completedAt) {
+        public OpeningRecord(UUID transactionId, UUID playerId, String playerName, String crateId,
+                             String keyId, int keyAmount, int openingCount, String source,
+                             String rewardIds, String location, int overflowCount, Instant completedAt) {
+            this(transactionId, playerId, playerName, crateId, keyId, keyAmount, openingCount, source,
+                    rewardIds, location, overflowCount, "", completedAt);
+        }
+
+        public OpeningRecord {
+            outcomeDetail = outcomeDetail == null ? "" : outcomeDetail;
+        }
+    }
 
     public record AuditRecord(
             UUID actorId,
@@ -620,9 +632,12 @@ public final class DatabaseService implements AutoCloseable {
                         reward_ids TEXT NOT NULL,
                         location TEXT NOT NULL,
                         overflow_count INTEGER NOT NULL,
+                        outcome_detail TEXT NOT NULL DEFAULT '',
                         completed_at INTEGER NOT NULL
                     )
                     """);
+            ensureColumn(connection, "opening_history", "outcome_detail",
+                    "ALTER TABLE opening_history ADD COLUMN outcome_detail TEXT NOT NULL DEFAULT ''");
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS history_player_time ON opening_history(player_uuid, completed_at DESC)");
             statement.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS reward_player_state (
@@ -1003,6 +1018,20 @@ public final class DatabaseService implements AutoCloseable {
                 + "ON locations(world_uuid, x, z, y)");
     }
 
+    private static void ensureColumn(Connection connection, String table, String column, String alteration)
+            throws SQLException {
+        if (!table.matches("[a-z0-9_]+") || !column.matches("[a-z0-9_]+")) {
+            throw new IllegalArgumentException("Unsafe schema identifier");
+        }
+        try (Statement inspection = connection.createStatement();
+             ResultSet rows = inspection.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rows.next()) if (column.equalsIgnoreCase(rows.getString("name"))) return;
+        }
+        try (Statement migration = connection.createStatement()) {
+            migration.executeUpdate(alteration);
+        }
+    }
+
     private Connection connect() throws SQLException {
         Connection connection = DriverManager.getConnection(jdbcUrl);
         try (Statement statement = connection.createStatement()) {
@@ -1146,7 +1175,7 @@ public final class DatabaseService implements AutoCloseable {
         var result = new ArrayList<OpeningRecord>();
         try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
                 SELECT transaction_id, player_uuid, player_name, crate_id, key_id, key_amount, opening_count, source,
-                       reward_ids, location, overflow_count, completed_at
+                       reward_ids, location, overflow_count, outcome_detail, completed_at
                 FROM opening_history WHERE player_uuid = ? ORDER BY completed_at DESC LIMIT ? OFFSET ?
                 """)) {
             statement.setString(1, playerId.toString());
@@ -1999,8 +2028,9 @@ public final class DatabaseService implements AutoCloseable {
         return submitTransaction("complete opening", connection -> {
             try (PreparedStatement history = connection.prepareStatement("""
                     INSERT INTO opening_history(transaction_id, player_uuid, player_name, crate_id, key_id,
-                        key_amount, opening_count, source, reward_ids, location, overflow_count, completed_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        key_amount, opening_count, source, reward_ids, location, overflow_count, outcome_detail,
+                        completed_at)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(transaction_id) DO NOTHING
                     """)) {
                 history.setString(1, record.transactionId().toString());
@@ -2014,12 +2044,13 @@ public final class DatabaseService implements AutoCloseable {
                 history.setString(9, record.rewardIds());
                 history.setString(10, record.location());
                 history.setInt(11, record.overflowCount());
-                history.setLong(12, record.completedAt().toEpochMilli());
+                history.setString(12, record.outcomeDetail());
+                history.setLong(13, record.completedAt().toEpochMilli());
                 if (history.executeUpdate() == 0) {
                     // The finalization was already committed for this transaction.
                     // Treat a repeated completion call as an idempotent no-op and
                     // never apply statistics, limits, or pity a second time.
-                    updateJournal(connection, record.transactionId(), "COMPLETED", "");
+                    updateJournal(connection, record.transactionId(), "COMPLETED", record.outcomeDetail());
                     return;
                 }
             }
@@ -2116,7 +2147,7 @@ public final class DatabaseService implements AutoCloseable {
                     insertMilestoneClaim(connection, record, claim);
                 }
             }
-            updateJournal(connection, record.transactionId(), "COMPLETED", "");
+            updateJournal(connection, record.transactionId(), "COMPLETED", record.outcomeDetail());
         });
     }
 
@@ -3114,14 +3145,14 @@ public final class DatabaseService implements AutoCloseable {
     private static OpeningRecord openingRecord(ResultSet rows) throws SQLException {
         return new OpeningRecord(UUID.fromString(rows.getString(1)), UUID.fromString(rows.getString(2)), rows.getString(3),
                 rows.getString(4), rows.getString(5), rows.getInt(6), rows.getInt(7), rows.getString(8), rows.getString(9),
-                rows.getString(10), rows.getInt(11), Instant.ofEpochMilli(rows.getLong(12)));
+                rows.getString(10), rows.getInt(11), rows.getString(12), Instant.ofEpochMilli(rows.getLong(13)));
     }
 
     private static List<OpeningRecord> history(Connection connection, UUID playerId, int limit, int offset) throws SQLException {
         var result = new ArrayList<OpeningRecord>();
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT transaction_id, player_uuid, player_name, crate_id, key_id, key_amount, opening_count, source,
-                       reward_ids, location, overflow_count, completed_at
+                       reward_ids, location, overflow_count, outcome_detail, completed_at
                 FROM opening_history WHERE player_uuid = ? ORDER BY completed_at DESC LIMIT ? OFFSET ?
                 """)) {
             statement.setString(1, playerId.toString());

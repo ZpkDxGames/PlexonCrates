@@ -14,6 +14,7 @@ import com.antondev.crates.domain.reward.RewardRarity;
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -145,7 +146,7 @@ class RewardStateServiceTest {
     @Test
     void selectivePlanIgnoresStoredChanceButKeepsSequentialLimitsAllOrNothing() {
         UUID player = UUID.randomUUID();
-        CrateReward selected = reward("selected", 0, RewardRarity.EPIC,
+        CrateReward selected = reward("selected", 1, RewardRarity.EPIC,
                 new RewardLimits(2, 0, 0, 0, 0, 0, 0));
         Crate crate = crate(PityPolicy.disabled(), selected);
         RewardStateService state = service(0.75);
@@ -160,6 +161,72 @@ class RewardStateServiceTest {
         assertTrue(rejected.rewards().isEmpty());
         assertTrue(state.planSelected(player, crate, "missing", 1, OpenSource.GUI,
                 ignored -> true, false, NOW).rewards().isEmpty());
+    }
+
+    @Test
+    void sourceTicketTransfersToFallbackAndChargesActualSequentialLimits() {
+        UUID player = UUID.randomUUID();
+        CrateReward fallback = reward("fallback", 0, RewardRarity.COMMON,
+                new RewardLimits(2, 0, 0, 0, 0, 0, 0));
+        CrateReward primary = alternativeReward("primary", 100,
+                new RewardLimits(1, 0, 0, 0, 0, 0, 0), "fallback",
+                Set.of(AlternativeRewardResolver.Reason.PLAYER_LIMIT));
+        Crate crate = crate(PityPolicy.disabled(), primary, fallback);
+        RewardStateService state = service(0.5);
+
+        RewardStateService.Plan plan = state.planResolved(player, crate, 3, OpenSource.GUI,
+                ignored -> null, true, false, NOW);
+
+        assertEquals(List.of("primary", "fallback", "fallback"),
+                plan.rewards().stream().map(CrateReward::id).toList());
+        assertEquals(List.of("primary", "primary", "primary"),
+                plan.outcomes().stream().map(outcome -> outcome.source().id()).toList());
+        assertEquals(AlternativeRewardResolver.Reason.PLAYER_LIMIT,
+                plan.outcomes().get(1).alternativeReason());
+        assertTrue(plan.outcomeDetail().contains("source=primary,actual=fallback"));
+
+        DatabaseService.RewardStateCommit mutation = state.applyResolved(player, crate, plan, OpenSource.GUI,
+                ignored -> null, true, false, NOW);
+        assertEquals(Set.of("primary", "fallback"), mutation.rewards().stream()
+                .map(value -> value.player().rewardId()).collect(java.util.stream.Collectors.toSet()));
+        assertTrue(state.planResolved(player, crate, 1, OpenSource.GUI,
+                ignored -> null, true, false, NOW).rewards().isEmpty());
+    }
+
+    @Test
+    void safePermissionAndDateReasonsResolveButIntegrationFailureNeverDoes() {
+        UUID player = UUID.randomUUID();
+        CrateReward fallback = reward("fallback", 0, RewardRarity.COMMON, RewardLimits.unlimited());
+        CrateReward primary = alternativeReward("primary", 100, RewardLimits.unlimited(), "fallback",
+                Set.of(AlternativeRewardResolver.Reason.PERMISSION,
+                        AlternativeRewardResolver.Reason.DATE_WINDOW));
+        Crate crate = crate(PityPolicy.disabled(), primary, fallback);
+        RewardStateService state = service(0);
+
+        RewardStateService.Plan permission = state.planResolved(player, crate, 1, OpenSource.GUI,
+                reward -> reward.id().equals("primary")
+                        ? AlternativeRewardResolver.Reason.PERMISSION : null,
+                true, false, NOW);
+        assertEquals("fallback", permission.rewards().getFirst().id());
+        assertEquals(AlternativeRewardResolver.Reason.PERMISSION,
+                permission.outcomes().getFirst().alternativeReason());
+
+        RewardStateService.Plan integration = state.planResolved(player, crate, 1, OpenSource.GUI,
+                reward -> reward.id().equals("primary")
+                        ? AlternativeRewardResolver.Reason.MISSING_INTEGRATION : null,
+                true, false, NOW);
+        assertTrue(integration.rewards().isEmpty());
+    }
+
+    @Test
+    void zeroChanceRewardIsNeverSelectableAsItsOwnSource() {
+        UUID player = UUID.randomUUID();
+        CrateReward zero = reward("prepared", 0, RewardRarity.EPIC, RewardLimits.unlimited());
+        Crate crate = crate(PityPolicy.disabled(), zero);
+        RewardStateService state = service(0);
+
+        assertTrue(state.planSelectedResolved(player, crate, "prepared", 1, OpenSource.GUI,
+                ignored -> null, true, false, NOW).rewards().isEmpty());
     }
 
     private static RewardStateService service(double roll) {
@@ -179,5 +246,14 @@ class RewardStateServiceTest {
         ItemStack item = new ItemStack(Material.DIAMOND);
         return new CrateReward(id, Component.text(id), weight, true, rarity, item, List.of(item), List.of(),
                 0, 0, 0, "", "", limits, RewardPresentation.none(), "", "");
+    }
+
+    private static CrateReward alternativeReward(String id, double chance, RewardLimits limits,
+                                                  String fallback,
+                                                  Set<AlternativeRewardResolver.Reason> reasons) {
+        ItemStack item = new ItemStack(Material.DIAMOND);
+        return new CrateReward(id, Component.text(id), chance, true, RewardRarity.RARE, item,
+                List.of(item), List.of(), 0, 0, 0, "", "", limits, RewardPresentation.none(),
+                "", "", fallback, reasons, null, null);
     }
 }

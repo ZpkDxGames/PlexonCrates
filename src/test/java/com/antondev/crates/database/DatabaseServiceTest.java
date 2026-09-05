@@ -244,7 +244,9 @@ class DatabaseServiceTest {
         var journal = new DatabaseService.JournalRecord(transaction, player, "Player", "basic", "basic",
                 1, 1, "COMMAND", "winner", now);
         var opening = new DatabaseService.OpeningRecord(transaction, player, "Player", "basic", "basic",
-                1, 1, "COMMAND", "winner", "world:1,2,3", 0, now.plusSeconds(1));
+                1, 1, "COMMAND", "winner", "world:1,2,3", 0,
+                "outcomes[0:source=limited,actual=winner,fallback=true,reason=PLAYER_LIMIT]",
+                now.plusSeconds(1));
         try (DatabaseService database = database()) {
             database.prepareJournal(journal).join();
             database.prepareJournal(journal).join();
@@ -252,6 +254,7 @@ class DatabaseServiceTest {
             database.completeOpening(opening).join();
 
             assertEquals(1, database.history(player, 10, 0).size());
+            assertEquals(opening.outcomeDetail(), database.history(player, 10, 0).getFirst().outcomeDetail());
             assertEquals(1, database.loadStatistics().global().get("basic"));
             assertEquals(1, database.loadStatistics().players().get(player).get("basic"));
             assertEquals(0, database.pendingJournalCount());

@@ -368,7 +368,9 @@ reward-builder:
   clear: {slot: 33, material: CAULDRON, name: <red>Clear Captured Items</red>, lore: []}
   permissions: {slot: 35, material: PLAYER_HEAD, name: <gold>Permission Filters</gold>, lore: ['<gray>Required:</gray> <white><required></white>', '<gray>Blocked:</gray> <white><blocked></white>']}
   limits: {slot: 37, material: REPEATER, name: <yellow>Limits & Cooldown</yellow>, lore: [<gray>Configure player/global lifetime and window limits.</gray>]}
+  alternative: {slot: 38, material: RECOVERY_COMPASS, name: <gold>Alternative Reward</gold>, lore: ['<gray>Fallback:</gray> <white><alternative></white>', '<gray>Reasons:</gray> <white><reasons></white>', <dark_gray>One safe edge inside this crate.</dark_gray>]}
   messages: {slot: 39, material: OAK_SIGN, name: <aqua>Messages & Broadcast</aqua>, lore: [<gray>Configure personal and server MiniMessage text.</gray>]}
+  availability: {slot: 40, material: CLOCK, name: <yellow>Active Date Window</yellow>, lore: ['<gray>Starts:</gray> <white><starts></white>', '<gray>Ends:</gray> <white><ends></white>']}
   enabled: {slot: 41, material: LEVER, name: <yellow>Reward Enabled</yellow>, lore: ['<gray>Enabled:</gray> <white><enabled></white>', <dark_gray>Click to toggle.</dark_gray>]}
   effects: {slot: 42, material: FIREWORK_ROCKET, name: <light_purple>Title, Sound & Firework</light_purple>, lore: ['<gray>Title:</gray> <white><title></white>', '<gray>Sound:</gray> <white><sound></white>', '<gray>Firework:</gray> <white><firework></white>']}
   order: {slot: 43, material: HOPPER, name: <aqua>Reward Order</aqua>, lore: ['<gray>Position:</gray> <white><position></white>', <dark_gray>Available while editing an existing reward.</dark_gray>]}

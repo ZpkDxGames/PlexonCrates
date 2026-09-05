@@ -15,11 +15,13 @@ import com.antondev.crates.service.CrateRegistry;
 import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.KeyPaymentPlanner;
 import com.antondev.crates.service.RewardSelector;
+import com.antondev.crates.service.RewardStateService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -159,13 +161,19 @@ public final class MenuService implements Listener {
         fill(inventory);
         long now = System.currentTimeMillis();
         boolean bypassLimits = player.hasPermission("plexoncrates.bypass.limit");
+        var outcomeBySource = new LinkedHashMap<String, RewardStateService.Outcome>();
+        for (CrateReward reward : rewards) {
+            plugin.openings().previewOutcome(player, crate, reward, now, bypassLimits)
+                    .ifPresent(outcome -> outcomeBySource.put(reward.id(), outcome));
+        }
         List<CrateReward> eligible = rewards.stream()
-                .filter(reward -> previewEligible(player, crate, reward, now, bypassLimits)).toList();
+                .filter(reward -> outcomeBySource.containsKey(reward.id())).toList();
         int start = page * rewardSlots.size();
         for (int slotIndex = 0; slotIndex < rewardSlots.size() && start + slotIndex < rewards.size(); slotIndex++) {
             CrateReward reward = rewards.get(start + slotIndex);
-            ItemStack display = reward.displayCopy();
-            boolean canWin = eligible.contains(reward);
+            RewardStateService.Outcome outcome = outcomeBySource.get(reward.id());
+            ItemStack display = outcome == null ? reward.displayCopy() : outcome.actual().displayCopy();
+            boolean canWin = outcome != null;
             double chance = canWin ? RewardSelector.chance(reward, eligible) : 0;
             var lore = new ArrayList<Component>();
             for (String line : menus.strings("preview.reward-lore")) {
@@ -175,7 +183,21 @@ public final class MenuService implements Listener {
                         Text.value("chance", format(chance)),
                         Text.value("weight", format(reward.baseChancePercent()))));
             }
-            if (!canWin) lore.add(Text.parse("<red>This reward is currently unavailable to you.</red>"));
+            if (reward.chanceBasisPoints() <= 0) {
+                lore.add(Text.parse("<red>Not in pool (0.00%).</red>"));
+            } else if (!canWin) {
+                lore.add(Text.parse("<red>This source and its allowed alternative are unavailable.</red>"));
+            }
+            if (reward.hasAlternative()) {
+                lore.add(Text.parse("<gold>Alternative:</gold> <white>" + reward.alternativeRewardId()
+                        + "</white> <gray>for " + reward.alternativeReasons().stream().map(Enum::name).sorted()
+                        .collect(java.util.stream.Collectors.joining(", ")) + "</gray>"));
+            }
+            if (outcome != null && outcome.fallback()) {
+                lore.add(Text.parse("<yellow>Current outcome:</yellow> ").append(outcome.actual().displayName())
+                        .append(Text.parse(" <dark_gray>(" + outcome.alternativeReason().name() + ")</dark_gray>")));
+                lore.add(Text.parse("<gray>The source ticket's configured chance is retained.</gray>"));
+            }
             if (selective) {
                 lore.add(Text.parse("<gray>Base chance is retained but ignored in selective mode.</gray>"));
                 if (!selectable) lore.add(Text.parse("<red>Selective opening is disabled by the server.</red>"));
@@ -240,10 +262,15 @@ public final class MenuService implements Listener {
             return;
         }
         boolean bypassLimits = player.hasPermission("plexoncrates.bypass.limit");
-        if (!previewEligible(player, crate, reward, System.currentTimeMillis(), bypassLimits)) {
+        long now = System.currentTimeMillis();
+        Optional<RewardStateService.Outcome> resolved = plugin.openings()
+                .previewOutcome(player, crate, reward, now, bypassLimits);
+        if (resolved.isEmpty()) {
             plugin.messages().send(player, "no-eligible-rewards");
             return;
         }
+        RewardStateService.Outcome outcome = resolved.get();
+        CrateReward actual = outcome.actual();
         MenuConfig menus = plugin.menusConfig();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.SELECTIVE_CONFIRM, crate.id(), reward.id(),
                 returnPage, false, plugin.runtime().crateRevision(crate.id()));
@@ -252,23 +279,26 @@ public final class MenuService implements Listener {
         fill(inventory);
         inventory.setItem(menus.slot("selective-confirm.guide"), menus.item("selective-confirm.guide"));
 
-        ItemStack display = reward.displayCopy();
+        ItemStack display = actual.displayCopy();
         var delivery = new ArrayList<Component>();
         delivery.add(Component.empty());
-        delivery.add(Text.parse("<gray>Reward ID</gray> <dark_gray>»</dark_gray> <white>" + reward.id() + "</white>"));
+        delivery.add(Text.parse("<gray>Source reward</gray> <dark_gray>»</dark_gray> <white>" + reward.id() + "</white>"));
+        delivery.add(Text.parse("<gray>Actual reward</gray> <dark_gray>»</dark_gray> <white>" + actual.id() + "</white>"));
+        if (outcome.fallback()) delivery.add(Text.parse("<yellow>Alternative applies:</yellow> <white>"
+                + outcome.alternativeReason().name() + "</white>"));
         delivery.add(Text.parse("<gray>Amount</gray> <dark_gray>»</dark_gray> <white>1 opening</white>"));
-        int itemCount = reward.itemCopies().stream().mapToInt(ItemStack::getAmount).sum();
+        int itemCount = actual.itemCopies().stream().mapToInt(ItemStack::getAmount).sum();
         delivery.add(Text.parse("<gray>Items</gray> <dark_gray>»</dark_gray> <white>" + itemCount
-                + " across " + reward.itemCopies().size() + " exact stack(s)</white>"));
-        if (!reward.commands().isEmpty()) delivery.add(Text.parse("<gray>Commands</gray> <dark_gray>»</dark_gray> <white>"
-                + reward.commands().size() + " configured action(s)</white>"));
-        if (reward.experiencePoints() > 0) delivery.add(Text.parse("<gray>Experience points</gray> <dark_gray>»</dark_gray> <white>"
-                + reward.experiencePoints() + "</white>"));
-        if (reward.experienceLevels() > 0) delivery.add(Text.parse("<gray>Experience levels</gray> <dark_gray>»</dark_gray> <white>"
-                + reward.experienceLevels() + "</white>"));
-        if (reward.money() > 0) delivery.add(Text.parse("<gray>Money</gray> <dark_gray>»</dark_gray> <white>"
-                + format(reward.money()) + "</white>"));
-        String restriction = reward.requiredPermission().isBlank() ? "none" : reward.requiredPermission();
+                + " across " + actual.itemCopies().size() + " exact stack(s)</white>"));
+        if (!actual.commands().isEmpty()) delivery.add(Text.parse("<gray>Commands</gray> <dark_gray>»</dark_gray> <white>"
+                + actual.commands().size() + " configured action(s)</white>"));
+        if (actual.experiencePoints() > 0) delivery.add(Text.parse("<gray>Experience points</gray> <dark_gray>»</dark_gray> <white>"
+                + actual.experiencePoints() + "</white>"));
+        if (actual.experienceLevels() > 0) delivery.add(Text.parse("<gray>Experience levels</gray> <dark_gray>»</dark_gray> <white>"
+                + actual.experienceLevels() + "</white>"));
+        if (actual.money() > 0) delivery.add(Text.parse("<gray>Money</gray> <dark_gray>»</dark_gray> <white>"
+                + format(actual.money()) + "</white>"));
+        String restriction = actual.requiredPermission().isBlank() ? "none" : actual.requiredPermission();
         delivery.add(Text.parse("<gray>Required permission</gray> <dark_gray>»</dark_gray> <white>" + restriction + "</white>"));
         delivery.add(Text.parse("<green>Eligible now; eligibility is checked again on confirm.</green>"));
         appendLore(display, delivery);
@@ -1220,14 +1250,7 @@ public final class MenuService implements Listener {
     }
 
     private boolean previewEligible(Player player, Crate crate, CrateReward reward, long now, boolean bypassLimits) {
-        boolean baseEligible = crate.openingMode() == OpeningMode.SELECTIVE
-                ? reward.enabled()
-                    && (reward.requiredPermission().isBlank() || player.hasPermission(reward.requiredPermission()))
-                    && (reward.blockedPermission().isBlank() || !player.hasPermission(reward.blockedPermission()))
-                : reward.eligible(player);
-        return baseEligible && reward.hasDelivery()
-                && (reward.money() <= 0 || (plugin.settings().vaultEnabled() && plugin.openings().economyAvailable()))
-                && plugin.rewardStates().eligible(player.getUniqueId(), crate, reward, now, bypassLimits);
+        return plugin.openings().previewOutcome(player, crate, reward, now, bypassLimits).isPresent();
     }
 
     private static boolean isAdministrative(MenuHolder.Kind kind) {

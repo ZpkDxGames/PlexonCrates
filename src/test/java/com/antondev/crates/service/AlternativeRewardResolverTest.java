@@ -38,4 +38,21 @@ class AlternativeRewardResolverTest {
         assertTrue(errors.contains("ALTERNATIVE_UNSAFE_REASON:a"));
         assertTrue(errors.contains("ALTERNATIVE_DEPTH:a"));
     }
+
+    @Test
+    void rejectsCyclesAndIncompletePolicies() {
+        var cycle = Map.of(
+                "a", new AlternativeRewardResolver.Node<>("a", "A", "b",
+                        Set.of(AlternativeRewardResolver.Reason.PLAYER_LIMIT)),
+                "b", new AlternativeRewardResolver.Node<>("b", "B", "a",
+                        Set.of(AlternativeRewardResolver.Reason.GLOBAL_LIMIT)),
+                "orphan", new AlternativeRewardResolver.Node<>("orphan", "C", null,
+                        Set.of(AlternativeRewardResolver.Reason.PERMISSION)),
+                "empty", new AlternativeRewardResolver.Node<>("empty", "D", "a", Set.of()));
+
+        var errors = AlternativeRewardResolver.validate(cycle);
+        assertTrue(errors.stream().anyMatch(error -> error.startsWith("ALTERNATIVE_CYCLE:")));
+        assertTrue(errors.contains("ALTERNATIVE_ORPHAN_REASONS:orphan"));
+        assertTrue(errors.contains("ALTERNATIVE_MISSING_REASONS:empty"));
+    }
 }

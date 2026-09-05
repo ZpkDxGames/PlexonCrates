@@ -467,6 +467,14 @@ public final class DatabaseService implements AutoCloseable {
                 throw new IllegalArgumentException("Portable issuance counts cannot be negative");
             }
         }
+    public record RerollBalance(UUID playerId, long balance, long revision, Instant updatedAt) {
+        public RerollBalance {
+            playerId = java.util.Objects.requireNonNull(playerId, "playerId");
+            updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+            if (balance < 0 || revision < 0) throw new IllegalArgumentException("Reroll balance cannot be negative");
+        }
+    }
+
     }
 
     private final Logger logger;
@@ -1616,6 +1624,86 @@ public final class DatabaseService implements AutoCloseable {
                 }
             }
             return new PortableIssueCounts(unused, reserved, consumed, suspended, review);
+        });
+    }
+
+    public CompletableFuture<RerollBalance> loadRerollBalance(UUID playerId) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        return submitQuery("load reroll balance", connection -> loadRerollBalance(connection, owner));
+    }
+
+    /** Credits reroll tokens exactly once through the immutable ledger. */
+    public CompletableFuture<LedgerMutation> creditRerolls(
+            UUID playerId, long amount, String idempotencyToken,
+            String sourceType, String sourceId, UUID actorId) {
+        return mutateRerolls(playerId, amount, idempotencyToken, sourceType, sourceId, actorId, true);
+    }
+
+    /** Debits reroll tokens atomically; failed debits leave the balance unchanged. */
+    public CompletableFuture<LedgerMutation> debitRerolls(
+            UUID playerId, long amount, String idempotencyToken,
+            String sourceType, String sourceId, UUID actorId) {
+        return mutateRerolls(playerId, amount, idempotencyToken, sourceType, sourceId, actorId, false);
+    }
+
+    private CompletableFuture<LedgerMutation> mutateRerolls(
+            UUID playerId, long amount, String idempotencyToken,
+            String sourceType, String sourceId, UUID actorId, boolean credit) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        if (amount < 1) throw new IllegalArgumentException("Reroll amount must be positive");
+        String token = requiredText(idempotencyToken, "idempotencyToken");
+        String source = requiredText(sourceType, "sourceType");
+        String origin = requiredText(sourceId, "sourceId");
+        return submitTransactionQuery((credit ? "credit" : "debit") + " rerolls", connection -> {
+            LedgerEntry existing = loadLedgerByToken(connection, token).orElse(null);
+            long signed = credit ? amount : -amount;
+            if (existing != null) {
+                if (!existing.ledgerType().equals("REROLL") || !existing.playerId().equals(owner)
+                        || existing.keyId() != null || existing.delta() != signed
+                        || !source.equals(existing.sourceType()) || !origin.equals(existing.sourceId())) {
+                    throw new IllegalStateException("Reroll idempotency token was already used for a different mutation");
+                }
+                return new LedgerMutation(true, existing.balanceAfter(), existing.entryId(), existing.delta());
+            }
+            RerollBalance current = loadRerollBalance(connection, owner);
+            long next;
+            if (credit) next = Math.addExact(current.balance(), amount);
+            else {
+                if (current.balance() < amount) return new LedgerMutation(false, current.balance(), null, 0);
+                next = current.balance() - amount;
+            }
+            long now = System.currentTimeMillis();
+            long nextRevision = Math.addExact(current.revision(), 1);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO reroll_balance(player_uuid, balance, revision, updated_at)
+                    VALUES(?, ?, ?, ?)
+                    ON CONFLICT(player_uuid) DO UPDATE SET balance=excluded.balance,
+                        revision=excluded.revision, updated_at=excluded.updated_at
+                    """)) {
+                statement.setString(1, owner.toString());
+                statement.setLong(2, next);
+                statement.setLong(3, nextRevision);
+                statement.setLong(4, now);
+                statement.executeUpdate();
+            }
+            UUID entryId = UUID.randomUUID();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO ledger_entry(entry_id, idempotency_token, player_uuid, ledger_type, key_id,
+                        delta, balance_after, source_type, source_id, actor_uuid, created_at)
+                    VALUES(?, ?, ?, 'REROLL', NULL, ?, ?, ?, ?, ?, ?)
+                    """)) {
+                statement.setString(1, entryId.toString());
+                statement.setString(2, token);
+                statement.setString(3, owner.toString());
+                statement.setLong(4, signed);
+                statement.setLong(5, next);
+                statement.setString(6, source);
+                statement.setString(7, origin);
+                nullableUuid(statement, 8, actorId);
+                statement.setLong(9, now);
+                statement.executeUpdate();
+            }
+            return new LedgerMutation(true, next, entryId, signed);
         });
     }
 
@@ -2881,6 +2969,22 @@ public final class DatabaseService implements AutoCloseable {
             }
         }
         return new MilestoneState(playerId, crateId, 0, 0, 0, new byte[0], Instant.EPOCH);
+    }
+
+    private static RerollBalance loadRerollBalance(Connection connection, UUID playerId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT player_uuid, balance, revision, updated_at
+                FROM reroll_balance WHERE player_uuid=?
+                """)) {
+            statement.setString(1, playerId.toString());
+            try (ResultSet rows = statement.executeQuery()) {
+                if (rows.next()) {
+                    return new RerollBalance(UUID.fromString(rows.getString(1)), rows.getLong(2),
+                            rows.getLong(3), Instant.ofEpochMilli(rows.getLong(4)));
+                }
+            }
+        }
+        return new RerollBalance(playerId, 0, 0, Instant.EPOCH);
     }
 
     private static Optional<PortableIssue> loadPortableIssue(

@@ -25,14 +25,14 @@ class RerollServiceTest {
         assertEquals("c", second.candidate());
         assertTrue(RerollService.reroll(policy, second, List.of("a", "b", "c"), 0,
                 now).isEmpty());
-        assertEquals(List.of("a"), RerollService.replacementCandidates(
-                policy, second, List.of("a", "b", "c", "a")));
+        assertTrue(RerollService.replacementCandidates(
+                policy, second, List.of("a", "b", "c", "a")).isEmpty());
     }
 
     @Test
     void timedOutOffersAreAcceptedWithoutAnotherReroll() {
         var now = Instant.parse("2026-09-05T00:00:00Z");
-        var policy = RerollService.recommended();
+        var policy = RerollService.Policy.recommended();
         var offer = RerollService.start(policy, "a", List.of("a", "b"), now);
         var decision = RerollService.accept(policy, offer, now.plusSeconds(15));
         assertTrue(decision.timedOut());

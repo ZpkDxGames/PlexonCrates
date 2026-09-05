@@ -521,6 +521,12 @@ public final class OpeningService {
         if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Reroll acceptance requires the primary thread");
         RerollDecision decision = rerollDecisions.remove(player.getUniqueId());
         if (decision == null) return false;
+        if (decision.inFlightCharge != null) {
+            ConsumedRerollCost charged = decision.inFlightCharge;
+            decision.inFlightCharge = null;
+            refundRerollCost(player, decision, charged, decision.offer.rerollsUsed() + 1,
+                    "decision accepted before replacement was frozen");
+        }
         PendingOpening opening = pending.get(decision.transactionId);
         if (opening == null) {
             locks.remove(player.getUniqueId());
@@ -633,7 +639,14 @@ public final class OpeningService {
                 plugin.database().debitRerolls(player.getUniqueId(), policy.cost(), token,
                         "OPENING_REROLL", decision.transactionId.toString(), null)
                         .whenComplete((mutation, error) -> {
-                            if (!plugin.isEnabled()) return;
+                            if (!plugin.isEnabled()) {
+                                if (error == null && mutation != null && mutation.applied()) {
+                                    plugin.database().creditRerolls(player.getUniqueId(), policy.cost(),
+                                            "reroll-refund:" + decision.transactionId + ":" + attempt,
+                                            "OPENING_REROLL_REFUND", decision.transactionId.toString(), null);
+                                }
+                                return;
+                            }
                             Bukkit.getScheduler().runTask(plugin, () -> {
                                 if (error != null || mutation == null || !mutation.applied()) {
                                     if (rerollDecisions.get(player.getUniqueId()) == decision) {
@@ -663,6 +676,7 @@ public final class OpeningService {
                                        RewardStateService.Plan replacement,
                                        RerollService.Offer<String> nextOffer, long selectedAt,
                                        boolean bypassLimits, ConsumedRerollCost charged, int attempt) {
+        decision.inFlightCharge = charged;
         String detail = transactionDetail(opening) + ";attempt=" + attempt
                 + ",status=COST_CONSUMED,type=" + decision.policy.costType()
                 + ",amount=" + decision.policy.cost()
@@ -674,9 +688,11 @@ public final class OpeningService {
                         if (error != null || rerollDecisions.get(player.getUniqueId()) != decision
                                 || !decision.processing
                                 || !replacementValid(player, opening, replacement, selectedAt, bypassLimits)) {
-                            if (charged != null) refundRerollCost(player, decision, charged, attempt,
+                            if (charged != null && decision.inFlightCharge != null) {
+                                refundRerollCost(player, decision, charged, attempt,
                                     error == null ? "candidate invalidated after cost" : "cost journal failed");
-                            else if (rerollDecisions.get(player.getUniqueId()) == decision) {
+                            } else if (charged == null
+                                    && rerollDecisions.get(player.getUniqueId()) == decision) {
                                 failReroll(player, decision, "cost journal failed");
                             }
                             return;
@@ -687,6 +703,7 @@ public final class OpeningService {
                                         + decision.policy.costType() + ",amount=" + decision.policy.cost()
                                         + ",candidate=" + candidate);
                         pending.put(decision.transactionId, updated);
+                        decision.inFlightCharge = null;
                         decision.offer = nextOffer;
                         decision.processing = false;
                         Bukkit.getPluginManager().callEvent(new CrateRewardSelectEvent(
@@ -701,6 +718,7 @@ public final class OpeningService {
 
     private void refundRerollCost(Player player, RerollDecision decision,
                                   ConsumedRerollCost charged, int attempt, String reason) {
+        decision.inFlightCharge = null;
         switch (charged.type()) {
             case TOKEN -> plugin.database().creditRerolls(player.getUniqueId(), charged.amount(),
                     "reroll-refund:" + decision.transactionId + ":" + attempt,
@@ -1521,6 +1539,7 @@ public final class OpeningService {
         private RerollService.Offer<String> offer;
         private int generation;
         private boolean processing;
+        private ConsumedRerollCost inFlightCharge;
 
         private RerollDecision(UUID transactionId, RerollService.Policy policy,
                                RerollService.Offer<String> offer) {

@@ -330,6 +330,9 @@ class OpeningPipelineIntegrationTest {
         assertTrue(plugin.openings().open(player, crate, 1, false));
         awaitRerollDecision(player);
         String accepted = plugin.openings().rerollView(player).orElseThrow().candidate().id();
+        // MockBukkit does not emit InventoryCloseEvent from closeInventory(), so exercise the
+        // registered close handler explicitly before closing the simulated view.
+        plugin.menus().close(new org.bukkit.event.inventory.InventoryCloseEvent(player.getOpenInventory()));
         player.closeInventory();
         awaitVirtualOpeningCommit();
 

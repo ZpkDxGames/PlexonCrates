@@ -164,7 +164,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
                     return;
                 }
                 player.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Key Balances</bold></gradient>"));
-                plugin.keys().definitions().values().stream()
+                plugin.keys().definitions().stream()
                         .sorted(java.util.Comparator.comparing(definition -> definition.id()))
                         .forEach(definition -> player.sendMessage(Text.parse("<gray>Physical " + definition.id()
                                 + ":</gray> <white>" + plugin.keys().count(player, definition.id()) + "</white>")));

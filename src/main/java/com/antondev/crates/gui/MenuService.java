@@ -1,6 +1,7 @@
 package com.antondev.crates.gui;
 
 import com.antondev.crates.PlexonCrates;
+import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.config.MenuConfig;
 import com.antondev.crates.config.Text;
 import com.antondev.crates.item.ItemSnapshotCodec;
@@ -65,7 +66,44 @@ public final class MenuService implements Listener {
         }
         inventory.setItem(menus.slot("browser.info"), menus.item("browser.info"));
         inventory.setItem(menus.slot("browser.close"), menus.item("browser.close"));
+        if (menus.contains("browser.claims")) {
+            ItemStack claims = menus.item("browser.claims", Text.value("count", plugin.claims().pendingCount(player.getUniqueId()).getNow(0)));
+            inventory.setItem(menus.slot("browser.claims"), claims);
+        }
         open(player, inventory);
+    }
+
+    /** Opens the durable exact-item Claim Inbox without blocking the primary thread. */
+    public void openClaims(Player player, int requestedPage) {
+        int page = Math.max(1, requestedPage);
+        plugin.claims().list(player.getUniqueId(), page).whenComplete((entries, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (error != null || entries == null) {
+                    plugin.messages().send(player, "database-error");
+                    return;
+                }
+                MenuConfig menus = plugin.menusConfig();
+                MenuHolder holder = new MenuHolder(MenuHolder.Kind.CLAIMS, "", "", page - 1, false);
+                Inventory inventory = create(holder, menus.size("claims"),
+                        menus.title("claims", Text.value("page", page)));
+                fill(inventory);
+                List<Integer> slots = menus.slots("claims.claim-slots");
+                for (int index = 0; index < Math.min(slots.size(), entries.size()); index++) {
+                    DatabaseService.ClaimEntry entry = entries.get(index);
+                    inventory.setItem(slots.get(index), claimDisplay(entry));
+                    holder.bind(slots.get(index), "claim", entry.claimId().toString());
+                }
+                inventory.setItem(menus.slot("claims.previous"), menus.item("claims.previous"));
+                inventory.setItem(menus.slot("claims.back"), menus.item("claims.back"));
+                inventory.setItem(menus.slot("claims.guide"),
+                        menus.item("claims.guide", Text.value("count", entries.size())));
+                inventory.setItem(menus.slot("claims.next"), menus.item("claims.next"));
+                inventory.setItem(menus.slot("claims.close"), menus.item("claims.close"));
+                open(player, inventory);
+            });
+        });
     }
 
     public void openPreview(Player player, Crate crate, int requestedPage, boolean adminOrigin) {
@@ -301,6 +339,7 @@ public final class MenuService implements Listener {
         MenuConfig menus = plugin.menusConfig();
         switch (holder.kind()) {
             case BROWSER -> browserClick(player, holder, slot, event.isRightClick());
+            case CLAIMS -> claimsClick(player, holder, slot);
             case PREVIEW -> {
                 Crate crate = (holder.adminOrigin() ? plugin.crates().find(holder.crateId())
                         : plugin.runtime().find(holder.crateId())).orElse(null);
@@ -349,10 +388,67 @@ public final class MenuService implements Listener {
         plugin.guiSessions().clear(event.getPlayer().getUniqueId());
     }
 
+    private void claimsClick(Player player, MenuHolder holder, int slot) {
+        MenuConfig menus = plugin.menusConfig();
+        if (slot == menus.slot("claims.close")) {
+            player.closeInventory();
+            return;
+        }
+        if (slot == menus.slot("claims.back")) {
+            openBrowser(player);
+            return;
+        }
+        if (slot == menus.slot("claims.previous")) {
+            if (holder.page() > 0) openClaims(player, holder.page());
+            return;
+        }
+        if (slot == menus.slot("claims.next")) {
+            openClaims(player, holder.page() + 2);
+            return;
+        }
+        List<Integer> slots = menus.slots("claims.claim-slots");
+        int index = slots.indexOf(slot);
+        if (index < 0) return;
+        MenuHolder.Action action = holder.action(slot);
+        if (action == null || !"claim".equals(action.id())) return;
+        try {
+            plugin.claims().claim(player, UUID.fromString(action.value()));
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                if (player.isOnline()) openClaims(player, holder.page() + 1);
+            }, 2L);
+        } catch (IllegalArgumentException error) {
+            plugin.messages().send(player, "database-error");
+        }
+    }
+
+    private ItemStack claimDisplay(DatabaseService.ClaimEntry entry) {
+        if (entry.itemBytes() == null) {
+            ItemStack display = new ItemStack(org.bukkit.Material.TRIPWIRE_HOOK);
+            display.editMeta(meta -> meta.displayName(Text.parse("<aqua>Virtual key ×" + entry.virtualKeyAmount() + "</aqua>")));
+            return display;
+        }
+        try {
+            ItemSnapshotCodec.Snapshot snapshot = new ItemSnapshotCodec.Snapshot(
+                    entry.itemBytes(), "unknown", entry.itemAmount(), entry.itemBytes().length,
+                    entry.itemSha256().toLowerCase(Locale.ROOT), false, false, entry.createdAt());
+            ItemStack display = itemSnapshots.restoreTemplate(snapshot);
+            display.setAmount(Math.min(entry.itemAmount(), Math.max(1, display.getMaxStackSize())));
+            return display;
+        } catch (RuntimeException error) {
+            ItemStack display = new ItemStack(org.bukkit.Material.BARRIER);
+            display.editMeta(meta -> meta.displayName(Text.parse("<red>Exact item needs review</red>")));
+            return display;
+        }
+    }
+
     private void browserClick(Player player, MenuHolder holder, int slot, boolean rightClick) {
         MenuConfig menus = plugin.menusConfig();
         if (slot == menus.slot("browser.close")) {
             player.closeInventory();
+            return;
+        }
+        if (menus.contains("browser.claims") && slot == menus.slot("browser.claims")) {
+            openClaims(player, 1);
             return;
         }
         if (holder.revision() != plugin.runtime().snapshot().revision()) {

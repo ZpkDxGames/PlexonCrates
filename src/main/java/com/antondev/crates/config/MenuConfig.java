@@ -20,6 +20,7 @@ public final class MenuConfig {
         }
         installRewardPoolFallback(yaml);
         installDraftFallbacks(yaml);
+        installClaimFallbacks(yaml);
         validateMenu("browser", List.of("info", "close"));
         validateMenu("preview", List.of("open", "previous", "back", "next"));
         validateMenu("opening", List.of("marker"));
@@ -29,6 +30,7 @@ public final class MenuConfig {
                 "draft-status", "publish", "archive", "undo", "clone", "back", "takeover", "delete"));
         validateMenu("confirm-delete", List.of("confirm", "cancel"));
         validateMenu("summary", List.of("close"));
+        validateMenu("claims", List.of("previous", "back", "guide", "next", "close"));
         validateMenu("crate-list", List.of("create", "previous", "back", "next"));
         validateMenu("key-list", List.of("create", "sync", "previous", "back", "next"));
         validateMenu("key-template", List.of("name", "previous", "legacy", "confirm", "cancel", "input-placeholder"));
@@ -52,6 +54,10 @@ public final class MenuConfig {
 
     public static MenuConfig load(File file) {
         return new MenuConfig(YamlConfiguration.loadConfiguration(file));
+    }
+
+    public boolean contains(String path) {
+        return yaml.contains(path);
     }
 
     public int size(String path) {
@@ -115,6 +121,32 @@ public final class MenuConfig {
         installItem(yaml, "reward-pool.done", 53, "LIME_CONCRETE", "<green>Done</green>", List.of());
     }
 
+    private static void installClaimFallbacks(YamlConfiguration yaml) {
+        if (!yaml.contains("claims")) {
+            yaml.set("claims.title", "<gradient:#DDE5F0:#A3BEDF><bold>Claim Inbox</bold></gradient> <dark_gray>•</dark_gray> <gray>Page <page></gray>");
+            yaml.set("claims.size", 54);
+            yaml.set("claims.claim-slots", List.of(
+                    10, 11, 12, 13, 14, 15, 16,
+                    19, 20, 21, 22, 23, 24, 25,
+                    28, 29, 30, 31, 32, 33, 34,
+                    37, 38, 39, 40, 41, 42, 43));
+            installItem(yaml, "claims.previous", 47, "ARROW", "<gray>Previous page</gray>", List.of());
+            installItem(yaml, "claims.back", 48, "OAK_DOOR", "<gray>Back to crates</gray>", List.of());
+            installItem(yaml, "claims.guide", 49, "BOOK", "<yellow>Claim Inbox</yellow>",
+                    List.of("<gray>Pending:</gray> <white><count></white>",
+                            "<gray>Click an exact item to deliver it safely.</gray>",
+                            "<dark_gray>Capacity is checked before anything changes.</dark_gray>"));
+            installItem(yaml, "claims.next", 51, "ARROW", "<gray>Next page</gray>", List.of());
+            installItem(yaml, "claims.close", 53, "BARRIER", "<red>Close</red>", List.of());
+        }
+        if (!yaml.contains("browser.claims")) {
+            installItem(yaml, "browser.claims", 20, "CHEST",
+                    "<yellow>Claim Inbox</yellow>",
+                    List.of("<gray>Deliver exact overflow and recovery items.</gray>",
+                            "<dark_gray>Pending claims: <count></dark_gray>"));
+        }
+    }
+
     private static void installDraftFallbacks(YamlConfiguration yaml) {
         if (!yaml.contains("editor.draft-status")) {
             installItem(yaml, "editor.draft-status", 40, "PAPER", "<white>Draft <draft_state></white>", List.of(
@@ -157,7 +189,7 @@ public final class MenuConfig {
             if (yaml.contains(itemPath + ".slot")) validateSlot(itemPath + ".slot", size, used);
         }
         for (String list : List.of("crate-slots", "reward-slots", "rail-slots", "entry-slots", "key-slots",
-                "item-slots", "location-slots")) {
+                "item-slots", "location-slots", "claim-slots")) {
             String listPath = path + "." + list;
             if (!yaml.contains(listPath)) continue;
             for (int slot : slots(listPath)) validateSlot(slot, listPath, size, used);

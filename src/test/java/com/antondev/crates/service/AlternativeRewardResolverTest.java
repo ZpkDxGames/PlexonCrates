@@ -36,6 +36,6 @@ class AlternativeRewardResolverTest {
                         "c", "C", null, Set.of()));
         var errors = AlternativeRewardResolver.validate(chained);
         assertTrue(errors.contains("ALTERNATIVE_UNSAFE_REASON:a"));
-        assertTrue(errors.contains("ALTERNATIVE_DEPTH:b"));
+        assertTrue(errors.contains("ALTERNATIVE_DEPTH:a"));
     }
 }

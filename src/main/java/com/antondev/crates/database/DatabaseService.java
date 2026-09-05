@@ -10,6 +10,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -1624,6 +1625,57 @@ public final class DatabaseService implements AutoCloseable {
                 }
             }
             return new PortableIssueCounts(unused, reserved, consumed, suspended, review);
+        });
+    }
+
+    /**
+     * Loads the local portable-crate signing secret, creating it exactly once
+     * on the database worker when this is the first installation. The secret
+     * never leaves this API except to the in-memory signer.
+     */
+    public CompletableFuture<byte[]> loadOrCreatePortableSecret() {
+        return submitTransactionQuery("load portable signing secret", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT secret_bytes, algorithm FROM plugin_secret
+                    WHERE secret_id = 'portable-hmac-v1' AND retired_at IS NULL
+                    """);
+                 ResultSet rows = statement.executeQuery()) {
+                if (rows.next()) {
+                    byte[] secret = rows.getBytes(1);
+                    String algorithm = rows.getString(2);
+                    if (secret == null || secret.length < 32 || !"HmacSHA256".equalsIgnoreCase(algorithm)) {
+                        throw new SQLException("Portable signing secret is corrupt; refusing to rotate it automatically");
+                    }
+                    return secret.clone();
+                }
+            }
+            byte[] secret = new byte[32];
+            new SecureRandom().nextBytes(secret);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO plugin_secret(secret_id, secret_bytes, algorithm, created_at)
+                    VALUES('portable-hmac-v1', ?, 'HmacSHA256', ?)
+                    """)) {
+                statement.setBytes(1, secret);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.executeUpdate();
+            }
+            return secret.clone();
+        });
+    }
+
+    /** Returns whether the persistent portable signing secret is present and well-formed. */
+    public CompletableFuture<Boolean> portableSecretPresent() {
+        return submitQuery("check portable signing secret", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT secret_bytes, algorithm FROM plugin_secret
+                    WHERE secret_id = 'portable-hmac-v1' AND retired_at IS NULL
+                    """);
+                 ResultSet rows = statement.executeQuery()) {
+                if (!rows.next()) return false;
+                byte[] secret = rows.getBytes(1);
+                return secret != null && secret.length >= 32
+                        && "HmacSHA256".equalsIgnoreCase(rows.getString(2));
+            }
         });
     }
 

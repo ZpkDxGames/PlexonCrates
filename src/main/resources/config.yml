@@ -40,6 +40,9 @@ interaction:
 opening:
   animation-enabled: true
   default-animation: ROULETTE
+  # Optional exact overflow policy: REJECT, DROP, CLAIM, or CLAIM_ALL. If omitted,
+  # settings.drop-overflow-items keeps the 2.0-compatible DROP/REJECT behavior.
+  # overflow: CLAIM
   bulk-summary-threshold: 5
   # MANUAL_REVIEW never blindly reruns command rewards after a crash.
   recovery-policy: MANUAL_REVIEW

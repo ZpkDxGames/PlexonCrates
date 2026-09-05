@@ -17,6 +17,7 @@ import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.database.DefinitionRepository;
 import com.antondev.crates.database.LegacyMigration;
 import com.antondev.crates.service.CrateRegistry;
+import com.antondev.crates.service.ClaimService;
 import com.antondev.crates.service.DefinitionPublisher;
 import com.antondev.crates.service.DisplayService;
 import com.antondev.crates.service.DraftSessionService;
@@ -71,6 +72,7 @@ public class PlexonCrates extends JavaPlugin {
     private OpeningLog openingLog;
     private OpeningService openings;
     private WandService wand;
+    private ClaimService claims;
     private final Map<String, Long> definitionRevisions = new ConcurrentHashMap<>();
 
     @Override
@@ -81,6 +83,8 @@ public class PlexonCrates extends JavaPlugin {
             String databaseFile = bootstrap.getString("database.file", "data/plexoncrates.db");
             int maximumQueuedWrites = bootstrap.getInt("database.maximum-queued-writes", 4096);
             database = new DatabaseService(getLogger(), safeDataPath(databaseFile), maximumQueuedWrites);
+            claims = new ClaimService(this);
+            claims.recover();
             migration = LegacyMigration.migrate(getDataFolder().toPath(), database);
             settings = PluginSettings.load(file("config.yml"));
             messages = Messages.load(file("messages.yml"));
@@ -405,6 +409,7 @@ public class PlexonCrates extends JavaPlugin {
     public AdminMenuService adminMenus() { return adminMenus; }
     public OpeningService openings() { return openings; }
     public WandService wand() { return wand; }
+    public ClaimService claims() { return claims; }
 
     /** Returns the durable definition revision, including inactive archived/disabled crates. */
     public long definitionRevision(String crateId) {

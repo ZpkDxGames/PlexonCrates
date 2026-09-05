@@ -5,6 +5,7 @@ import com.antondev.crates.api.event.CrateKeyConsumeEvent;
 import com.antondev.crates.api.event.CrateOpenEvent;
 import com.antondev.crates.api.event.CratePreOpenEvent;
 import com.antondev.crates.api.event.CrateRewardSelectEvent;
+import com.antondev.crates.config.OverflowPolicy;
 import com.antondev.crates.config.Text;
 import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.domain.crate.AnimationType;
@@ -15,6 +16,7 @@ import com.antondev.crates.domain.opening.RewardDelivery;
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.integration.PlaceholderBridge;
 import com.antondev.crates.integration.VaultEconomyBridge;
+import com.antondev.crates.item.ItemSnapshotCodec;
 import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
@@ -44,6 +46,7 @@ public final class OpeningService {
     private final OpeningLog log;
     private final VaultEconomyBridge economy;
     private final PlaceholderBridge placeholders;
+    private final ItemSnapshotCodec itemSnapshots = new ItemSnapshotCodec();
     private final Set<UUID> locks = new HashSet<>();
     private final Map<UUID, PendingOpening> pending = new HashMap<>();
     private final Map<UUID, Map<String, Long>> cooldowns = new HashMap<>();
@@ -105,7 +108,7 @@ public final class OpeningService {
             var selected = new ArrayList<>(rewardPlan.rewards());
             if (selected.isEmpty()) return reject(player, "no-eligible-rewards");
 
-            if (!plugin.settings().dropOverflow()) {
+            if (plugin.settings().overflowPolicy() == OverflowPolicy.REJECT) {
                 while (!selected.isEmpty()) {
                     List<ItemStack> candidateItems = selected.stream().flatMap(reward -> reward.itemCopies().stream()).toList();
                     if (InventoryPlanner.fits(player.getInventory().getStorageContents(), candidateItems)) break;
@@ -171,7 +174,7 @@ public final class OpeningService {
         if (!reward.hasDelivery() || (reward.money() > 0 && (!plugin.settings().vaultEnabled() || !economy.available()))) {
             return reject(player, "no-eligible-rewards");
         }
-        if (!plugin.settings().dropOverflow()
+        if (plugin.settings().overflowPolicy() == OverflowPolicy.REJECT
                 && !InventoryPlanner.fits(player.getInventory().getStorageContents(), reward.itemCopies())) {
             return reject(player, "inventory-full");
         }
@@ -184,7 +187,7 @@ public final class OpeningService {
                 "REWARD", crate.id() + ":" + reward.id(), "Test-delivered without key, limits, pity, or statistics", Instant.now()));
         player.sendMessage(Text.parse("<green>Test-delivered</green> ").append(reward.displayName())
                 .append(Text.parse("<green>; no key, statistics, limit, or pity state changed.</green>")));
-        if (result.overflowCount() > 0) plugin.messages().send(player, "reward-overflow");
+        if (result.overflowCount() > 0) notifyOverflow(player);
         return true;
     }
 
@@ -239,7 +242,7 @@ public final class OpeningService {
                 return;
             }
             List<ItemStack> items = plan.deliveries().stream().flatMap(delivery -> delivery.items().stream()).toList();
-            if (!plugin.settings().dropOverflow()
+            if (plugin.settings().overflowPolicy() == OverflowPolicy.REJECT
                     && !InventoryPlanner.fits(player.getInventory().getStorageContents(), items)) {
                 abortPrepared(transactionId, "Inventory capacity changed before consumption", false);
                 plugin.messages().send(player, "inventory-full");
@@ -264,7 +267,7 @@ public final class OpeningService {
                     locationText(plan.location()), delivered.overflowCount(), Instant.now());
             plugin.database().completeOpening(record, rewardState);
             Bukkit.getPluginManager().callEvent(new CrateOpenEvent(player, plan, delivered.overflowCount()));
-            if (delivered.overflowCount() > 0) plugin.messages().send(player, "reward-overflow");
+            if (delivered.overflowCount() > 0) notifyOverflow(player);
             showResult(player, current, opening.selected(), plan);
         } catch (RuntimeException error) {
             plugin.getLogger().log(Level.SEVERE, "Opening " + transactionId + " failed during the main-thread commit", error);
@@ -279,13 +282,21 @@ public final class OpeningService {
     private DeliveryResult deliver(Player player, Crate crate, List<CrateReward> selected, OpeningPlan plan,
                                    boolean recordOpeningLog) {
         int overflow = 0;
+        int itemIndex = 0;
+        OverflowPolicy overflowPolicy = plugin.settings().overflowPolicy();
         for (CrateReward reward : selected) {
             for (ItemStack item : reward.itemCopies()) {
+                if (overflowPolicy == OverflowPolicy.CLAIM_ALL) {
+                    overflow += item.getAmount();
+                    queueClaim(player, crate, reward, plan, item, itemIndex++);
+                    continue;
+                }
                 var leftovers = player.getInventory().addItem(item).values();
                 for (ItemStack leftover : leftovers) {
                     overflow += leftover.getAmount();
-                    if (plugin.settings().dropOverflow()) {
-                        player.getWorld().dropItemNaturally(player.getLocation(), leftover);
+                    switch (overflowPolicy) {
+                        case DROP -> player.getWorld().dropItemNaturally(player.getLocation(), leftover);
+                        case CLAIM, CLAIM_ALL, REJECT -> queueClaim(player, crate, reward, plan, leftover, itemIndex++);
                     }
                 }
             }
@@ -301,6 +312,35 @@ public final class OpeningService {
             if (recordOpeningLog) log.record(player, crate, reward);
         }
         return new DeliveryResult(overflow);
+    }
+
+    private void notifyOverflow(Player player) {
+        if (plugin.settings().overflowPolicy() == OverflowPolicy.CLAIM
+                || plugin.settings().overflowPolicy() == OverflowPolicy.CLAIM_ALL
+                || plugin.settings().overflowPolicy() == OverflowPolicy.REJECT) {
+            plugin.messages().send(player, "reward-claim-pending");
+        } else {
+            plugin.messages().send(player, "reward-overflow");
+        }
+    }
+
+    private void queueClaim(Player player, Crate crate, CrateReward reward, OpeningPlan plan,
+                            ItemStack item, int itemIndex) {
+        String token = "opening:" + plan.transactionId() + ":" + reward.id() + ":" + itemIndex;
+        try {
+            plugin.claims().enqueueItem(player.getUniqueId(), "OPENING", plan.transactionId().toString(),
+                    crate.id(), reward.id(), token, item).whenComplete((claim, error) -> {
+                if (error == null) return;
+                plugin.getLogger().log(Level.SEVERE,
+                        "Could not persist exact overflow claim " + token + "; dropping the unchanged stack", error);
+                if (plugin.isEnabled()) Bukkit.getScheduler().runTask(plugin,
+                        () -> player.getWorld().dropItemNaturally(player.getLocation(), item.clone()));
+            });
+        } catch (RuntimeException error) {
+            plugin.getLogger().log(Level.SEVERE,
+                    "Could not queue exact overflow claim " + token + "; dropping the unchanged stack", error);
+            player.getWorld().dropItemNaturally(player.getLocation(), item.clone());
+        }
     }
 
     private void dispatchRewardCommand(Player player, Crate crate, CrateReward reward, String command, BlockPosition location) {

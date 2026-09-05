@@ -38,6 +38,7 @@ cooldown: <yellow>Please wait <seconds>s before opening this crate again.</yello
 opened: <gray>You opened <crate> <gray>and received</gray> <reward><gray>!</gray>
 bulk-opened: <gray>You opened <yellow><amount>x</yellow> <crate> <gray>and received <yellow><rewards></yellow> rewards.</gray>
 reward-overflow: <yellow>Your inventory was full, so overflow rewards were dropped safely at your feet.</yellow>
+reward-claim-pending: <yellow>Your exact reward was placed in Claim Inbox because inventory space was unavailable. Use <white>/crates claim</white> to deliver it safely.</yellow>
 preview-hint: <dark_gray>Left-click previews • Right-click opens • Sneak-right-click opens in bulk</dark_gray>
 reloaded: <green>Configuration, editor mirrors, keys, menus, locations, and displays reloaded.</green> <gray>The published runtime snapshot was not bypassed.</gray>
 config-error: <red>Reload rejected:</red> <gray><error></gray> <yellow>The previous valid state is still active.</yellow>

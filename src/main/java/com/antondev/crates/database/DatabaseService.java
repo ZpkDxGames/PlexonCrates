@@ -8,6 +8,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -313,6 +316,49 @@ public final class DatabaseService implements AutoCloseable {
                 throw new IllegalArgumentException("Definition revisions cannot be negative");
             }
         }
+    }
+
+    /** Durable exact-item/virtual-credit claim awaiting player delivery. */
+    public record ClaimEntry(
+            UUID claimId, String idempotencyToken, UUID playerId, String sourceType, String sourceId,
+            String crateId, String rewardId, byte[] itemBytes, int itemAmount, String itemSha256,
+            String virtualKeyId, int virtualKeyAmount, String state, String attemptToken,
+            String lastResult, Instant createdAt, Instant updatedAt) {
+        public ClaimEntry {
+            claimId = java.util.Objects.requireNonNull(claimId, "claimId");
+            idempotencyToken = requiredText(idempotencyToken, "idempotencyToken");
+            playerId = java.util.Objects.requireNonNull(playerId, "playerId");
+            sourceType = requiredText(sourceType, "sourceType");
+            sourceId = requiredText(sourceId, "sourceId");
+            crateId = optionalText(crateId);
+            rewardId = optionalText(rewardId);
+            if (itemBytes != null) {
+                itemBytes = copyBytes(itemBytes, "claim item bytes");
+                if (itemAmount < 1 || itemSha256 == null || !itemSha256.matches("[0-9a-fA-F]{64}")) {
+                    throw new IllegalArgumentException("Invalid exact-item claim metadata");
+                }
+                if (virtualKeyId != null || virtualKeyAmount != 0) {
+                    throw new IllegalArgumentException("A claim cannot contain both an item and virtual credit");
+                }
+            } else {
+                itemAmount = 0;
+                itemSha256 = null;
+                virtualKeyId = optionalText(virtualKeyId);
+                if (virtualKeyId == null || virtualKeyAmount < 1) {
+                    throw new IllegalArgumentException("Virtual-key claim metadata is incomplete");
+                }
+            }
+            state = requiredText(state, "state").toUpperCase(java.util.Locale.ROOT);
+            if (!List.of("PENDING", "CLAIMING", "CLAIMED", "REVIEW").contains(state)) {
+                throw new IllegalArgumentException("Invalid claim state: " + state);
+            }
+            attemptToken = optionalText(attemptToken);
+            lastResult = lastResult == null ? "" : lastResult;
+            createdAt = java.util.Objects.requireNonNull(createdAt, "createdAt");
+            updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+        }
+
+        @Override public byte[] itemBytes() { return itemBytes == null ? null : itemBytes.clone(); }
     }
 
     public record DefinitionCounts(int rewards, int items, int actions, int keyLinks) {}
@@ -949,6 +995,184 @@ public final class DatabaseService implements AutoCloseable {
 
     public CompletableFuture<List<OpeningRecord>> historyAsync(UUID playerId, int limit, int offset) {
         return submitQuery("load opening history", connection -> history(connection, playerId, limit, offset));
+    }
+
+    /**
+     * Inserts an exact-item claim idempotently. Reusing the same token returns
+     * the original row instead of creating a duplicate delivery.
+     */
+    public CompletableFuture<ClaimEntry> createItemClaim(
+            UUID playerId, String sourceType, String sourceId, String crateId, String rewardId,
+            String idempotencyToken, byte[] itemBytes, int itemAmount, String itemSha256, Instant createdAt) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        String source = requiredText(sourceType, "sourceType");
+        String origin = requiredText(sourceId, "sourceId");
+        String token = requiredText(idempotencyToken, "idempotencyToken");
+        byte[] bytes = copyBytes(itemBytes, "claim item bytes");
+        String fingerprint = requiredText(itemSha256, "itemSha256");
+        if (itemAmount < 1 || !fingerprint.matches("[0-9a-fA-F]{64}")) {
+            throw new IllegalArgumentException("Invalid exact-item claim metadata");
+        }
+        if (!fingerprint.equalsIgnoreCase(sha256(bytes))) {
+            throw new IllegalArgumentException("Exact-item claim fingerprint does not match its payload");
+        }
+        Instant created = java.util.Objects.requireNonNull(createdAt, "createdAt");
+        return submitTransactionQuery("create item claim", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO claim_entry(claim_id, idempotency_token, player_uuid, source_type, source_id,
+                        crate_id, reward_id, item_bytes, item_amount, item_sha256, state, last_result,
+                        created_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?)
+                    ON CONFLICT(idempotency_token) DO NOTHING
+                    """)) {
+                statement.setString(1, UUID.randomUUID().toString());
+                statement.setString(2, token);
+                statement.setString(3, owner.toString());
+                statement.setString(4, source);
+                statement.setString(5, origin);
+                nullableText(statement, 6, crateId);
+                nullableText(statement, 7, rewardId);
+                statement.setBytes(8, bytes);
+                statement.setInt(9, itemAmount);
+                statement.setString(10, fingerprint.toLowerCase(java.util.Locale.ROOT));
+                statement.setLong(11, created.toEpochMilli());
+                statement.setLong(12, created.toEpochMilli());
+                statement.executeUpdate();
+            }
+            return loadClaimByToken(connection, token).orElseThrow();
+        });
+    }
+
+    public CompletableFuture<List<ClaimEntry>> loadClaims(UUID playerId, int limit, int offset) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        return submitQuery("load claims", connection -> {
+            var result = new ArrayList<ClaimEntry>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT claim_id, idempotency_token, player_uuid, source_type, source_id, crate_id, reward_id,
+                           item_bytes, item_amount, item_sha256, virtual_key_id, virtual_key_amount, state,
+                           attempt_token, last_result, created_at, updated_at
+                    FROM claim_entry WHERE player_uuid = ? AND state <> 'CLAIMED'
+                    ORDER BY created_at, claim_id LIMIT ? OFFSET ?
+                    """)) {
+                statement.setString(1, owner.toString());
+                statement.setInt(2, Math.max(1, Math.min(limit, 100)));
+                statement.setInt(3, Math.max(0, offset));
+                try (ResultSet rows = statement.executeQuery()) {
+                    while (rows.next()) result.add(claimEntry(rows));
+                }
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    public CompletableFuture<Integer> pendingClaimCount(UUID playerId) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        return submitQuery("count pending claims", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT COUNT(*) FROM claim_entry WHERE player_uuid = ? AND state <> 'CLAIMED'")) {
+                statement.setString(1, owner.toString());
+                try (ResultSet rows = statement.executeQuery()) {
+                    return rows.next() ? rows.getInt(1) : 0;
+                }
+            }
+        });
+    }
+
+    /** Reserves a pending claim, or returns the same row for an idempotent retry token. */
+    public CompletableFuture<Optional<ClaimEntry>> reserveClaim(UUID playerId, UUID claimId, String attemptToken) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        UUID id = java.util.Objects.requireNonNull(claimId, "claimId");
+        String token = requiredText(attemptToken, "attemptToken");
+        return submitTransactionQuery("reserve claim", connection -> {
+            ClaimEntry current = loadClaim(connection, id).orElse(null);
+            if (current == null || !current.playerId().equals(owner)) return Optional.empty();
+            if (current.state().equals("CLAIMING") && token.equals(current.attemptToken())) {
+                return Optional.of(current);
+            }
+            if (!current.state().equals("PENDING")) return Optional.empty();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE claim_entry SET state = 'CLAIMING', attempt_token = ?, last_result = '', updated_at = ?
+                    WHERE claim_id = ? AND player_uuid = ? AND state = 'PENDING'
+                    """)) {
+                statement.setString(1, token);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.setString(3, id.toString());
+                statement.setString(4, owner.toString());
+                if (statement.executeUpdate() != 1) return Optional.empty();
+            }
+            return loadClaim(connection, id);
+        });
+    }
+
+    public CompletableFuture<Optional<ClaimEntry>> completeClaim(UUID claimId, String attemptToken) {
+        UUID id = java.util.Objects.requireNonNull(claimId, "claimId");
+        String token = requiredText(attemptToken, "attemptToken");
+        return submitTransactionQuery("complete claim", connection -> {
+            ClaimEntry current = loadClaim(connection, id).orElse(null);
+            if (current == null) return Optional.empty();
+            if (current.state().equals("CLAIMED")) return Optional.of(current);
+            if (!current.state().equals("CLAIMING") || !token.equals(current.attemptToken())) return Optional.empty();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE claim_entry SET state = 'CLAIMED', attempt_token = NULL, last_result = '', updated_at = ?
+                    WHERE claim_id = ? AND state = 'CLAIMING' AND attempt_token = ?
+                    """)) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setString(2, id.toString());
+                statement.setString(3, token);
+                if (statement.executeUpdate() != 1) return Optional.empty();
+            }
+            return loadClaim(connection, id);
+        });
+    }
+
+    public CompletableFuture<Boolean> releaseClaim(UUID claimId, String attemptToken, String reason) {
+        UUID id = java.util.Objects.requireNonNull(claimId, "claimId");
+        String token = requiredText(attemptToken, "attemptToken");
+        String detail = reason == null ? "" : reason;
+        return submitTransactionQuery("release claim reservation", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE claim_entry SET state = 'PENDING', attempt_token = NULL, last_result = ?, updated_at = ?
+                    WHERE claim_id = ? AND state = 'CLAIMING' AND attempt_token = ?
+                    """)) {
+                statement.setString(1, detail);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.setString(3, id.toString());
+                statement.setString(4, token);
+                return statement.executeUpdate() == 1;
+            }
+        });
+    }
+
+    public CompletableFuture<Boolean> markClaimReview(UUID claimId, String attemptToken, String reason) {
+        UUID id = java.util.Objects.requireNonNull(claimId, "claimId");
+        String token = requiredText(attemptToken, "attemptToken");
+        String detail = reason == null ? "" : reason;
+        return submitTransactionQuery("mark claim for review", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE claim_entry SET state = 'REVIEW', attempt_token = NULL, last_result = ?, updated_at = ?
+                    WHERE claim_id = ? AND state = 'CLAIMING' AND attempt_token = ?
+                    """)) {
+                statement.setString(1, detail);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.setString(3, id.toString());
+                statement.setString(4, token);
+                return statement.executeUpdate() == 1;
+            }
+        });
+    }
+
+    /** Abandoned claims are never retried automatically after a restart. */
+    public CompletableFuture<Integer> recoverClaimingClaims() {
+        return submitTransactionQuery("recover claiming claims", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE claim_entry SET state = 'REVIEW', attempt_token = NULL,
+                        last_result = 'Claim attempt was interrupted; manual review required', updated_at = ?
+                    WHERE state = 'CLAIMING'
+                    """)) {
+                statement.setLong(1, System.currentTimeMillis());
+                return statement.executeUpdate();
+            }
+        });
     }
 
     public RewardStateSnapshot loadRewardStates() throws SQLException {
@@ -2111,6 +2335,18 @@ public final class DatabaseService implements AutoCloseable {
         return value;
     }
 
+    private static String optionalText(String input) {
+        return input == null || input.isBlank() ? null : input.trim();
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("Java runtime does not provide SHA-256", impossible);
+        }
+    }
+
     private static void updateJournal(Connection connection, UUID transactionId, String stage, String detail) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
                 "UPDATE opening_journal SET stage = ?, detail = ?, updated_at = ? WHERE transaction_id = ?")) {
@@ -2161,6 +2397,47 @@ public final class DatabaseService implements AutoCloseable {
     private static void nullableUuid(PreparedStatement statement, int index, UUID value) throws SQLException {
         if (value == null) statement.setNull(index, java.sql.Types.VARCHAR);
         else statement.setString(index, value.toString());
+    }
+
+    private static void nullableText(PreparedStatement statement, int index, String value) throws SQLException {
+        if (value == null || value.isBlank()) statement.setNull(index, java.sql.Types.VARCHAR);
+        else statement.setString(index, value.trim());
+    }
+
+    private static Optional<ClaimEntry> loadClaim(Connection connection, UUID claimId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT claim_id, idempotency_token, player_uuid, source_type, source_id, crate_id, reward_id,
+                       item_bytes, item_amount, item_sha256, virtual_key_id, virtual_key_amount, state,
+                       attempt_token, last_result, created_at, updated_at
+                FROM claim_entry WHERE claim_id = ?
+                """)) {
+            statement.setString(1, claimId.toString());
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(claimEntry(rows)) : Optional.empty();
+            }
+        }
+    }
+
+    private static Optional<ClaimEntry> loadClaimByToken(Connection connection, String token) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT claim_id, idempotency_token, player_uuid, source_type, source_id, crate_id, reward_id,
+                       item_bytes, item_amount, item_sha256, virtual_key_id, virtual_key_amount, state,
+                       attempt_token, last_result, created_at, updated_at
+                FROM claim_entry WHERE idempotency_token = ?
+                """)) {
+            statement.setString(1, token);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(claimEntry(rows)) : Optional.empty();
+            }
+        }
+    }
+
+    private static ClaimEntry claimEntry(ResultSet rows) throws SQLException {
+        return new ClaimEntry(UUID.fromString(rows.getString(1)), rows.getString(2),
+                UUID.fromString(rows.getString(3)), rows.getString(4), rows.getString(5), rows.getString(6),
+                rows.getString(7), rows.getBytes(8), rows.getInt(9), rows.getString(10), rows.getString(11),
+                rows.getInt(12), rows.getString(13), rows.getString(14), rows.getString(15),
+                Instant.ofEpochMilli(rows.getLong(16)), Instant.ofEpochMilli(rows.getLong(17)));
     }
 
     @Override

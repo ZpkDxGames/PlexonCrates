@@ -2,13 +2,17 @@ package com.antondev.crates.command;
 
 import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.domain.opening.OpenSource;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
 import org.bukkit.command.Command;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandExecutor;
@@ -44,12 +48,27 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
             player.sendMessage(Text.parse("<white>/crates preview <crate></white> <dark_gray>—</dark_gray> <gray>Preview rewards.</gray>"));
             player.sendMessage(Text.parse("<white>/crates open <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Open using physical PlexonKeys keys.</gray>"));
             player.sendMessage(Text.parse("<white>/crates history [page]</white> <dark_gray>—</dark_gray> <gray>Review recent wins.</gray>"));
+            player.sendMessage(Text.parse("<white>/crates claim [page|id]</white> <dark_gray>—</dark_gray> <gray>Deliver exact pending claims.</gray>"));
             return true;
         }
         if (action.equals("history")) {
             if (!allowed(player, "plexoncrates.history")) return denied(player);
             int page = args.length >= 2 ? page(player, args[1]) : 1;
             if (page > 0) history(player, page);
+            return true;
+        }
+        if (action.equals("claim")) {
+            if (!allowed(player, "plexoncrates.claim")) return denied(player);
+            if (args.length < 2) {
+                claims(player, 1);
+                return true;
+            }
+            try {
+                plugin.claims().claim(player, UUID.fromString(args[1]));
+            } catch (IllegalArgumentException error) {
+                int requested = page(player, args[1]);
+                if (requested > 0) claims(player, requested);
+            }
             return true;
         }
         if (action.equals("preview") || action.equals("open")) {
@@ -103,6 +122,32 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
                 });
     }
 
+    private void claims(Player player, int page) {
+        plugin.claims().list(player.getUniqueId(), page).whenComplete((entries, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (error != null) {
+                    plugin.messages().send(player, "database-error");
+                    return;
+                }
+                player.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Claim Inbox</bold></gradient> <dark_gray>•</dark_gray> <gray>Page " + page + "</gray>"));
+                if (entries == null || entries.isEmpty()) {
+                    player.sendMessage(Text.parse("<gray>No pending exact claims were found on this page.</gray>"));
+                    return;
+                }
+                for (DatabaseService.ClaimEntry entry : entries) {
+                    Component line = Text.parse("<dark_gray>•</dark_gray> <white><id></white> <gray><source> · <state></gray> ",
+                            Text.value("id", entry.claimId()), Text.value("source", entry.sourceType()),
+                            Text.value("state", entry.state()))
+                            .append(Text.parse("<green>[Claim]</green>")
+                                    .clickEvent(ClickEvent.runCommand("/crates claim " + entry.claimId())));
+                    player.sendMessage(line);
+                }
+            });
+        });
+    }
+
     private int page(Player player, String raw) {
         try {
             int page = Integer.parseInt(raw);
@@ -142,7 +187,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                                  @NotNull String alias, @NotNull String[] args) {
         if (args.length == 1) {
-            var values = new ArrayList<>(List.of("preview", "open", "history", "help"));
+            var values = new ArrayList<>(List.of("preview", "open", "history", "claim", "help"));
             values.addAll(plugin.runtime().ordered().stream().map(Crate::id).toList());
             return filter(values, args[0]);
         }

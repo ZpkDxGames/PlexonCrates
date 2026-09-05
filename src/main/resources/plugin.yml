@@ -9,7 +9,7 @@ softdepend: [PlexonKeys, PlaceholderAPI, Vault]
 commands:
   crates:
     description: Browse crates, preview rewards, or open a crate.
-    usage: /crates [crate|preview|open|history] [crate|page] [amount]
+    usage: /crates [crate|preview|open|history|claim] [crate|page|id] [amount]
     aliases: [crate, plexoncrates]
   cratesadmin:
     description: Configure PlexonCrates in game.
@@ -23,6 +23,7 @@ permissions:
       plexoncrates.preview: true
       plexoncrates.open: true
       plexoncrates.history: true
+      plexoncrates.claim: true
   plexoncrates.preview:
     description: Browse crates and preview eligible rewards.
     default: true
@@ -31,6 +32,9 @@ permissions:
     default: true
   plexoncrates.history:
     description: Review personal opening history.
+    default: true
+  plexoncrates.claim:
+    description: Deliver durable exact-item Claim Inbox entries.
     default: true
   plexoncrates.admin:
     description: All PlexonCrates administration features.

@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.antondev.crates.domain.draft.DraftMutation;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -195,6 +197,37 @@ class DatabaseServiceTest {
             assertEquals("basic", loaded.getFirst().keyId());
             assertEquals("FALLBACK", loaded.getFirst().templates().getFirst().templateKind());
             assertArrayEquals(bytes("exact-key"), loaded.getFirst().templates().getFirst().bytes());
+        }
+    }
+
+    @Test
+    void claimInboxIsIdempotentAndInterruptedReservationsMoveToReview() throws Exception {
+        UUID player = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-04T12:00:00Z");
+        byte[] payload = bytes("exact-claim");
+        String fingerprint = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload));
+        try (DatabaseService database = database()) {
+            var first = database.createItemClaim(player, "OPENING", "tx-1", "basic", "winner", "claim-token",
+                    payload, 4, fingerprint, now).join();
+            var duplicate = database.createItemClaim(player, "OPENING", "tx-1", "basic", "winner", "claim-token",
+                    payload, 4, fingerprint, now.plusSeconds(1)).join();
+            assertEquals(first.claimId(), duplicate.claimId());
+            assertEquals(1, database.pendingClaimCount(player).join());
+
+            var reserved = database.reserveClaim(player, first.claimId(), "attempt-1").join().orElseThrow();
+            assertEquals("CLAIMING", reserved.state());
+            assertEquals(1, database.recoverClaimingClaims().join());
+            assertEquals("REVIEW", database.loadClaims(player, 10, 0).join().getFirst().state());
+            assertTrue(database.reserveClaim(player, first.claimId(), "attempt-2").join().isEmpty());
+
+            // A separate pending entry demonstrates the normal release/retry path.
+            var second = database.createItemClaim(player, "ADMIN", "grant-1", null, null, "claim-token-2",
+                    payload, 1, fingerprint, now.plusSeconds(2)).join();
+            assertTrue(database.reserveClaim(player, second.claimId(), "attempt-3").join().isPresent());
+            assertTrue(database.releaseClaim(second.claimId(), "attempt-3", "manual retry").join());
+            assertTrue(database.reserveClaim(player, second.claimId(), "attempt-4").join().isPresent());
+            assertTrue(database.completeClaim(second.claimId(), "attempt-4").join().isPresent());
+            assertEquals("CLAIMED", database.completeClaim(second.claimId(), "attempt-4").join().orElseThrow().state());
         }
     }
 

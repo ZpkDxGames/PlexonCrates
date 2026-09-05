@@ -19,6 +19,7 @@ public record PluginSettings(
         Set<String> worlds,
         Set<String> excludedWorlds,
         boolean dropOverflow,
+        OverflowPolicy overflowPolicy,
         int maximumBulk,
         int statisticsSaveSeconds,
         boolean plexonKeysEnabled,
@@ -113,10 +114,12 @@ public record PluginSettings(
             if (material == null) throw new IllegalArgumentException("Unknown locations.denied-materials entry: " + value);
             return material;
         }).collect(Collectors.toUnmodifiableSet());
+        OverflowPolicy overflowPolicy = overflowPolicy(c);
         return new PluginSettings(
                 databaseFile, maximumQueuedWrites,
                 c.getBoolean("settings.enabled"), lower(c.getStringList("settings.worlds")),
                 lower(c.getStringList("settings.excluded-worlds")), c.getBoolean("settings.drop-overflow-items"),
+                overflowPolicy,
                 bulk, save, c.getBoolean("plexonkeys.enabled"), required(c, "plexonkeys.plugin-name"), mode,
                 fallback, c.getBoolean("interaction.consume-offhand-keys"), c.getBoolean("interaction.left-click-preview"),
                 c.getBoolean("interaction.right-click-open"), c.getBoolean("interaction.sneak-right-click-bulk"),
@@ -170,5 +173,16 @@ public record PluginSettings(
 
     private static Set<String> lower(java.util.List<String> values) {
         return values.stream().map(value -> value.toLowerCase(Locale.ROOT)).collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static OverflowPolicy overflowPolicy(YamlConfiguration c) {
+        String raw = c.getString("opening.overflow", "").trim();
+        if (raw.isBlank()) return c.getBoolean("settings.drop-overflow-items")
+                ? OverflowPolicy.DROP : OverflowPolicy.REJECT;
+        try {
+            return OverflowPolicy.valueOf(raw.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("opening.overflow must be REJECT, DROP, CLAIM, or CLAIM_ALL", error);
+        }
     }
 }

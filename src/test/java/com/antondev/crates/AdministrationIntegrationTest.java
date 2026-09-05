@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
+import com.antondev.crates.config.Text;
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.gui.GuiSessionService;
 import com.antondev.crates.gui.MenuHolder;
@@ -373,7 +374,12 @@ class AdministrationIntegrationTest {
         server.getScheduler().performTicks(2);
 
         assertEquals(com.antondev.crates.domain.crate.CrateState.PUBLISHED, reenabled.join().crate().state());
-        assertEquals(before.displayName(), plugin.runtime().find("basic").orElseThrow().displayName());
+        // Adventure's gradient component implementation may not compare equal after a
+        // YAML round-trip even when its serialized MiniMessage is unchanged. Compare
+        // the stable presentation form so this lifecycle test focuses on the runtime
+        // not leaking a disabled definition into the player-facing registry.
+        assertEquals(Text.serialize(before.displayName()),
+                Text.serialize(plugin.runtime().find("basic").orElseThrow().displayName()));
         assertEquals(initialRevision + 2, plugin.definitionRevision("basic"));
     }
 

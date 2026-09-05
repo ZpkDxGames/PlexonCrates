@@ -79,14 +79,19 @@ public class PlexonCrates extends JavaPlugin {
             settings = PluginSettings.load(file("config.yml"));
             messages = Messages.load(file("messages.yml"));
             menusConfig = MenuConfig.load(file("menus.yml"));
-            CrateRegistry.Snapshot crateSnapshot = CrateRegistry.load(getDataFolder().toPath().resolve("crates"));
-            crates = new CrateRegistry(getDataFolder().toPath().resolve("crates"), crateSnapshot);
+            definitionRepository = new DefinitionRepository(database);
+            DatabaseService.PublishedSnapshot canonical = definitionRepository.loadPublished().join();
+            if (canonical.definitions().isEmpty()) {
+                CrateRegistry.Snapshot crateSnapshot = CrateRegistry.load(getDataFolder().toPath().resolve("crates"));
+                crates = new CrateRegistry(getDataFolder().toPath().resolve("crates"), crateSnapshot);
+            } else {
+                crates = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"), canonical.definitions());
+            }
             LocationStore.Snapshot locationSnapshot = LocationStore.fromDatabase(database.loadLocations(), crates);
             locations = new LocationStore(database, getLogger(), locationSnapshot);
             KeyService.Snapshot keySnapshot = KeyService.load(file(settings.fallbackFile()));
             keys = new KeyService(this, database, file(settings.fallbackFile()).toPath(), keySnapshot,
                     database.loadKeyTemplateCache());
-            definitionRepository = new DefinitionRepository(database);
             runtime = new RuntimeRegistry(DefinitionPublisher.bootstrap(definitionRepository, crates, keys));
             statistics = new StatsStore(database.loadStatistics());
             rewardStates = new RewardStateService(database.loadRewardStates());
@@ -152,8 +157,16 @@ public class PlexonCrates extends JavaPlugin {
             PluginSettings nextSettings = PluginSettings.load(file("config.yml"));
             Messages nextMessages = Messages.load(file("messages.yml"));
             MenuConfig nextMenus = MenuConfig.load(file("menus.yml"));
-            CrateRegistry.Snapshot nextCrates = CrateRegistry.load(getDataFolder().toPath().resolve("crates"));
-            CrateRegistry validationRegistry = new CrateRegistry(getDataFolder().toPath().resolve("crates"), nextCrates);
+            DatabaseService.PublishedSnapshot canonical = definitionRepository.loadPublished().join();
+            CrateRegistry validationRegistry;
+            if (canonical.definitions().isEmpty()) {
+                validationRegistry = new CrateRegistry(getDataFolder().toPath().resolve("crates"),
+                        CrateRegistry.load(getDataFolder().toPath().resolve("crates")));
+            } else {
+                validationRegistry = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"),
+                        canonical.definitions());
+            }
+            CrateRegistry.Snapshot nextCrates = validationRegistry.snapshot();
             for (LocationStore.Link link : locations.all()) {
                 if (validationRegistry.find(link.crateId()).isEmpty()) {
                     throw new IllegalArgumentException("Linked location references a crate missing from the reload: " + link.crateId());

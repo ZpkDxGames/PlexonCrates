@@ -4,6 +4,7 @@ import com.antondev.crates.config.AtomicFiles;
 import com.antondev.crates.config.ItemCodec;
 import com.antondev.crates.config.Text;
 import com.antondev.crates.api.event.CrateDefinitionChangeEvent;
+import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.domain.crate.AnimationType;
 import com.antondev.crates.domain.crate.CrateState;
 import com.antondev.crates.domain.reward.PityPolicy;
@@ -42,12 +43,26 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.inventory.ItemStack;
 
-/** Immutable, validate-before-swap registry for 2.0 crate definitions. */
+/** Immutable, validate-before-swap registry for editable crate definitions and canonical runtime mirrors. */
 public final class CrateRegistry {
-    public record Snapshot(Map<String, Crate> crates, Map<String, Path> files) {
+    public record Snapshot(Map<String, Crate> crates, Map<String, Path> files,
+                           Map<String, byte[]> payloads) {
+        public Snapshot(Map<String, Crate> crates, Map<String, Path> files) {
+            this(crates, files, Map.of());
+        }
+
         public Snapshot {
             crates = Collections.unmodifiableMap(new LinkedHashMap<>(crates));
             files = Collections.unmodifiableMap(new LinkedHashMap<>(files));
+            var copiedPayloads = new LinkedHashMap<String, byte[]>();
+            payloads.forEach((id, payload) -> copiedPayloads.put(id, payload.clone()));
+            payloads = Collections.unmodifiableMap(copiedPayloads);
+        }
+
+        @Override public Map<String, byte[]> payloads() {
+            var copied = new LinkedHashMap<String, byte[]>();
+            payloads.forEach((id, payload) -> copied.put(id, payload.clone()));
+            return Collections.unmodifiableMap(copied);
         }
     }
 
@@ -67,9 +82,10 @@ public final class CrateRegistry {
     private final Path directory;
     private Map<String, Crate> crates;
     private Map<String, Path> files;
+    private Map<String, byte[]> payloads;
 
     public CrateRegistry(Path directory, Snapshot snapshot) {
-        this.directory = directory;
+        this.directory = directory.toAbsolutePath().normalize();
         apply(snapshot);
     }
 
@@ -77,25 +93,82 @@ public final class CrateRegistry {
         if (!Files.isDirectory(directory)) throw new IllegalArgumentException("Missing crates directory");
         var loaded = new LinkedHashMap<String, Crate>();
         var paths = new LinkedHashMap<String, Path>();
+        var payloads = new LinkedHashMap<String, byte[]>();
         try (var stream = Files.list(directory)) {
             for (Path file : stream.filter(path -> path.getFileName().toString().endsWith(".yml")).sorted().toList()) {
                 YamlConfiguration yaml = read(file);
                 Crate crate = parse(file, yaml);
                 if (loaded.putIfAbsent(crate.id(), crate) != null) throw path(file, "duplicate crate ID " + crate.id());
                 paths.put(crate.id(), file);
+                payloads.put(crate.id(), Files.readAllBytes(file));
             }
         }
         if (loaded.isEmpty()) throw new IllegalArgumentException("No crate files were found in " + directory);
-        return new Snapshot(loaded, paths);
+        return new Snapshot(loaded, paths, payloads);
+    }
+
+    /** Builds a registry from the canonical published payloads without reading any YAML mirror. */
+    public static CrateRegistry fromPublished(Path directory,
+                                              List<DatabaseService.StoredDefinition> definitions) throws Exception {
+        Path root = directory.toAbsolutePath().normalize();
+        if (!Files.isDirectory(root)) throw new IllegalArgumentException("Missing crates directory");
+        var loaded = new LinkedHashMap<String, Crate>();
+        var paths = new LinkedHashMap<String, Path>();
+        var payloads = new LinkedHashMap<String, byte[]>();
+        for (DatabaseService.StoredDefinition definition : definitions) {
+            String id = normalize(definition.crateId());
+            if (!validId(id)) throw new IllegalArgumentException("Canonical definition has an invalid crate ID: " + id);
+            if (loaded.containsKey(id)) throw new IllegalArgumentException("Duplicate canonical crate ID: " + id);
+            Path file = root.resolve(id + ".yml").normalize();
+            if (!file.getParent().equals(root)) throw new IllegalArgumentException("Canonical crate path is invalid: " + id);
+            YamlConfiguration yaml = decode(definition.payload());
+            Crate crate = parse(file, yaml);
+            if (!crate.id().equals(id) || crate.state() != CrateState.PUBLISHED) {
+                throw new IllegalArgumentException("Canonical definition is not a published crate: " + id);
+            }
+            loaded.put(id, crate);
+            paths.put(id, file);
+            payloads.put(id, definition.payload());
+        }
+        // Unpublished drafts are still editable after a restart. Their mirrors are only a recovery aid and
+        // are therefore parsed opportunistically; malformed or stale published mirrors never enter this path.
+        try (var stream = Files.list(root)) {
+            for (Path file : stream.filter(path -> path.getFileName().toString().endsWith(".yml")).sorted().toList()) {
+                String candidateId = normalize(file.getFileName().toString().replaceFirst("\\.yml$", ""));
+                if (loaded.containsKey(candidateId)) continue;
+                try {
+                    YamlConfiguration yaml = read(file);
+                    Crate draft = parse(file, yaml);
+                    if (draft.state() == CrateState.DRAFT && loaded.putIfAbsent(draft.id(), draft) == null) {
+                        paths.put(draft.id(), file);
+                        payloads.put(draft.id(), Files.readAllBytes(file));
+                    }
+                } catch (RuntimeException | IOException ignored) {
+                    // A non-canonical mirror must not prevent SQLite-backed startup.
+                }
+            }
+        }
+        if (loaded.isEmpty()) throw new IllegalArgumentException("Canonical store contains no published crates");
+        return new CrateRegistry(root, new Snapshot(loaded, paths, payloads));
     }
 
     public void apply(Snapshot snapshot) {
         crates = snapshot.crates();
         files = snapshot.files();
+        payloads = new LinkedHashMap<>();
+        snapshot.payloads().forEach((id, payload) -> payloads.put(id, payload.clone()));
+        for (Map.Entry<String, Path> entry : files.entrySet()) {
+            if (payloads.containsKey(entry.getKey())) continue;
+            try {
+                if (Files.isRegularFile(entry.getValue())) payloads.put(entry.getKey(), Files.readAllBytes(entry.getValue()));
+            } catch (IOException ignored) {
+                // A canonical snapshot may intentionally have no writable YAML mirror.
+            }
+        }
     }
 
     public Snapshot snapshot() {
-        return new Snapshot(crates, files);
+        return new Snapshot(crates, files, payloads);
     }
 
     public Optional<Crate> find(String id) { return Optional.ofNullable(crates.get(normalize(id))); }
@@ -118,8 +191,11 @@ public final class CrateRegistry {
     }
 
     public String serialized(String crateId) throws IOException {
-        Path file = files.get(normalize(crateId));
-        if (file == null) throw new IllegalArgumentException("Unknown crate");
+        String id = normalize(crateId);
+        if (!files.containsKey(id)) throw new IllegalArgumentException("Unknown crate");
+        byte[] payload = payloads.get(id);
+        if (payload != null) return new String(payload, StandardCharsets.UTF_8);
+        Path file = files.get(id);
         return Files.readString(file, StandardCharsets.UTF_8);
     }
 
@@ -152,6 +228,7 @@ public final class CrateRegistry {
         AtomicFiles.write(publication.file(), new String(publication.payload(), StandardCharsets.UTF_8));
         Crate previous = crates.get(publication.crateId());
         install(publication.crateId(), publication.file(), publication.crate());
+        payloads.put(publication.crateId(), publication.payload());
         fireChange(publication.crate(), changeType(previous, publication.crate()));
     }
 
@@ -165,8 +242,10 @@ public final class CrateRegistry {
         if (!restored.id().equals(id)) {
             throw new IllegalArgumentException("Draft snapshot targets a different crate ID");
         }
-        AtomicFiles.write(file, yaml.saveToString());
+        String serialized = yaml.saveToString();
+        AtomicFiles.write(file, serialized);
         install(id, file, restored);
+        payloads.put(id, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(restored, changeType(previous, restored));
         return restored;
     }
@@ -209,8 +288,10 @@ public final class CrateRegistry {
         yaml.set("audit.updated-at", now.toString());
         yaml.set("audit.last-editor", editor);
         Crate parsed = parse(file, yaml);
-        AtomicFiles.write(file, yaml.saveToString());
+        String serialized = yaml.saveToString();
+        AtomicFiles.write(file, serialized);
         install(id, file, parsed);
+        payloads.put(id, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(parsed, CrateDefinitionChangeEvent.ChangeType.CREATED);
         return parsed;
     }
@@ -219,7 +300,7 @@ public final class CrateRegistry {
         Crate source = find(sourceId).orElseThrow(() -> new IllegalArgumentException("Unknown source crate"));
         String newId = normalize(rawNewId);
         if (!validId(newId) || crates.containsKey(newId)) throw new IllegalArgumentException("Invalid or existing new crate ID");
-        YamlConfiguration yaml = read(files.get(source.id()));
+        YamlConfiguration yaml = decode(serialized(source.id()).getBytes(StandardCharsets.UTF_8));
         yaml.set("id", newId);
         yaml.set("state", "DRAFT");
         yaml.set("display-order", nextDisplayOrder());
@@ -228,8 +309,10 @@ public final class CrateRegistry {
         yaml.set("audit.last-editor", editor);
         Path file = directory.resolve(newId + ".yml");
         Crate parsed = parse(file, yaml);
-        AtomicFiles.write(file, yaml.saveToString());
+        String serialized = yaml.saveToString();
+        AtomicFiles.write(file, serialized);
         install(newId, file, parsed);
+        payloads.put(newId, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(parsed, CrateDefinitionChangeEvent.ChangeType.CREATED);
         return parsed;
     }
@@ -255,8 +338,10 @@ public final class CrateRegistry {
             throw new IllegalArgumentException("Invalid imported crate path");
         }
         Crate parsed = parse(destination, yaml);
-        AtomicFiles.write(destination, yaml.saveToString());
+        String serialized = yaml.saveToString();
+        AtomicFiles.write(destination, serialized);
         install(newId, destination, parsed);
+        payloads.put(newId, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(parsed, CrateDefinitionChangeEvent.ChangeType.CREATED);
         return parsed;
     }
@@ -269,7 +354,7 @@ public final class CrateRegistry {
         Files.createDirectories(root);
         Path destination = root.resolve(id + ".yml").normalize();
         if (!destination.getParent().equals(root)) throw new IllegalArgumentException("Invalid export path");
-        AtomicFiles.write(destination, Files.readString(source, StandardCharsets.UTF_8));
+        AtomicFiles.write(destination, serialized(id));
         return destination;
     }
 
@@ -419,13 +504,14 @@ public final class CrateRegistry {
         Path file = files.get(id);
         if (file == null) throw new IllegalArgumentException("Unknown crate");
         Crate deleted = crates.get(id);
-        Files.delete(file);
+        Files.deleteIfExists(file);
         var nextCrates = new LinkedHashMap<>(crates);
         var nextFiles = new LinkedHashMap<>(files);
         nextCrates.remove(id);
         nextFiles.remove(id);
         crates = Collections.unmodifiableMap(nextCrates);
         files = Collections.unmodifiableMap(nextFiles);
+        payloads.remove(id);
         fireChange(deleted, CrateDefinitionChangeEvent.ChangeType.DELETED);
     }
 
@@ -648,10 +734,10 @@ public final class CrateRegistry {
         String sourceReward = normalize(rewardId);
         String newReward = normalize(rawNewRewardId);
         if (!validId(newReward)) throw new IllegalArgumentException("Invalid copied reward ID");
-        Path sourceFile = files.get(sourceId);
-        Path targetFile = files.get(targetId);
-        if (sourceFile == null || targetFile == null) throw new IllegalArgumentException("Unknown source or target crate");
-        YamlConfiguration source = read(sourceFile);
+        if (!files.containsKey(sourceId) || !files.containsKey(targetId)) {
+            throw new IllegalArgumentException("Unknown source or target crate");
+        }
+        YamlConfiguration source = decode(serialized(sourceId).getBytes(StandardCharsets.UTF_8));
         ConfigurationSection section = source.getConfigurationSection("rewards." + sourceReward);
         if (section == null) throw new IllegalArgumentException("Unknown source reward");
         mutate(targetId, yaml -> {
@@ -771,11 +857,13 @@ public final class CrateRegistry {
         Path file = files.get(id);
         if (file == null) throw new IllegalArgumentException("Unknown crate");
         Crate previous = crates.get(id);
-        YamlConfiguration yaml = read(file);
+        YamlConfiguration yaml = decode(serialized(id).getBytes(StandardCharsets.UTF_8));
         change.accept(yaml);
         Crate parsed = parse(file, yaml);
-        AtomicFiles.write(file, yaml.saveToString());
+        String serialized = yaml.saveToString();
+        AtomicFiles.write(file, serialized);
         install(id, file, parsed);
+        payloads.put(id, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(parsed, changeType(previous, parsed));
     }
 

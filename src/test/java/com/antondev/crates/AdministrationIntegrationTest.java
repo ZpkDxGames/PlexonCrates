@@ -340,7 +340,7 @@ class AdministrationIntegrationTest {
     }
 
     @Test
-    void invalidReloadLeavesThePublishedRuntimeSnapshotUntouched() throws Exception {
+    void malformedYamlMirrorCannotOverrideTheCanonicalPublishedRuntime() throws Exception {
         var player = server.addPlayer("ReloadEditor");
         player.setOp(true);
         double originalChance = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").baseChancePercent();
@@ -350,10 +350,16 @@ class AdministrationIntegrationTest {
         assertFalse(valid.equals(invalid));
         Files.writeString(file, invalid);
         try {
-            assertFalse(plugin.reloadFor(player));
+            assertTrue(plugin.reloadFor(player));
             assertEquals(originalChance,
                     plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").baseChancePercent());
             assertTrue(plugin.crates().find("basic").orElseThrow().enabled());
+            assertEquals(invalid, Files.readString(file));
+            Files.delete(file);
+            assertTrue(plugin.reloadFor(player));
+            assertEquals(originalChance,
+                    plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").baseChancePercent());
+            assertTrue(plugin.crates().serialized("basic").contains("coal_cache"));
         } finally {
             Files.writeString(file, valid);
         }

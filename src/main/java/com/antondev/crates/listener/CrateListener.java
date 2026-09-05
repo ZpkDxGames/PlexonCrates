@@ -104,6 +104,11 @@ public final class CrateListener implements Listener {
                     plugin.messages().send(player, "opening-state-changed");
                     return;
                 }
+                if (record.revisionPolicy().equals("PINNED_REVISION")
+                        && record.pinnedRevision() != plugin.runtime().crateRevision(record.crateId())) {
+                    plugin.messages().send(player, "opening-state-changed");
+                    return;
+                }
                 plugin.openings().openPortable(player, crate, record, expected);
             });
         });

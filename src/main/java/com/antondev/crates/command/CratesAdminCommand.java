@@ -683,7 +683,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (!sender.hasPermission("plexoncrates.admin") && !sender.hasPermission("plexoncrates.admin.gui")) return List.of();
         if (args.length == 1) return filter(List.of("gui", "create", "edit", "clone", "import", "export", "publish", "delete", "keys", "wand",
                 "link", "unlink", "set", "unset", "additem", "addcommand", "remove", "chance", "givekey",
-                "open", "virtualgrant", "rerolls", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
+                "open", "portable", "virtualgrant", "rerolls", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
         String action = args[0].toLowerCase(Locale.ROOT);
         if (args.length == 2 && List.of("edit", "export", "publish", "delete", "link", "set", "additem", "addcommand", "remove", "chance", "weight").contains(action)) {
             return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[1]);
@@ -693,14 +693,14 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (args.length == 2 && action.equals("wand")) return filter(plugin.crates().orderedAdmin().stream().map(Crate::id).toList(), args[1]);
         if (args.length == 2 && action.equals("rerolls")) return filter(List.of("give", "take", "set"), args[1]);
         if (args.length == 2 && action.equals("portable")) return filter(List.of("give"), args[1]);
-        if (args.length == 2 && List.of("givekey", "open", "rerolls", "portable").contains(action)) {
+        if (args.length == 2 && List.of("givekey", "open").contains(action)) {
             return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(), args[1]);
         }
         if (args.length == 3 && action.equals("givekey")) {
             return filter(plugin.crates().ordered().stream().map(Crate::keyId).distinct().toList(), args[2]);
         }
         if (args.length == 3 && action.equals("portable")) {
-            return filter(plugin.runtime().ordered().stream().map(Crate::id).toList(), args[2]);
+            return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(), args[2]);
         }
         if (args.length == 3 && action.equals("open")) {
             return filter(plugin.runtime().ordered().stream().map(Crate::id).toList(), args[2]);
@@ -708,9 +708,13 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (args.length == 3 && List.of("remove", "chance", "weight").contains(action)) {
             return plugin.crates().find(args[1]).map(crate -> filter(new ArrayList<>(crate.rewards().keySet()), args[2])).orElse(List.of());
         }
+        if (args.length == 4 && action.equals("portable")) {
+            return filter(plugin.runtime().ordered().stream().map(Crate::id).toList(), args[3]);
+        }
         if ((args.length == 4 && List.of("additem", "addcommand", "chance", "weight").contains(action))
-                || (args.length == 4 && List.of("givekey", "open").contains(action))) {
-            return filter(List.of("1", "5", "10", "64"), args[3]);
+                || (args.length == 4 && List.of("givekey", "open").contains(action))
+                || (args.length == 5 && action.equals("portable"))) {
+            return filter(List.of("1", "5", "10", "64"), args[args.length - 1]);
         }
         return List.of();
     }

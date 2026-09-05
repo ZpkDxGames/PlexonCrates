@@ -80,7 +80,11 @@ public final class OpeningService {
         }
         String reservation = UUID.randomUUID().toString();
         plugin.database().reservePortableIssue(issue.issueId(), reservation).whenComplete((reserved, error) -> {
-            if (!plugin.isEnabled()) return;
+            if (!plugin.isEnabled()) {
+                plugin.database().releasePortableIssue(issue.issueId(), reservation,
+                        "Plugin disabled while reserving portable issuance");
+                return;
+            }
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (error != null || reserved == null || reserved.isEmpty()) {
                     if (error != null) plugin.getLogger().log(Level.WARNING,
@@ -257,8 +261,17 @@ public final class OpeningService {
     }
 
     public void clear() {
-        for (UUID transaction : List.copyOf(pending.keySet())) {
-            plugin.database().updateJournal(transaction, "CANCELLED", "Plugin disabled before inventory mutation");
+        String reason = "Plugin disabled before inventory mutation";
+        for (var entry : List.copyOf(pending.entrySet())) {
+            PendingOpening opening = entry.getValue();
+            if (opening.portable() != null) {
+                plugin.database().releasePortableIssue(opening.portable().issueId(),
+                        opening.portable().reservationToken(), reason);
+            }
+            plugin.database().updateJournal(entry.getKey(), "CANCELLED", reason);
+        }
+        for (PortableContext context : List.copyOf(portableRequests.values())) {
+            plugin.database().releasePortableIssue(context.issueId(), context.reservationToken(), reason);
         }
         pending.clear();
         portableRequests.clear();

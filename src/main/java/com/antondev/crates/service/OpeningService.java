@@ -661,5 +661,6 @@ public final class OpeningService {
 
         @Override public ItemStack expectedItem() { return expectedItem.clone(); }
     }
+    private record KeyChoice(KeyService.KeyTransaction transaction, String keyId, int maximumOpenings) {}
     private record DeliveryResult(int overflowCount) {}
 }

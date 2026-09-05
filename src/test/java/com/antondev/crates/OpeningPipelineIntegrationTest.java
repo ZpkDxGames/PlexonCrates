@@ -308,8 +308,11 @@ class OpeningPipelineIntegrationTest {
                         && preview.action(slot).id().equals("select-reward")
                         && preview.action(slot).value().equals(rewardId))
                 .findFirst().orElseThrow();
-        player.simulateInventoryClick(player.getOpenInventory(),
-                org.bukkit.event.inventory.ClickType.LEFT, rewardSlot);
+        var click = new org.bukkit.event.inventory.InventoryClickEvent(player.getOpenInventory(),
+                org.bukkit.event.inventory.InventoryType.SlotType.CONTAINER, rewardSlot,
+                org.bukkit.event.inventory.ClickType.LEFT,
+                org.bukkit.event.inventory.InventoryAction.PICKUP_ALL);
+        plugin.menus().click(click);
         assertTrue(player.getOpenInventory().getTopInventory().getHolder()
                 instanceof com.antondev.crates.gui.MenuHolder confirmation
                 && confirmation.kind() == com.antondev.crates.gui.MenuHolder.Kind.SELECTIVE_CONFIRM

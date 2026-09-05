@@ -25,6 +25,7 @@ The unit and MockBukkit suites cover:
 - invalid-reload rollback without changing the active runtime snapshot;
 - crate definition export/import as a validated draft with ID/path safety;
 - Link Wand persistence, duplicate prevention, unlinking, and break/explosion/piston protection.
+- Claim Inbox idempotency, interrupted-claim review recovery, virtual-key and reroll ledger no-overdraft/idempotency behavior, durable milestone state, portable issuance state transitions, and deterministic advanced planners.
 
 Surefire reports are written to `target/surefire-reports`. The release workflow independently runs the same clean verification before producing any GitHub release.
 

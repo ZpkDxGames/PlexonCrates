@@ -35,6 +35,13 @@ All notable PlexonCrates changes are documented here.
 - Added frozen draft publication, stale base/lease/revision rejection, the cancellable `CrateDraftPublishEvent`, runtime revision API accessors, and preview revision checks.
 - Prevented cross-crate key replacement from bypassing draft leases and kept active keys undeletable until every replacement draft is published.
 
+### Advanced recovery and feature primitives
+
+- Added deterministic milestone progression with one-time/repeating thresholds, stable earned keys, and durable SQLite progress counters.
+- Added reroll offer state with exclusion/timeout semantics and audited, non-negative reroll-token ledger mutations.
+- Added bounded mass-opening planning, one-edge alternative-reward validation/resolution, and HMAC-signed portable-crate token encoding with revision policies.
+- Added player-facing `/crates milestones` and `/crates rerolls` views plus admin reroll grant/take/set commands.
+
 ### Documentation
 
 - Adopted the expanded 3.0 implementation specification, including the one-edition/unlimited-definition contract and the original PhoenixCrates-benchmarked GUI usability boundary.

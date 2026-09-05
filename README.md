@@ -23,6 +23,8 @@ This is an independent implementation inspired by the usability goals and featur
 - `INSTANT`, `ROULETTE`, `REVEAL`, and `SUMMARY` presentation modes plus per-reward titles, sounds, particles, messages, and broadcasts.
 - Protected Link Wand workflow for unlimited physical blocks, native TextDisplay holograms, centralized particles, and safe unlinking.
 - Journal-first openings with immediate revalidation, per-player race locks, exact key accounting, immutable outcomes, SQLite history, and manual crash-review diagnostics.
+- Durable Claim Inbox entries for exact overflow/recovery delivery, typed virtual-key claims, and atomic reroll-token/virtual-key ledgers with idempotent mutations.
+- Deterministic milestone progression, reroll decision planning, mass-opening bounds, alternative-reward validation, and HMAC-signed portable-crate metadata primitives.
 - Atomic configuration reloads, consistent backups, administrative audit records, and reversible 1.0 migration.
 - Optional PlaceholderAPI and Vault integrations; no hard plugin dependency.
 
@@ -38,8 +40,8 @@ PlexonKeys, Vault, and PlaceholderAPI are soft dependencies. Bundled exact key f
 
 ## Fresh install
 
-1. Download `PlexonCrates-2.0.0.jar` and its checksum from [GitHub Releases](https://github.com/ZpkDxGames/PlexonCrates/releases/latest).
-2. Verify it with `sha256sum -c PlexonCrates-2.0.0.jar.sha256`.
+1. Download `PlexonCrates-3.0.0.jar` and its checksum from [GitHub Releases](https://github.com/ZpkDxGames/PlexonCrates/releases/latest).
+2. Verify it with `sha256sum -c PlexonCrates-3.0.0.jar.sha256`.
 3. Put the JAR in the server's `plugins` folder, preferably beside PlexonKeys.
 4. Start Paper once and review `plugins/PlexonCrates/config.yml`.
 5. Ensure `settings.worlds` contains the exact worlds where crates will be used, or set it to `[]` to allow every non-excluded world.
@@ -74,6 +76,10 @@ The key registry provides create, duplicate, import, provider sync, test-give, r
 | `/crates preview <crate>` | Preview the rewards this player can currently win and their recalculated chances |
 | `/crates open <crate> [amount]` | Open with exact physical keys from inventory |
 | `/crates history [page]` | Read recent persisted opening outcomes |
+| `/crates claim [page|id]` | Open and deliver durable exact-item claims |
+| `/crates keys` | View physical and optional virtual-key balances |
+| `/crates milestones <crate>` | View durable opening progress for a crate |
+| `/crates rerolls` | View the audited reroll-token balance |
 | `/crates help` | Show the player command summary |
 
 At a linked block, left-click previews, right-click opens one, and sneak-right-click requests a bounded bulk opening. Offhand keys are ignored by default. A bulk key bypass is clamped to one opening to prevent accidental free mass openings.
@@ -143,12 +149,12 @@ Each crate can require its own permission. Each reward can independently require
 | `menus.yml` | Configurable inventory layouts, slots, icons, names, and lore |
 | `messages.yml` | MiniMessage feedback |
 | `crates/*.yml` | Compatibility/import-export mirrors for editable crate definitions |
-| `data/plexoncrates.db` | Canonical published definitions, normalized rewards/actions/exact items/keys, drafts, links, statistics, limits, pity, history, journals, migrations, and audit data |
+| `data/plexoncrates.db` | Canonical published definitions, normalized rewards/actions/exact items/keys, drafts, links, statistics, limits, pity, milestones, ledgers, claims, portable issuance, history, journals, migrations, and audit data |
 | `imports/` / `exports/` | Deliberate crate-definition transfer boundary |
 | `backups/` | Automatic migration and manual consistent backups |
 | `logs/openings-YYYY-MM-DD.log` | Optional human-readable opening log |
 
-SQLite writes use one bounded worker. World interaction, GUI clicks, animations, and reward selection do not perform synchronous database I/O.
+SQLite is the canonical mutable definition and recovery store; YAML remains a deliberate import/export mirror. SQLite writes use one bounded worker. World interaction, GUI clicks, animations, and reward selection do not perform synchronous database I/O.
 
 ## Crate and reward definitions
 

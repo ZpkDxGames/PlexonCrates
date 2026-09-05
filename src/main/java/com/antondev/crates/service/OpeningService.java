@@ -50,12 +50,66 @@ public final class OpeningService {
     private final Set<UUID> locks = new HashSet<>();
     private final Map<UUID, PendingOpening> pending = new HashMap<>();
     private final Map<UUID, Map<String, Long>> cooldowns = new HashMap<>();
+    /** Reserved portable requests waiting to be attached to the journal transaction. */
+    private final Map<UUID, PortableContext> portableRequests = new HashMap<>();
 
     public OpeningService(PlexonCrates plugin, OpeningLog log) {
         this.plugin = plugin;
         this.log = log;
         this.economy = new VaultEconomyBridge(plugin);
         this.placeholders = new PlaceholderBridge(plugin);
+    }
+
+    /**
+     * Starts one portable-crate opening after its issuance has been verified.
+     * The issuance is reserved asynchronously before the ordinary opening
+     * planner is entered; the item is consumed only after all normal
+     * preconditions and the journal preparation have succeeded.
+     */
+    public boolean openPortable(Player player, Crate crate, DatabaseService.PortableIssue issue,
+                                ItemStack expectedItem) {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("Crate openings must begin on the primary server thread");
+        }
+        if (issue == null || expectedItem == null
+                || plugin.portables().decode(expectedItem).filter(token ->
+                        token.payload().issueId().equals(issue.issueId())
+                                && token.payload().crateId().equals(crate.id())).isEmpty()) {
+            plugin.messages().send(player, "invalid-crate");
+            return false;
+        }
+        String reservation = UUID.randomUUID().toString();
+        plugin.database().reservePortableIssue(issue.issueId(), reservation).whenComplete((reserved, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (error != null || reserved == null || reserved.isEmpty()) {
+                    if (error != null) plugin.getLogger().log(Level.WARNING,
+                            "Portable issuance reservation failed for " + issue.issueId(), error);
+                    plugin.messages().send(player, "opening-state-changed");
+                    return;
+                }
+                if (!player.isOnline()) {
+                    plugin.database().releasePortableIssue(issue.issueId(), reservation,
+                            "Player disconnected before portable opening");
+                    return;
+                }
+                PortableContext context = new PortableContext(issue.issueId(), reservation, expectedItem);
+                portableRequests.put(player.getUniqueId(), context);
+                boolean accepted = false;
+                try {
+                    accepted = open(player, crate, 1, OpenSource.PORTABLE, null);
+                } catch (RuntimeException failure) {
+                    plugin.getLogger().log(Level.WARNING,
+                            "Portable opening could not enter the opening planner", failure);
+                }
+                if (!accepted) {
+                    portableRequests.remove(player.getUniqueId(), context);
+                    plugin.database().releasePortableIssue(issue.issueId(), reservation,
+                            "Portable opening preconditions were rejected");
+                }
+            });
+        });
+        return true;
     }
 
     /** Compatibility entry point retained from 1.0. */
@@ -73,6 +127,10 @@ public final class OpeningService {
         }
         try {
             boolean forced = source == OpenSource.ADMIN_FORCE;
+            boolean portable = source == OpenSource.PORTABLE;
+            if (portable && !portableRequests.containsKey(player.getUniqueId())) {
+                return reject(player, "opening-state-changed");
+            }
             if (!forced && !player.hasPermission("plexoncrates.open") && !player.hasPermission("plexoncrates.use")) {
                 return reject(player, "no-permission");
             }
@@ -92,10 +150,12 @@ public final class OpeningService {
                 }
             }
 
-            boolean bypassingKey = !forced && crate.keyCost() > 0 && player.hasPermission("plexoncrates.bypass.key");
+            boolean bypassingKey = portable || (!forced && crate.keyCost() > 0 && player.hasPermission("plexoncrates.bypass.key"));
             if (bypassingKey && amount > 1) amount = 1;
             boolean consumeKey = !forced && !bypassingKey && crate.keyCost() > 0;
-            KeyChoice keyChoice = chooseKey(player, crate, amount, consumeKey);
+            KeyChoice keyChoice = portable
+                    ? new KeyChoice(null, "PORTABLE", amount)
+                    : chooseKey(player, crate, amount, consumeKey);
             if (consumeKey && (keyChoice.transaction() == null || keyChoice.maximumOpenings() < 1)) {
                 plugin.messages().send(player, "no-key", Text.component("key", keyName(crate)));
                 return rejectSilently(player);
@@ -135,7 +195,12 @@ public final class OpeningService {
                 return rejectSilently(player);
             }
 
-            PendingOpening opening = new PendingOpening(plan, crate, selected, keyChoice.transaction(), consumeKey);
+            PortableContext portableContext = portable ? portableRequests.remove(player.getUniqueId()) : null;
+            if (portable && portableContext == null) {
+                return reject(player, "opening-state-changed");
+            }
+            PendingOpening opening = new PendingOpening(plan, crate, selected, keyChoice.transaction(), consumeKey,
+                    portableContext);
             pending.put(transactionId, opening);
             DatabaseService.JournalRecord journal = new DatabaseService.JournalRecord(transactionId,
                     player.getUniqueId(), player.getName(), crate.id(), keyChoice.keyId(), keyAmount,
@@ -196,6 +261,7 @@ public final class OpeningService {
             plugin.database().updateJournal(transaction, "CANCELLED", "Plugin disabled before inventory mutation");
         }
         pending.clear();
+        portableRequests.clear();
         locks.clear();
         cooldowns.clear();
     }
@@ -205,6 +271,7 @@ public final class OpeningService {
         if (opening == null) return;
         OpeningPlan plan = opening.plan();
         Player player = Bukkit.getPlayer(plan.playerId());
+        boolean deferred = false;
         try {
             if (player == null || !player.isOnline()) {
                 abortPrepared(transactionId, "Player disconnected before key consumption", false);
@@ -253,6 +320,11 @@ public final class OpeningService {
                 plugin.messages().send(player, "no-key", Text.component("key", keyName(current)));
                 return;
             }
+            if (opening.portable() != null) {
+                deferred = true;
+                beginPortableCommit(transactionId, opening, player, current, eligibility, bypassLimits);
+                return;
+            }
             if (opening.consumeKey()) Bukkit.getPluginManager().callEvent(new CrateKeyConsumeEvent(player, plan));
             plugin.database().updateJournal(transactionId, "CONSUMED", "");
 
@@ -274,9 +346,66 @@ public final class OpeningService {
             plugin.database().updateJournal(transactionId, "FAILED", concise(error));
             if (player != null) plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
         } finally {
-            pending.remove(transactionId);
-            locks.remove(plan.playerId());
+            if (!deferred) {
+                pending.remove(transactionId);
+                locks.remove(plan.playerId());
+            }
         }
+    }
+
+    private void beginPortableCommit(UUID transactionId, PendingOpening opening, Player player, Crate current,
+                                     Predicate<CrateReward> eligibility, boolean bypassLimits) {
+        PortableContext context = opening.portable();
+        if (!player.isOnline() || !player.getInventory().getItemInMainHand().isSimilar(context.expectedItem())) {
+            abortPrepared(transactionId, "Portable item changed before consumption", false);
+            plugin.messages().send(player, "opening-state-changed");
+            return;
+        }
+        plugin.database().consumePortableIssue(context.issueId(), context.reservationToken()).whenComplete((consumed, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (error != null || consumed == null || consumed.isEmpty()) {
+                    abortPrepared(transactionId, "Portable issuance could not be consumed", error != null);
+                    plugin.messages().send(player, "opening-state-changed");
+                    return;
+                }
+                if (!PortableCrateService.consumeOne(player, context.expectedItem())) {
+                    plugin.database().updateJournal(transactionId, "FAILED",
+                            "Portable issuance was consumed but the source item changed before removal");
+                    plugin.getLogger().severe("Portable issuance " + context.issueId()
+                            + " was consumed but its item could not be removed; manual review is required.");
+                    pending.remove(transactionId);
+                    locks.remove(player.getUniqueId());
+                    return;
+                }
+                try {
+                    OpeningPlan plan = opening.plan();
+                    plugin.database().updateJournal(transactionId, "CONSUMED", "");
+                    DeliveryResult delivered = deliver(player, current, opening.selected(), plan, true);
+                    DatabaseService.RewardStateCommit rewardState = plugin.rewardStates().apply(
+                            player.getUniqueId(), current, opening.selected(), plan.source(), eligibility,
+                            bypassLimits, System.currentTimeMillis());
+                    plugin.statistics().record(player.getUniqueId(), current.id(), plan.openingCount());
+                    setCooldown(player, current);
+                    DatabaseService.OpeningRecord record = new DatabaseService.OpeningRecord(transactionId,
+                            player.getUniqueId(), player.getName(), current.id(), plan.keyId(), plan.keyAmount(),
+                            plan.openingCount(), plan.source().name(), String.join(",", plan.rewardIds()),
+                            locationText(plan.location()), delivered.overflowCount(), Instant.now());
+                    plugin.database().completeOpening(record, rewardState);
+                    Bukkit.getPluginManager().callEvent(new CrateOpenEvent(player, plan, delivered.overflowCount()));
+                    if (delivered.overflowCount() > 0) notifyOverflow(player);
+                    showResult(player, current, opening.selected(), plan);
+                } catch (RuntimeException failure) {
+                    plugin.getLogger().log(Level.SEVERE,
+                            "Portable opening " + transactionId + " failed after consumption", failure);
+                    plugin.database().updateJournal(transactionId, "FAILED", concise(failure));
+                    plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+                } finally {
+                    pending.remove(transactionId);
+                    locks.remove(player.getUniqueId());
+                }
+            });
+        });
     }
 
     private DeliveryResult deliver(Player player, Crate crate, List<CrateReward> selected, OpeningPlan plan,
@@ -463,6 +592,10 @@ public final class OpeningService {
         PendingOpening opening = pending.remove(transactionId);
         if (opening == null) return;
         locks.remove(opening.plan().playerId());
+        if (opening.portable() != null) {
+            plugin.database().releasePortableIssue(opening.portable().issueId(),
+                    opening.portable().reservationToken(), reason);
+        }
         plugin.database().updateJournal(transactionId, "CANCELLED", reason);
         Player player = Bukkit.getPlayer(opening.plan().playerId());
         if (player != null && databaseError) plugin.messages().send(player, "database-error");
@@ -512,11 +645,21 @@ public final class OpeningService {
     }
 
     private record PendingOpening(OpeningPlan plan, Crate crate, List<CrateReward> selected,
-                                  KeyService.KeyTransaction keyTransaction, boolean consumeKey) {
+                                  KeyService.KeyTransaction keyTransaction, boolean consumeKey,
+                                  PortableContext portable) {
         private PendingOpening {
             selected = List.copyOf(selected);
         }
     }
-    private record KeyChoice(KeyService.KeyTransaction transaction, String keyId, int maximumOpenings) {}
+
+    private record PortableContext(UUID issueId, String reservationToken, ItemStack expectedItem) {
+        private PortableContext {
+            issueId = java.util.Objects.requireNonNull(issueId, "issueId");
+            reservationToken = java.util.Objects.requireNonNull(reservationToken, "reservationToken");
+            expectedItem = java.util.Objects.requireNonNull(expectedItem, "expectedItem").clone();
+        }
+
+        @Override public ItemStack expectedItem() { return expectedItem.clone(); }
+    }
     private record DeliveryResult(int overflowCount) {}
 }

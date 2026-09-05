@@ -66,7 +66,8 @@ public final class CrateListener implements Listener {
                     plugin.messages().send(event.getPlayer(), "no-permission");
                     return;
                 }
-                if (crate.paymentPolicy() == com.antondev.crates.domain.key.KeyPaymentPolicy.PLAYER_CHOICE) {
+                if (crate.paymentPolicy() == com.antondev.crates.domain.key.KeyPaymentPolicy.PLAYER_CHOICE
+                        || crate.openingMode() == com.antondev.crates.domain.opening.OpeningMode.SELECTIVE) {
                     plugin.menus().openPreview(event.getPlayer(), crate, 0, false);
                     return;
                 }

@@ -99,6 +99,36 @@ preview:
     name: <gray>Next page</gray>
     lore: []
 
+selective-confirm:
+  title: <crate> <dark_gray>•</dark_gray> <gray>Confirm reward</gray>
+  size: 27
+  guide:
+    slot: 4
+    material: BOOK
+    name: <aqua>Selective opening</aqua>
+    lore:
+    - <gray>The chosen reward is revalidated before payment.</gray>
+    - <gray>Closing this screen consumes nothing.</gray>
+  confirm:
+    slot: 11
+    material: LIME_CONCRETE
+    name: <green><bold>Confirm choice</bold></green>
+    lore:
+    - <gray>Amount:</gray> <white><amount></white>
+    - <gray>Exact key cost:</gray> <white><cost></white>
+    - <green>Click to confirm.</green>
+  reward:
+    slot: 13
+    material: CHEST
+    name: <yellow>Chosen reward</yellow>
+    lore: []
+  cancel:
+    slot: 15
+    material: RED_CONCRETE
+    name: <red>Back to choices</red>
+    lore:
+    - <gray>No key or state is consumed.</gray>
+
 opening:
   title: <crate> <dark_gray>•</dark_gray> <gray>Opening…</gray>
   size: 27
@@ -199,7 +229,7 @@ editor:
     slot: 32
     material: CLOCK
     name: <aqua>Opening behavior</aqua>
-    lore: ['<gray>Animation:</gray> <white><animation></white>', '<gray>Cooldown:</gray> <white><cooldown>s</white>', '<gray>Bulk:</gray> <white><bulk></white> <dark_gray>(max <bulk_max>)</dark_gray>', <dark_gray>Left cycle • Right edit • Shift-left toggle</dark_gray>]
+    lore: ['<gray>Mode:</gray> <white><opening_mode></white>', '<gray>Animation:</gray> <white><animation></white>', '<gray>Cooldown:</gray> <white><cooldown>s</white>', '<gray>Bulk:</gray> <white><bulk></white> <dark_gray>(max <bulk_max>)</dark_gray>', <dark_gray>Left animation • Right limits</dark_gray>, <dark_gray>Shift-left bulk • Shift-right mode</dark_gray>]
   display:
     slot: 34
     material: GLOW_INK_SAC

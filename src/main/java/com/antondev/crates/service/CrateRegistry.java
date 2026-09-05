@@ -510,6 +510,17 @@ public final class CrateRegistry {
         });
     }
 
+    public void setOpeningMode(String crateId, OpeningMode mode, String editor) throws Exception {
+        java.util.Objects.requireNonNull(mode, "mode");
+        mutate(crateId, yaml -> {
+            if (mode == OpeningMode.SELECTIVE && pityEnabled(yaml)) {
+                throw new IllegalArgumentException("Disable pity before selecting the SELECTIVE opening mode");
+            }
+            yaml.set("opening.mode", mode.name());
+            touch(yaml, editor);
+        });
+    }
+
     public void setMilestone(String crateId, String rawMilestoneId, int threshold,
                              MilestoneService.RepeatPolicy repeatPolicy, int cycleLength,
                              MilestoneService.DeliveryPolicy deliveryPolicy, String rawRewardId,

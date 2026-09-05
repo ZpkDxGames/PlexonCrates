@@ -95,6 +95,22 @@ public final class RewardStateService {
         return new Plan(selected, triggered);
     }
 
+    /**
+     * Validates one deliberate selective outcome against the same sequential state used by random openings.
+     * The configured chance is intentionally ignored, while every eligibility, limit, cooldown, and pity guard
+     * remains part of the frozen plan. An all-or-nothing result prevents a selective bulk request from silently
+     * shrinking after the player confirms its exact cost.
+     */
+    public Plan planSelected(UUID playerId, Crate crate, String rewardId, int requested, OpenSource source,
+                             Predicate<CrateReward> baseEligibility, boolean bypassLimits, long now) {
+        if (requested < 1 || rewardId == null) return new Plan(List.of(), false);
+        CrateReward reward = crate.rewards().get(rewardId);
+        if (reward == null) return new Plan(List.of(), false);
+        List<CrateReward> selected = java.util.Collections.nCopies(requested, reward);
+        return evaluate(playerId, crate, selected, source, baseEligibility, bypassLimits, now).isPresent()
+                ? new Plan(selected, false) : new Plan(List.of(), false);
+    }
+
     /** Revalidates a frozen selection against state changed by another completed opening. */
     public boolean canApply(UUID playerId, Crate crate, List<CrateReward> selected, OpenSource source,
                             Predicate<CrateReward> baseEligibility, boolean bypassLimits, long now) {

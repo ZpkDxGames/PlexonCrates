@@ -142,6 +142,26 @@ class RewardStateServiceTest {
         assertFalse(state.canApply(player, crate, stale, OpenSource.GUI, ignored -> true, false, NOW));
     }
 
+    @Test
+    void selectivePlanIgnoresStoredChanceButKeepsSequentialLimitsAllOrNothing() {
+        UUID player = UUID.randomUUID();
+        CrateReward selected = reward("selected", 0, RewardRarity.EPIC,
+                new RewardLimits(2, 0, 0, 0, 0, 0, 0));
+        Crate crate = crate(PityPolicy.disabled(), selected);
+        RewardStateService state = service(0.75);
+
+        RewardStateService.Plan accepted = state.planSelected(player, crate, "selected", 2, OpenSource.GUI,
+                ignored -> true, false, NOW);
+        RewardStateService.Plan rejected = state.planSelected(player, crate, "selected", 3, OpenSource.GUI,
+                ignored -> true, false, NOW);
+
+        assertEquals(List.of("selected", "selected"),
+                accepted.rewards().stream().map(CrateReward::id).toList());
+        assertTrue(rejected.rewards().isEmpty());
+        assertTrue(state.planSelected(player, crate, "missing", 1, OpenSource.GUI,
+                ignored -> true, false, NOW).rewards().isEmpty());
+    }
+
     private static RewardStateService service(double roll) {
         return new RewardStateService(new DatabaseService.RewardStateSnapshot(List.of(), List.of(), List.of()),
                 () -> roll);

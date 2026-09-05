@@ -110,7 +110,8 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
             }
             int amount = args.length >= 3 ? amount(player, args[2]) : 1;
             if (amount > 0) {
-                if (crate.paymentPolicy() == com.antondev.crates.domain.key.KeyPaymentPolicy.PLAYER_CHOICE) {
+                if (crate.paymentPolicy() == com.antondev.crates.domain.key.KeyPaymentPolicy.PLAYER_CHOICE
+                        || crate.openingMode() == com.antondev.crates.domain.opening.OpeningMode.SELECTIVE) {
                     plugin.menus().openPreview(player, crate, 0, false);
                 } else {
                     plugin.openings().open(player, crate, amount, OpenSource.COMMAND, null);

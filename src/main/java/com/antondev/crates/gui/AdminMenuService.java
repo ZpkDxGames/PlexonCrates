@@ -9,6 +9,7 @@ import com.antondev.crates.domain.crate.CrateState;
 import com.antondev.crates.domain.crate.AnimationType;
 import com.antondev.crates.domain.key.ExternalKeyDescriptor;
 import com.antondev.crates.domain.key.KeyDefinition;
+import com.antondev.crates.domain.opening.OpeningMode;
 import com.antondev.crates.domain.reward.RewardRarity;
 import com.antondev.crates.domain.reward.RewardLimits;
 import com.antondev.crates.domain.reward.RewardPresentation;
@@ -110,7 +111,8 @@ public final class AdminMenuService {
         inventory.setItem(4, icon);
         holder.bind(4, "capture-icon", crate.id());
         var tags = new net.kyori.adventure.text.minimessage.tag.resolver.TagResolver[]{
-                Text.value("order", crate.displayOrder()), Text.value("animation", crate.animation()),
+            Text.value("order", crate.displayOrder()), Text.value("animation", crate.animation()),
+                Text.value("opening_mode", crate.openingMode()),
                 Text.value("cooldown", crate.cooldownSeconds()), Text.value("bulk", crate.bulkEnabled()),
                 Text.value("bulk_max", crate.bulkMaximum()),
                 Text.value("permission", crate.permission().isBlank() ? "none" : crate.permission())};
@@ -569,6 +571,18 @@ public final class AdminMenuService {
     private void editOpening(Player player, String crateId, InventoryClickEvent event) throws Exception {
         if (!requireWritableDraft(player, crateId)) return;
         Crate crate = plugin.crates().find(crateId).orElseThrow();
+        if (event.isShiftClick() && event.isRightClick()) {
+            OpeningMode next = crate.openingMode() == OpeningMode.RANDOM
+                    ? OpeningMode.SELECTIVE : OpeningMode.RANDOM;
+            if (next == OpeningMode.SELECTIVE && !plugin.settings().selectiveOpeningEnabled()) {
+                plugin.messages().send(player, "disabled");
+                return;
+            }
+            plugin.crates().setOpeningMode(crateId, next, player.getName());
+            saveDraftRevision(player, crateId, "OPENING", "Changed opening mode to " + next);
+            refreshCrate(player, crateId);
+            return;
+        }
         if (event.isShiftClick() && event.isLeftClick()) {
             plugin.crates().setOpening(crateId, crate.cooldownSeconds(), !crate.bulkEnabled(), crate.bulkMaximum(),
                     crate.animation(), player.getName());

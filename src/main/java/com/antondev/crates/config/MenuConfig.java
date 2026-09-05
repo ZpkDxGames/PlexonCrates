@@ -21,8 +21,10 @@ public final class MenuConfig {
         installRewardPoolFallback(yaml);
         installDraftFallbacks(yaml);
         installClaimFallbacks(yaml);
+        installSelectiveFallbacks(yaml);
         validateMenu("browser", List.of("info", "close"));
         validateMenu("preview", List.of("open", "previous", "back", "next"));
+        validateMenu("selective-confirm", List.of("guide", "confirm", "reward", "cancel"));
         validateMenu("opening", List.of("marker"));
         validateMenu("admin", List.of("crates", "keys", "locations", "rewards", "statistics", "system", "close"));
         validateMenu("editor", List.of("preview", "rename", "key", "rewards", "description", "order",
@@ -145,6 +147,22 @@ public final class MenuConfig {
                     List.of("<gray>Deliver exact overflow and recovery items.</gray>",
                             "<dark_gray>Pending claims: <count></dark_gray>"));
         }
+    }
+
+    private static void installSelectiveFallbacks(YamlConfiguration yaml) {
+        if (yaml.contains("selective-confirm")) return;
+        yaml.set("selective-confirm.title", "<crate> <dark_gray>•</dark_gray> <gray>Confirm reward</gray>");
+        yaml.set("selective-confirm.size", 27);
+        installItem(yaml, "selective-confirm.guide", 4, "BOOK", "<aqua>Selective opening</aqua>",
+                List.of("<gray>The chosen reward is revalidated before payment.</gray>",
+                        "<gray>Closing this screen consumes nothing.</gray>"));
+        installItem(yaml, "selective-confirm.confirm", 11, "LIME_CONCRETE", "<green><bold>Confirm choice</bold></green>",
+                List.of("<gray>Amount:</gray> <white><amount></white>",
+                        "<gray>Exact key cost:</gray> <white><cost></white>",
+                        "<green>Click to confirm.</green>"));
+        installItem(yaml, "selective-confirm.reward", 13, "CHEST", "<yellow>Chosen reward</yellow>", List.of());
+        installItem(yaml, "selective-confirm.cancel", 15, "RED_CONCRETE", "<red>Back to choices</red>",
+                List.of("<gray>No key or state is consumed.</gray>"));
     }
 
     private static void installDraftFallbacks(YamlConfiguration yaml) {

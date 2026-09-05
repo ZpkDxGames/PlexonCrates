@@ -4,6 +4,9 @@ import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.config.MenuConfig;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.domain.key.KeyPaymentPolicy;
+import com.antondev.crates.domain.opening.OpenSource;
+import com.antondev.crates.domain.opening.OpeningMode;
 import com.antondev.crates.item.ItemSnapshotCodec;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
@@ -144,6 +147,8 @@ public final class MenuService implements Listener {
         int pages = Math.max(1, (rewards.size() + rewardSlots.size() - 1) / rewardSlots.size());
         int page = Math.max(0, Math.min(requestedPage, pages - 1));
         boolean portable = portableIssueId != null;
+        boolean selective = !adminOrigin && crate.openingMode() == OpeningMode.SELECTIVE;
+        boolean selectable = selective && plugin.settings().selectiveOpeningEnabled();
         MenuHolder holder = new MenuHolder(
                 portable ? MenuHolder.Kind.PORTABLE_PREVIEW : MenuHolder.Kind.PREVIEW,
                 crate.id(), portable ? portableIssueId.toString() : "", page, adminOrigin,
@@ -171,6 +176,14 @@ public final class MenuService implements Listener {
                         Text.value("weight", format(reward.baseChancePercent()))));
             }
             if (!canWin) lore.add(Text.parse("<red>This reward is currently unavailable to you.</red>"));
+            if (selective) {
+                lore.add(Text.parse("<gray>Base chance is retained but ignored in selective mode.</gray>"));
+                if (!selectable) lore.add(Text.parse("<red>Selective opening is disabled by the server.</red>"));
+                else if (canWin) {
+                    lore.add(Text.parse("<green>Click to choose this exact reward.</green>"));
+                    holder.bind(rewardSlots.get(slotIndex), "select-reward", reward.id());
+                }
+            }
             if (crate.pity().enabled() && (crate.pity().rewardIds().contains(reward.id())
                     || crate.pity().rarity() == reward.rarity())) {
                 lore.add(Text.parse("<light_purple>Guaranteed-pool reward</light_purple>"));
@@ -192,6 +205,17 @@ public final class MenuService implements Listener {
         } else {
             appendPhysicalPaymentSummary(open, player, crate);
         }
+        if (selective) {
+            open.setType(org.bukkit.Material.COMPASS);
+            open.editMeta(meta -> {
+                meta.displayName(Text.parse("<yellow><bold>Choose a reward above</bold></yellow>"));
+                meta.lore(List.of(Component.empty(),
+                        selectable
+                                ? Text.parse("<gray>Select an eligible reward, then confirm its exact cost.</gray>")
+                                : Text.parse("<red>Selective opening is disabled by the server.</red>"),
+                        Text.parse("<gray>Browsing and closing consume nothing.</gray>")));
+            });
+        }
         inventory.setItem(menus.slot("preview.open"), open);
         if (crate.pity().enabled()) {
             int remaining = plugin.rewardStates().pityRemaining(player.getUniqueId(), crate);
@@ -203,9 +227,67 @@ public final class MenuService implements Listener {
         if (page > 0) inventory.setItem(menus.slot("preview.previous"), menus.item("preview.previous"));
         if (page + 1 < pages) inventory.setItem(menus.slot("preview.next"), menus.item("preview.next"));
         open(player, inventory);
-        if (!portable && plugin.settings().virtualKeyWalletEnabled()
+        if (!portable && !selective && plugin.settings().virtualKeyWalletEnabled()
                 && crate.paymentPolicy() != com.antondev.crates.domain.key.KeyPaymentPolicy.PHYSICAL_ONLY) {
             appendVirtualPaymentSummary(player, crate, holder, inventory);
+        }
+    }
+
+    private void openSelectiveConfirmation(Player player, Crate crate, CrateReward reward,
+                                           int returnPage, UUID portableIssueId) {
+        if (!plugin.settings().selectiveOpeningEnabled() || crate.openingMode() != OpeningMode.SELECTIVE) {
+            plugin.messages().send(player, "disabled");
+            return;
+        }
+        boolean bypassLimits = player.hasPermission("plexoncrates.bypass.limit");
+        if (!previewEligible(player, crate, reward, System.currentTimeMillis(), bypassLimits)) {
+            plugin.messages().send(player, "no-eligible-rewards");
+            return;
+        }
+        MenuConfig menus = plugin.menusConfig();
+        MenuHolder holder = new MenuHolder(MenuHolder.Kind.SELECTIVE_CONFIRM, crate.id(), reward.id(),
+                returnPage, false, plugin.runtime().crateRevision(crate.id()));
+        Inventory inventory = create(holder, menus.size("selective-confirm"),
+                menus.title("selective-confirm", Text.component("crate", crate.displayName())));
+        fill(inventory);
+        inventory.setItem(menus.slot("selective-confirm.guide"), menus.item("selective-confirm.guide"));
+
+        ItemStack display = reward.displayCopy();
+        var delivery = new ArrayList<Component>();
+        delivery.add(Component.empty());
+        delivery.add(Text.parse("<gray>Reward ID</gray> <dark_gray>»</dark_gray> <white>" + reward.id() + "</white>"));
+        delivery.add(Text.parse("<gray>Amount</gray> <dark_gray>»</dark_gray> <white>1 opening</white>"));
+        int itemCount = reward.itemCopies().stream().mapToInt(ItemStack::getAmount).sum();
+        delivery.add(Text.parse("<gray>Items</gray> <dark_gray>»</dark_gray> <white>" + itemCount
+                + " across " + reward.itemCopies().size() + " exact stack(s)</white>"));
+        if (!reward.commands().isEmpty()) delivery.add(Text.parse("<gray>Commands</gray> <dark_gray>»</dark_gray> <white>"
+                + reward.commands().size() + " configured action(s)</white>"));
+        if (reward.experiencePoints() > 0) delivery.add(Text.parse("<gray>Experience points</gray> <dark_gray>»</dark_gray> <white>"
+                + reward.experiencePoints() + "</white>"));
+        if (reward.experienceLevels() > 0) delivery.add(Text.parse("<gray>Experience levels</gray> <dark_gray>»</dark_gray> <white>"
+                + reward.experienceLevels() + "</white>"));
+        if (reward.money() > 0) delivery.add(Text.parse("<gray>Money</gray> <dark_gray>»</dark_gray> <white>"
+                + format(reward.money()) + "</white>"));
+        String restriction = reward.requiredPermission().isBlank() ? "none" : reward.requiredPermission();
+        delivery.add(Text.parse("<gray>Required permission</gray> <dark_gray>»</dark_gray> <white>" + restriction + "</white>"));
+        delivery.add(Text.parse("<green>Eligible now; eligibility is checked again on confirm.</green>"));
+        appendLore(display, delivery);
+        inventory.setItem(menus.slot("selective-confirm.reward"), display);
+
+        int cost = portableIssueId == null ? crate.keyCost() : 1;
+        ItemStack confirm = menus.item("selective-confirm.confirm", Text.value("amount", 1), Text.value("cost", cost));
+        if (portableIssueId == null) appendPhysicalPaymentSummary(confirm, player, crate);
+        else appendLore(confirm, List.of(Component.empty(),
+                Text.parse("<gray>Payment source</gray> <dark_gray>»</dark_gray> <white>1 portable crate item</white>"),
+                Text.parse("<gray>No physical key is required.</gray>")));
+        int confirmSlot = menus.slot("selective-confirm.confirm");
+        inventory.setItem(confirmSlot, confirm);
+        holder.bind(confirmSlot, "confirm-selective", portableIssueId == null ? "" : portableIssueId.toString());
+        inventory.setItem(menus.slot("selective-confirm.cancel"), menus.item("selective-confirm.cancel"));
+        open(player, inventory);
+        if (portableIssueId == null && plugin.settings().virtualKeyWalletEnabled()
+                && crate.paymentPolicy() != KeyPaymentPolicy.PHYSICAL_ONLY) {
+            appendVirtualPaymentSummary(player, crate, holder, inventory, confirmSlot);
         }
     }
 
@@ -401,11 +483,18 @@ public final class MenuService implements Listener {
                     openPreview(player, crate, 0, false);
                     return;
                 }
+                MenuHolder.Action choice = holder.action(slot);
+                if (choice != null && choice.id().equals("select-reward")) {
+                    CrateReward reward = crate.rewards().get(choice.value());
+                    if (reward != null) openSelectiveConfirmation(player, crate, reward, holder.page(), null);
+                    return;
+                }
                 if (slot == menus.slot("preview.open")) {
+                    if (crate.openingMode() == OpeningMode.SELECTIVE) return;
                     KeyPaymentPlanner.Preference preference = event.isRightClick()
                             ? KeyPaymentPlanner.Preference.VIRTUAL : KeyPaymentPlanner.Preference.PHYSICAL;
                     plugin.openings().open(player, crate, 1,
-                            com.antondev.crates.domain.opening.OpenSource.GUI, null, preference);
+                            OpenSource.GUI, null, preference);
                 }
                 else if (slot == menus.slot("preview.back")) {
                     if (holder.adminOrigin()) openEditor(player, crate); else openBrowser(player);
@@ -413,6 +502,7 @@ public final class MenuService implements Listener {
                 else if (slot == menus.slot("preview.next")) openPreview(player, crate, holder.page() + 1, holder.adminOrigin());
             }
             case PORTABLE_PREVIEW -> portablePreviewClick(player, holder, slot);
+            case SELECTIVE_CONFIRM -> selectiveConfirmClick(player, holder, slot, event.isRightClick());
             case ADMIN -> adminClick(player, slot);
             case EDITOR -> editorClick(player, holder.crateId(), slot);
             case CONFIRM_DELETE -> confirmClick(player, holder, slot);
@@ -440,6 +530,12 @@ public final class MenuService implements Listener {
             plugin.messages().send(player, "opening-state-changed");
             return;
         }
+        MenuHolder.Action choice = holder.action(slot);
+        if (choice != null && choice.id().equals("select-reward")) {
+            CrateReward reward = crate.rewards().get(choice.value());
+            if (reward != null) openSelectiveConfirmation(player, crate, reward, holder.page(), issueId);
+            return;
+        }
         if (slot == menus.slot("preview.back")) {
             player.closeInventory();
             return;
@@ -453,6 +549,7 @@ public final class MenuService implements Listener {
             return;
         }
         if (slot != menus.slot("preview.open")) return;
+        if (crate.openingMode() == OpeningMode.SELECTIVE) return;
 
         ItemStack expected = player.getInventory().getItemInMainHand().clone();
         player.closeInventory();
@@ -490,6 +587,80 @@ public final class MenuService implements Listener {
                     return;
                 }
                 plugin.openings().openPortable(player, active, issue, expected);
+            });
+        });
+    }
+
+    private void selectiveConfirmClick(Player player, MenuHolder holder, int slot, boolean rightClick) {
+        MenuConfig menus = plugin.menusConfig();
+        int confirmSlot = menus.slot("selective-confirm.confirm");
+        MenuHolder.Action confirmation = holder.action(confirmSlot);
+        UUID portableIssueId = null;
+        if (confirmation != null && !confirmation.value().isBlank()) {
+            try {
+                portableIssueId = UUID.fromString(confirmation.value());
+            } catch (IllegalArgumentException invalid) {
+                player.closeInventory();
+                plugin.messages().send(player, "opening-state-changed");
+                return;
+            }
+        }
+        Crate crate = plugin.runtime().find(holder.crateId()).orElse(null);
+        if (crate == null || crate.openingMode() != OpeningMode.SELECTIVE
+                || !plugin.settings().selectiveOpeningEnabled()
+                || holder.revision() != plugin.runtime().crateRevision(holder.crateId())) {
+            player.closeInventory();
+            plugin.messages().send(player, "opening-state-changed");
+            return;
+        }
+        if (slot == menus.slot("selective-confirm.cancel")) {
+            renderPreview(player, crate, holder.page(), false, portableIssueId);
+            return;
+        }
+        if (slot != confirmSlot || confirmation == null) return;
+        CrateReward reward = crate.rewards().get(holder.rewardId());
+        boolean bypassLimits = player.hasPermission("plexoncrates.bypass.limit");
+        if (reward == null || !previewEligible(player, crate, reward, System.currentTimeMillis(), bypassLimits)) {
+            plugin.messages().send(player, "no-eligible-rewards");
+            renderPreview(player, crate, holder.page(), false, portableIssueId);
+            return;
+        }
+        KeyPaymentPlanner.Preference preference = rightClick
+                ? KeyPaymentPlanner.Preference.VIRTUAL : KeyPaymentPlanner.Preference.PHYSICAL;
+        player.closeInventory();
+        if (portableIssueId == null) {
+            plugin.openings().openSelected(player, crate, reward.id(), 1, OpenSource.GUI, null, preference);
+        } else {
+            confirmPortableSelection(player, crate, reward.id(), portableIssueId, holder.revision());
+        }
+    }
+
+    private void confirmPortableSelection(Player player, Crate crate, String rewardId,
+                                          UUID issueId, long expectedRevision) {
+        ItemStack expected = player.getInventory().getItemInMainHand().clone();
+        plugin.portables().verify(expected).whenComplete((verified, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (error != null || verified == null || verified.isEmpty()
+                        || !verified.get().issueId().equals(issueId)) {
+                    plugin.messages().send(player, error == null ? "invalid-crate" : "opening-state-changed");
+                    return;
+                }
+                DatabaseService.PortableIssue issue = verified.get();
+                Crate active = plugin.runtime().find(issue.crateId()).orElse(null);
+                long activeRevision = plugin.runtime().crateRevision(issue.crateId());
+                if (issue.issuedTo() != null && !issue.issuedTo().equals(player.getUniqueId())) {
+                    plugin.messages().send(player, "no-permission");
+                } else if (!issue.state().equals("UNUSED") || active == null
+                        || active.openingMode() != OpeningMode.SELECTIVE
+                        || activeRevision != expectedRevision
+                        || issue.revisionPolicy().equals("PINNED_REVISION")
+                        && issue.pinnedRevision() != activeRevision) {
+                    plugin.messages().send(player, "opening-state-changed");
+                } else {
+                    plugin.openings().openPortableSelected(player, active, issue, expected, rewardId);
+                }
             });
         });
     }
@@ -588,7 +759,10 @@ public final class MenuService implements Listener {
         List<Crate> crates = plugin.runtime().ordered();
         if (index < 0 || index >= crates.size()) return;
         Crate crate = crates.get(index);
-        if (rightClick) plugin.openings().open(player, crate, 1, false);
+        if (rightClick && crate.openingMode() != OpeningMode.SELECTIVE
+                && crate.paymentPolicy() != KeyPaymentPolicy.PLAYER_CHOICE) {
+            plugin.openings().open(player, crate, 1, false);
+        }
         else openPreview(player, crate, 0, false);
     }
 
@@ -982,6 +1156,12 @@ public final class MenuService implements Listener {
 
     private void appendVirtualPaymentSummary(Player player, Crate crate, MenuHolder holder,
                                              Inventory inventory) {
+        appendVirtualPaymentSummary(player, crate, holder, inventory,
+                plugin.menusConfig().slot("preview.open"));
+    }
+
+    private void appendVirtualPaymentSummary(Player player, Crate crate, MenuHolder holder,
+                                             Inventory inventory, int targetSlot) {
         var futures = crate.acceptedKeyIds().stream()
                 .map(keyId -> plugin.database().loadVirtualKeyBalance(player.getUniqueId(), keyId))
                 .toList();
@@ -990,7 +1170,7 @@ public final class MenuService implements Listener {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!player.isOnline() || player.getOpenInventory().getTopInventory().getHolder() != holder) return;
-                ItemStack current = inventory.getItem(plugin.menusConfig().slot("preview.open"));
+                ItemStack current = inventory.getItem(targetSlot);
                 if (current == null) return;
                 if (error != null) {
                     appendLore(current, List.of(Text.parse("<red>Virtual balances are temporarily unavailable.</red>")));
@@ -1009,7 +1189,7 @@ public final class MenuService implements Listener {
                     }
                     appendLore(current, lore);
                 }
-                inventory.setItem(plugin.menusConfig().slot("preview.open"), current);
+                inventory.setItem(targetSlot, current);
             });
         });
     }
@@ -1040,7 +1220,12 @@ public final class MenuService implements Listener {
     }
 
     private boolean previewEligible(Player player, Crate crate, CrateReward reward, long now, boolean bypassLimits) {
-        return reward.eligible(player) && reward.hasDelivery()
+        boolean baseEligible = crate.openingMode() == OpeningMode.SELECTIVE
+                ? reward.enabled()
+                    && (reward.requiredPermission().isBlank() || player.hasPermission(reward.requiredPermission()))
+                    && (reward.blockedPermission().isBlank() || !player.hasPermission(reward.blockedPermission()))
+                : reward.eligible(player);
+        return baseEligible && reward.hasDelivery()
                 && (reward.money() <= 0 || (plugin.settings().vaultEnabled() && plugin.openings().economyAvailable()))
                 && plugin.rewardStates().eligible(player.getUniqueId(), crate, reward, now, bypassLimits);
     }

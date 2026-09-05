@@ -127,6 +127,60 @@ class OpeningPipelineIntegrationTest {
     }
 
     @Test
+    void selectiveBrowseCloseAndStaleChoiceConsumeNothingWhileConfirmationDeliversExactReward() throws Exception {
+        plugin.crates().createDraft("selective_test", "TEST");
+        plugin.crates().setAcceptedKeys("selective_test", List.of("basic"), 1, "TEST");
+        plugin.crates().setOpening("selective_test", 0, true, 10,
+                com.antondev.crates.domain.crate.AnimationType.INSTANT, "TEST");
+        plugin.crates().setOpeningMode("selective_test",
+                com.antondev.crates.domain.opening.OpeningMode.SELECTIVE, "TEST");
+        plugin.crates().addCapturedReward("selective_test", "ordinary", 100,
+                new ItemStack(Material.STONE), "TEST");
+        plugin.crates().addBundleReward("selective_test", "chosen",
+                net.kyori.adventure.text.Component.text("Chosen Diamond"), 10,
+                com.antondev.crates.domain.reward.RewardRarity.EPIC,
+                List.of(new ItemStack(Material.DIAMOND)), List.of(), 0, 0, 0,
+                new com.antondev.crates.domain.reward.RewardLimits(1, 0, 0, 0, 0, 0, 0),
+                "", "", "", "", "TEST");
+        plugin.crates().publish("selective_test", plugin.keys(), "TEST");
+        var crate = plugin.runtime().find("selective_test").orElseThrow();
+        var player = server.addPlayer("SelectiveUser");
+        player.setOp(false);
+        plugin.keys().give(player, "basic", 2);
+
+        assertFalse(plugin.openings().open(player, crate, 1, false));
+        assertEquals(2, plugin.keys().count(player, "basic"));
+
+        int rewardSlot = openSelectiveConfirmation(player, crate, "chosen");
+        assertTrue(rewardSlot >= 0);
+        assertEquals(2, plugin.keys().count(player, "basic"));
+        assertEquals(0, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertTrue(plugin.database().history(player.getUniqueId(), 10, 0).isEmpty());
+        player.closeInventory();
+        server.getScheduler().performTicks(2);
+        assertEquals(2, plugin.keys().count(player, "basic"));
+        assertTrue(plugin.database().history(player.getUniqueId(), 10, 0).isEmpty());
+
+        openSelectiveConfirmation(player, crate, "chosen");
+        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
+                plugin.menusConfig().slot("selective-confirm.confirm"));
+        awaitOpeningCommit();
+
+        assertEquals(1, plugin.keys().count(player, "basic"));
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        var history = plugin.database().history(player.getUniqueId(), 10, 0);
+        assertEquals(1, history.size());
+        assertEquals("chosen", history.getFirst().rewardIds());
+        assertTrue(Arrays.stream(player.getInventory().getStorageContents())
+                .filter(java.util.Objects::nonNull).anyMatch(item -> item.getType() == Material.DIAMOND));
+
+        assertFalse(plugin.openings().openSelected(player, crate, "chosen", 1,
+                com.antondev.crates.domain.opening.OpenSource.GUI, null));
+        assertEquals(1, plugin.keys().count(player, "basic"));
+        assertEquals(1, plugin.database().history(player.getUniqueId(), 10, 0).size());
+    }
+
+    @Test
     void massOpeningAtomicallyEarnsOneExactMilestoneClaim() throws Exception {
         plugin.crates().createDraft("milestone_test", "TEST");
         plugin.crates().setAcceptedKeys("milestone_test", List.of("basic"), 1, "TEST");
@@ -242,6 +296,25 @@ class OpeningPipelineIntegrationTest {
                 new ItemStack(Material.DIAMOND), "TEST");
         plugin.crates().publish("virtual_test", plugin.keys(), "TEST");
         return plugin.crates().find("virtual_test").orElseThrow();
+    }
+
+    private int openSelectiveConfirmation(org.bukkit.entity.Player player,
+                                          com.antondev.crates.model.Crate crate, String rewardId) {
+        plugin.menus().openPreview(player, crate, 0, false);
+        var preview = (com.antondev.crates.gui.MenuHolder)
+                player.getOpenInventory().getTopInventory().getHolder();
+        int rewardSlot = plugin.menusConfig().slots("preview.reward-slots").stream()
+                .filter(slot -> preview.action(slot) != null
+                        && preview.action(slot).id().equals("select-reward")
+                        && preview.action(slot).value().equals(rewardId))
+                .findFirst().orElseThrow();
+        player.simulateInventoryClick(player.getOpenInventory(),
+                org.bukkit.event.inventory.ClickType.LEFT, rewardSlot);
+        assertTrue(player.getOpenInventory().getTopInventory().getHolder()
+                instanceof com.antondev.crates.gui.MenuHolder confirmation
+                && confirmation.kind() == com.antondev.crates.gui.MenuHolder.Kind.SELECTIVE_CONFIRM
+                && confirmation.rewardId().equals(rewardId));
+        return rewardSlot;
     }
 
     private void awaitOpeningCommit() {

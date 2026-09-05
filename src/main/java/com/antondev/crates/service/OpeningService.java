@@ -14,6 +14,7 @@ import com.antondev.crates.domain.crate.AnimationType;
 import com.antondev.crates.domain.crate.CrateState;
 import com.antondev.crates.domain.key.KeyPaymentPolicy;
 import com.antondev.crates.domain.opening.OpenSource;
+import com.antondev.crates.domain.opening.OpeningMode;
 import com.antondev.crates.domain.opening.OpeningPlan;
 import com.antondev.crates.domain.opening.RewardDelivery;
 import com.antondev.crates.domain.reward.RewardPresentation;
@@ -30,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -73,6 +75,17 @@ public final class OpeningService {
      */
     public boolean openPortable(Player player, Crate crate, DatabaseService.PortableIssue issue,
                                 ItemStack expectedItem) {
+        return openPortable(player, crate, issue, expectedItem, null);
+    }
+
+    /** Starts a portable selective opening only after the player confirms one exact reward. */
+    public boolean openPortableSelected(Player player, Crate crate, DatabaseService.PortableIssue issue,
+                                        ItemStack expectedItem, String rewardId) {
+        return openPortable(player, crate, issue, expectedItem, normalizeRewardId(rewardId));
+    }
+
+    private boolean openPortable(Player player, Crate crate, DatabaseService.PortableIssue issue,
+                                 ItemStack expectedItem, String selectedRewardId) {
         if (!Bukkit.isPrimaryThread()) {
             throw new IllegalStateException("Crate openings must begin on the primary server thread");
         }
@@ -136,7 +149,8 @@ public final class OpeningService {
                 portableRequests.put(player.getUniqueId(), context);
                 boolean accepted = false;
                 try {
-                    accepted = open(player, crate, 1, OpenSource.PORTABLE, null);
+                    accepted = openInternal(player, crate, 1, OpenSource.PORTABLE, null,
+                            KeyPaymentPlanner.Preference.PHYSICAL, selectedRewardId);
                 } catch (RuntimeException failure) {
                     plugin.getLogger().log(Level.WARNING,
                             "Portable opening could not enter the opening planner", failure);
@@ -162,6 +176,28 @@ public final class OpeningService {
 
     public boolean open(Player player, Crate crate, int amount, OpenSource source, BlockPosition location,
                         KeyPaymentPlanner.Preference paymentPreference) {
+        return openInternal(player, crate, amount, source, location, paymentPreference, null);
+    }
+
+    /**
+     * Confirms a deliberate selective choice. No lock, payment reservation, or journal is created while the
+     * player merely browses; this method is the first mutating boundary after confirmation.
+     */
+    public boolean openSelected(Player player, Crate crate, String rewardId, int amount, OpenSource source,
+                                BlockPosition location, KeyPaymentPlanner.Preference paymentPreference) {
+        return openInternal(player, crate, amount, source, location, paymentPreference,
+                normalizeRewardId(rewardId));
+    }
+
+    public boolean openSelected(Player player, Crate crate, String rewardId, int amount, OpenSource source,
+                                BlockPosition location) {
+        return openSelected(player, crate, rewardId, amount, source, location,
+                KeyPaymentPlanner.Preference.PHYSICAL);
+    }
+
+    private boolean openInternal(Player player, Crate crate, int amount, OpenSource source,
+                                 BlockPosition location, KeyPaymentPlanner.Preference paymentPreference,
+                                 String selectedRewardId) {
         if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Crate openings must begin on the primary server thread");
         Crate published = plugin.runtime().find(crate.id()).orElse(null);
         if (published != null) crate = published;
@@ -172,6 +208,9 @@ public final class OpeningService {
         try {
             boolean forced = source == OpenSource.ADMIN_FORCE;
             boolean portable = source == OpenSource.PORTABLE;
+            boolean selective = crate.openingMode() == OpeningMode.SELECTIVE && !forced;
+            if (selective && !plugin.settings().selectiveOpeningEnabled()) return reject(player, "disabled");
+            if (selective != (selectedRewardId != null)) return reject(player, "opening-state-changed");
             if (portable && !portableRequests.containsKey(player.getUniqueId())) {
                 return reject(player, "opening-state-changed");
             }
@@ -201,7 +240,8 @@ public final class OpeningService {
             PaymentChoice free = new PaymentChoice(null,
                     portable ? "PORTABLE" : crate.keyId().isBlank() ? "FREE" : crate.keyId(),
                     0, 0, 0, crate.paymentPolicy());
-            if (!consumeKey) return planAndPrepare(player, crate, amount, source, location, free);
+            if (!consumeKey) return planAndPrepare(player, crate, amount, source, location, free,
+                    selectedRewardId);
 
             int required = Math.multiplyExact(amount, crate.keyCost());
             boolean virtualCandidate = plugin.settings().virtualKeyWalletEnabled()
@@ -209,7 +249,8 @@ public final class OpeningService {
             if (!virtualCandidate) {
                 Optional<PaymentChoice> payment = choosePhysicalPayment(player, crate, required, paymentPreference);
                 if (payment.isEmpty()) return insufficientPayment(player, crate);
-                return planAndPrepare(player, crate, amount, source, location, payment.get());
+                return planAndPrepare(player, crate, amount, source, location, payment.get(),
+                        selectedRewardId);
             }
 
             Crate frozenCrate = crate;
@@ -234,7 +275,8 @@ public final class OpeningService {
                         return;
                     }
                     try {
-                        planAndPrepare(player, frozenCrate, frozenAmount, source, location, payment.get());
+                        planAndPrepare(player, frozenCrate, frozenAmount, source, location, payment.get(),
+                                selectedRewardId);
                     } catch (RuntimeException failure) {
                         locks.remove(player.getUniqueId());
                         plugin.getLogger().log(Level.SEVERE, "Could not create the opening plan", failure);
@@ -250,12 +292,16 @@ public final class OpeningService {
     }
 
     private boolean planAndPrepare(Player player, Crate crate, int requested, OpenSource source,
-                                   BlockPosition location, PaymentChoice payment) {
+                                   BlockPosition location, PaymentChoice payment, String selectedRewardId) {
         boolean forced = source == OpenSource.ADMIN_FORCE;
         boolean portable = source == OpenSource.PORTABLE;
         boolean bypassLimits = forced || player.hasPermission("plexoncrates.bypass.limit");
-        RewardStateService.Plan rewardPlan = plugin.rewardStates().plan(player.getUniqueId(), crate, requested,
-                source, baseEligibility(player), bypassLimits, System.currentTimeMillis());
+        Predicate<CrateReward> eligibility = baseEligibility(player, selectedRewardId != null);
+        RewardStateService.Plan rewardPlan = selectedRewardId == null
+                ? plugin.rewardStates().plan(player.getUniqueId(), crate, requested, source,
+                        eligibility, bypassLimits, System.currentTimeMillis())
+                : plugin.rewardStates().planSelected(player.getUniqueId(), crate, selectedRewardId, requested,
+                        source, eligibility, bypassLimits, System.currentTimeMillis());
         List<CrateReward> selected = rewardPlan.rewards();
         if (selected.size() != requested) return reject(player, "no-eligible-rewards");
 
@@ -438,7 +484,8 @@ public final class OpeningService {
                 return;
             }
             boolean bypassLimits = plan.source() == OpenSource.ADMIN_FORCE || player.hasPermission("plexoncrates.bypass.limit");
-            Predicate<CrateReward> eligibility = baseEligibility(player);
+            Predicate<CrateReward> eligibility = baseEligibility(player,
+                    current.openingMode() == OpeningMode.SELECTIVE && plan.source() != OpenSource.ADMIN_FORCE);
             if (!plugin.rewardStates().canApply(player.getUniqueId(), current, opening.selected(), plan.source(),
                     eligibility, bypassLimits, System.currentTimeMillis())) {
                 abortPrepared(transactionId, "Reward limits or pity state changed before consumption", false);
@@ -871,9 +918,16 @@ public final class OpeningService {
         }
     }
 
-    private Predicate<CrateReward> baseEligibility(Player player) {
-        return reward -> reward.eligible(player) && reward.hasDelivery()
+    private Predicate<CrateReward> baseEligibility(Player player, boolean ignoreChance) {
+        return reward -> (ignoreChance ? selectivePermissionEligible(player, reward) : reward.eligible(player))
+                && reward.hasDelivery()
                 && (reward.money() <= 0 || (plugin.settings().vaultEnabled() && economy.available()));
+    }
+
+    private static boolean selectivePermissionEligible(Player player, CrateReward reward) {
+        return reward.enabled()
+                && (reward.requiredPermission().isBlank() || player.hasPermission(reward.requiredPermission()))
+                && (reward.blockedPermission().isBlank() || !player.hasPermission(reward.blockedPermission()));
     }
 
     private void abortPrepared(UUID transactionId, String reason, boolean databaseError) {
@@ -922,6 +976,12 @@ public final class OpeningService {
         return new RewardDelivery(reward.id(), reward.displayName(), reward.itemCopies(), reward.commands(),
                 reward.experiencePoints(), reward.experienceLevels(), reward.money(),
                 reward.presentation(), reward.personalMessage(), reward.broadcast());
+    }
+
+    private static String normalizeRewardId(String rewardId) {
+        if (rewardId == null) return null;
+        String normalized = rewardId.trim().toLowerCase(Locale.ROOT);
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private static String locationText(BlockPosition location) {

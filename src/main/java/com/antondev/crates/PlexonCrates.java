@@ -30,6 +30,7 @@ import com.antondev.crates.service.RewardStateService;
 import com.antondev.crates.service.RuntimeRegistry;
 import java.io.File;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -81,11 +82,12 @@ public class PlexonCrates extends JavaPlugin {
             menusConfig = MenuConfig.load(file("menus.yml"));
             definitionRepository = new DefinitionRepository(database);
             DatabaseService.PublishedSnapshot canonical = definitionRepository.loadPublished().join();
+            List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts = definitionRepository.loadDrafts().join();
             if (canonical.definitions().isEmpty()) {
                 CrateRegistry.Snapshot crateSnapshot = CrateRegistry.load(getDataFolder().toPath().resolve("crates"));
                 crates = new CrateRegistry(getDataFolder().toPath().resolve("crates"), crateSnapshot);
             } else {
-                crates = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"), canonical.definitions());
+                crates = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"), canonical.definitions(), durableDrafts);
             }
             LocationStore.Snapshot locationSnapshot = LocationStore.fromDatabase(database.loadLocations(), crates);
             locations = new LocationStore(database, getLogger(), locationSnapshot);
@@ -93,6 +95,10 @@ public class PlexonCrates extends JavaPlugin {
             keys = new KeyService(this, database, file(settings.fallbackFile()).toPath(), keySnapshot,
                     database.loadKeyTemplateCache());
             runtime = new RuntimeRegistry(DefinitionPublisher.bootstrap(definitionRepository, crates, keys));
+            if (canonical.definitions().isEmpty() && !durableDrafts.isEmpty()) {
+                crates.apply(CrateRegistry.withDurableDrafts(getDataFolder().toPath().resolve("crates"),
+                        crates.snapshot(), durableDrafts));
+            }
             statistics = new StatsStore(database.loadStatistics());
             rewardStates = new RewardStateService(database.loadRewardStates());
             openingLog = new OpeningLog(this);
@@ -158,13 +164,16 @@ public class PlexonCrates extends JavaPlugin {
             Messages nextMessages = Messages.load(file("messages.yml"));
             MenuConfig nextMenus = MenuConfig.load(file("menus.yml"));
             DatabaseService.PublishedSnapshot canonical = definitionRepository.loadPublished().join();
+            List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts = definitionRepository.loadDrafts().join();
             CrateRegistry validationRegistry;
             if (canonical.definitions().isEmpty()) {
-                validationRegistry = new CrateRegistry(getDataFolder().toPath().resolve("crates"),
-                        CrateRegistry.load(getDataFolder().toPath().resolve("crates")));
+                Path crateDirectory = getDataFolder().toPath().resolve("crates");
+                validationRegistry = new CrateRegistry(crateDirectory,
+                        CrateRegistry.withDurableDrafts(crateDirectory,
+                                CrateRegistry.load(crateDirectory), durableDrafts));
             } else {
                 validationRegistry = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"),
-                        canonical.definitions());
+                        canonical.definitions(), durableDrafts);
             }
             CrateRegistry.Snapshot nextCrates = validationRegistry.snapshot();
             for (LocationStore.Link link : locations.all()) {

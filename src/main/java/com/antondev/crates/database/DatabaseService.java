@@ -1139,6 +1139,26 @@ public final class DatabaseService implements AutoCloseable {
                 loadDefinitionDraft(connection, normalizedType, normalizedId));
     }
 
+    /**
+     * Loads the durable draft metadata/payloads needed to rebuild the administrator
+     * registry after a restart. Drafts are deliberately queried separately from the
+     * published snapshot so they can never leak into player-facing runtime state.
+     */
+    public CompletableFuture<List<DefinitionDraft>> loadDefinitionDrafts() {
+        return submitQuery("load definition drafts", connection -> {
+            var drafts = new ArrayList<DefinitionDraft>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT draft_uuid, target_type, target_id, owner_uuid, owner_name, base_revision, revision,
+                           lease_token, save_state, validation_status, payload, created_at, updated_at
+                    FROM definition_draft WHERE target_type = 'CRATE'
+                    ORDER BY updated_at DESC, draft_uuid
+                    """); ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) drafts.add(definitionDraft(rows));
+            }
+            return List.copyOf(drafts);
+        });
+    }
+
     public CompletableFuture<DefinitionDraft> saveDefinitionDraft(UUID draftId, DraftMutation mutation) {
         UUID id = java.util.Objects.requireNonNull(draftId, "draftId");
         DraftMutation change = java.util.Objects.requireNonNull(mutation, "mutation");

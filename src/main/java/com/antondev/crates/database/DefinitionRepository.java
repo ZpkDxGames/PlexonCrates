@@ -1,5 +1,6 @@
 package com.antondev.crates.database;
 
+import com.antondev.crates.domain.draft.DefinitionDraft;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -19,6 +20,10 @@ public final class DefinitionRepository {
 
     public CompletableFuture<DatabaseService.PublishedSnapshot> loadPublished() {
         return database.loadPublishedDefinitions();
+    }
+
+    public CompletableFuture<List<DefinitionDraft>> loadDrafts() {
+        return database.loadDefinitionDrafts();
     }
 
     public CompletableFuture<DatabaseService.PublishResult> publish(DatabaseService.PublishRequest request) {

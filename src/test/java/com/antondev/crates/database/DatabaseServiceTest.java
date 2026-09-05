@@ -88,6 +88,27 @@ class DatabaseServiceTest {
     }
 
     @Test
+    void durableDraftListingReturnsPayloadsForRestartRecovery() throws Exception {
+        UUID firstEditor = UUID.randomUUID();
+        UUID secondEditor = UUID.randomUUID();
+        try (DatabaseService database = database()) {
+            database.createOrResumeDefinitionDraft("CRATE", "first", firstEditor, "First", 0,
+                    bytes("first-payload")).join();
+            database.createOrResumeDefinitionDraft("crate", "second", secondEditor, "Second", 8,
+                    bytes("second-payload")).join();
+
+            var drafts = database.loadDefinitionDrafts().join();
+
+            assertEquals(2, drafts.size());
+            assertEquals(java.util.Set.of("first", "second"),
+                    drafts.stream().map(com.antondev.crates.domain.draft.DefinitionDraft::targetId)
+                            .collect(java.util.stream.Collectors.toSet()));
+            assertTrue(drafts.stream().anyMatch(draft -> text(draft.payload()).equals("first-payload")));
+            assertTrue(drafts.stream().anyMatch(draft -> text(draft.payload()).equals("second-payload")));
+        }
+    }
+
+    @Test
     void publicationChecksFrozenDraftAndBaseRevisionThenCommitsNormalizedGraphAtomically() throws Exception {
         UUID editor = UUID.randomUUID();
         Instant now = Instant.parse("2026-09-04T12:00:00Z");

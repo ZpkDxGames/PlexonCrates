@@ -7,6 +7,7 @@ import com.antondev.crates.api.event.CrateDefinitionChangeEvent;
 import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.domain.crate.AnimationType;
 import com.antondev.crates.domain.crate.CrateState;
+import com.antondev.crates.domain.draft.DefinitionDraft;
 import com.antondev.crates.domain.reward.PityPolicy;
 import com.antondev.crates.domain.reward.RewardLimits;
 import com.antondev.crates.domain.reward.RewardRarity;
@@ -110,6 +111,17 @@ public final class CrateRegistry {
     /** Builds a registry from the canonical published payloads without reading any YAML mirror. */
     public static CrateRegistry fromPublished(Path directory,
                                               List<DatabaseService.StoredDefinition> definitions) throws Exception {
+        return fromPublished(directory, definitions, List.of());
+    }
+
+    /**
+     * Builds the administrator registry from canonical published payloads and the
+     * durable draft rows. Published entries are authoritative for the runtime; a
+     * draft only replaces the editable/admin view for its own target.
+     */
+    public static CrateRegistry fromPublished(Path directory,
+                                              List<DatabaseService.StoredDefinition> definitions,
+                                              List<DefinitionDraft> durableDrafts) throws Exception {
         Path root = directory.toAbsolutePath().normalize();
         if (!Files.isDirectory(root)) throw new IllegalArgumentException("Missing crates directory");
         var loaded = new LinkedHashMap<String, Crate>();
@@ -148,8 +160,50 @@ public final class CrateRegistry {
                 }
             }
         }
+        mergeDurableDrafts(root, loaded, paths, payloads, durableDrafts);
         if (loaded.isEmpty()) throw new IllegalArgumentException("Canonical store contains no published crates");
         return new CrateRegistry(root, new Snapshot(loaded, paths, payloads));
+    }
+
+    /**
+     * Overlays durable draft payloads onto a legacy/YAML bootstrap snapshot. This
+     * is used only while the canonical published store is empty; once publication
+     * exists, {@link #fromPublished(Path, List, List)} is the startup path.
+     */
+    public static Snapshot withDurableDrafts(Path directory, Snapshot base,
+                                             List<DefinitionDraft> durableDrafts) throws Exception {
+        Path root = directory.toAbsolutePath().normalize();
+        if (!Files.isDirectory(root)) throw new IllegalArgumentException("Missing crates directory");
+        var loaded = new LinkedHashMap<>(base.crates());
+        var paths = new LinkedHashMap<>(base.files());
+        var payloads = new LinkedHashMap<String, byte[]>();
+        base.payloads().forEach((id, payload) -> payloads.put(id, payload.clone()));
+        mergeDurableDrafts(root, loaded, paths, payloads, durableDrafts);
+        return new Snapshot(loaded, paths, payloads);
+    }
+
+    private static void mergeDurableDrafts(Path root, Map<String, Crate> loaded,
+                                           Map<String, Path> paths, Map<String, byte[]> payloads,
+                                           List<DefinitionDraft> durableDrafts) throws Exception {
+        if (durableDrafts == null || durableDrafts.isEmpty()) return;
+        var applied = new LinkedHashSet<String>();
+        for (DefinitionDraft draft : durableDrafts) {
+            if (draft == null || !draft.targetType().equalsIgnoreCase("CRATE")) continue;
+            String id = normalize(draft.targetId());
+            if (!validId(id) || !applied.add(id)) continue;
+            Path file = root.resolve(id + ".yml").normalize();
+            if (!file.getParent().equals(root)) continue;
+            try {
+                YamlConfiguration yaml = decode(draft.payload());
+                Crate crate = parse(file, yaml);
+                if (!crate.id().equals(id)) continue;
+                loaded.put(id, crate);
+                paths.put(id, file);
+                payloads.put(id, draft.payload());
+            } catch (Exception ignored) {
+                // A malformed draft must not make a healthy published snapshot unavailable.
+            }
+        }
     }
 
     public void apply(Snapshot snapshot) {

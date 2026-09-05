@@ -366,6 +366,34 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void durableDraftPayloadRestoresWhenItsYamlMirrorIsMissing() throws Exception {
+        var player = server.addPlayer("DraftRestartEditor");
+        player.setOp(true);
+        var activeName = plugin.runtime().find("basic").orElseThrow().displayName();
+        var draftName = Component.text("Durable restart draft");
+        Path file = plugin.getDataFolder().toPath().resolve("crates/basic.yml");
+        String valid = Files.readString(file);
+        try {
+            plugin.adminMenus().ensureDraft(player, "basic");
+            awaitDraft(player, "basic");
+            plugin.crates().setDisplayName("basic", draftName, player.getName());
+            plugin.adminMenus().saveDraftRevision(player, "basic", "IDENTITY", "Changed display name");
+            plugin.database().awaitIdle().join();
+            server.getScheduler().performTicks(2);
+
+            Files.delete(file);
+            assertTrue(plugin.reloadFor(player));
+
+            assertEquals(draftName, plugin.crates().find("basic").orElseThrow().displayName());
+            assertEquals(activeName, plugin.runtime().find("basic").orElseThrow().displayName());
+            assertTrue(Files.notExists(file));
+            assertTrue(plugin.crates().serialized("basic").contains("Durable restart draft"));
+        } finally {
+            Files.writeString(file, valid);
+        }
+    }
+
+    @Test
     void wandLinkPersistsAndProtectsTheBlockFromWorldMutations() throws Exception {
         var player = server.addPlayer("Builder");
         player.setOp(true);

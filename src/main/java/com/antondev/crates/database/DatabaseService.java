@@ -467,14 +467,14 @@ public final class DatabaseService implements AutoCloseable {
                 throw new IllegalArgumentException("Portable issuance counts cannot be negative");
             }
         }
+    }
+
     public record RerollBalance(UUID playerId, long balance, long revision, Instant updatedAt) {
         public RerollBalance {
             playerId = java.util.Objects.requireNonNull(playerId, "playerId");
             updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
             if (balance < 0 || revision < 0) throw new IllegalArgumentException("Reroll balance cannot be negative");
         }
-    }
-
     }
 
     private final Logger logger;

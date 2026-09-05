@@ -41,7 +41,8 @@ public final class MassOpeningPlanner {
     /** Computes Maximum Available as the minimum of every operational bound. */
     public static int maximumAvailable(Limits limits) {
         Objects.requireNonNull(limits, "limits");
-        int payment = Math.addExact(limits.physicalAvailable(), limits.virtualAvailable());
+        int payment = (int) Math.min(Integer.MAX_VALUE,
+                (long) limits.physicalAvailable() + limits.virtualAvailable());
         return Math.min(limits.requested(), Math.min(payment,
                 Math.min(limits.crateMaximum(), Math.min(limits.globalMaximum(),
                         Math.min(limits.eligibleCapacity(), limits.deliveryCapacity())))));

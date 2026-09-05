@@ -327,6 +327,15 @@ public class PlexonCrates extends JavaPlugin {
         DatabaseService.ClaimCounts claimCounts = null;
         try { claimCounts = database.claimCounts().join(); }
         catch (Exception error) { getLogger().log(Level.WARNING, "Could not read Claim Inbox diagnostics", error); }
+        DatabaseService.PortableIssueCounts portableCounts = null;
+        boolean portableSignerHealthy = portables != null && portables.ready();
+        try {
+            portableCounts = database.portableIssueCounts().join();
+            portableSignerHealthy = portableSignerHealthy && database.portableSecretPresent().join();
+        } catch (Exception error) {
+            getLogger().log(Level.WARNING, "Could not read portable-crate diagnostics", error);
+            portableSignerHealthy = false;
+        }
         sender.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>PlexonCrates Diagnostics</bold></gradient>"));
         sender.sendMessage(Text.parse("<gray>Plugin:</gray> <white>" + getPluginMeta().getVersion() + "</white> <dark_gray>•</dark_gray> <gray>Paper API:</gray> <white>26.2</white> <dark_gray>•</dark_gray> <gray>Java:</gray> <white>" + Runtime.version().feature() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Crates:</gray> <white>" + crates.all().size() + "</white> <dark_gray>(" + drafts + " drafts)</dark_gray> <dark_gray>•</dark_gray> <gray>Rewards:</gray> <white>" + crates.rewardCount() + "</white>"));
@@ -341,6 +350,15 @@ public class PlexonCrates extends JavaPlugin {
                 + " pending</white> <dark_gray>•</dark_gray> <white>" + claimCounts.review()
                 + " review</white> <dark_gray>•</dark_gray> <gray>claimed:</gray> <white>"
                 + claimCounts.claimed() + "</white>"));
+        String signer = portableSignerHealthy ? "<green>healthy</green>" : "<red>unavailable</red>";
+        sender.sendMessage(Text.parse(portableCounts == null
+                ? "<gray>Portable crates:</gray> " + signer + " <dark_gray>•</dark_gray> <red>counts unavailable</red>"
+                : "<gray>Portable crates:</gray> " + signer
+                + " <dark_gray>•</dark_gray> <white>" + portableCounts.unused()
+                + " unused</white> <dark_gray>•</dark_gray> <white>" + portableCounts.reserved()
+                + " reserved</white> <dark_gray>•</dark_gray> <white>" + portableCounts.consumed()
+                + " consumed</white> <dark_gray>•</dark_gray> <white>" + portableCounts.review()
+                + " review</white>"));
         sender.sendMessage(Text.parse("<gray>Runtime snapshot:</gray> <white>" + runtime.snapshot().revision()
                 + "</white> <dark_gray>•</dark_gray> <gray>Published crates:</gray> <white>"
                 + runtime.all().size() + "</white>"));

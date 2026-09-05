@@ -1649,6 +1649,16 @@ public final class DatabaseService implements AutoCloseable {
                     return secret.clone();
                 }
             }
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT COUNT(*) FROM portable_crate_issue
+                    WHERE state IN ('UNUSED','RESERVED','SUSPENDED','REVIEW')
+                    """);
+                 ResultSet rows = statement.executeQuery()) {
+                if (rows.next() && rows.getInt(1) > 0) {
+                    throw new SQLException("Portable signing secret is missing while outstanding issuances exist; "
+                            + "refusing to rotate it automatically");
+                }
+            }
             byte[] secret = new byte[32];
             new SecureRandom().nextBytes(secret);
             try (PreparedStatement statement = connection.prepareStatement("""

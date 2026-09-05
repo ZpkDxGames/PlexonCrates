@@ -293,6 +293,7 @@ class DatabaseServiceTest {
     @Test
     void portableSecretAndSingleUseIssuanceSurviveRestart() throws Exception {
         UUID issueId = UUID.randomUUID();
+        UUID outstandingIssueId = UUID.randomUUID();
         UUID player = UUID.randomUUID();
         UUID actor = UUID.randomUUID();
         Instant issuedAt = Instant.parse("2026-09-04T12:00:00Z");
@@ -343,6 +344,24 @@ class DatabaseServiceTest {
             assertEquals(0, counts.unused());
             assertEquals(0, counts.reserved());
             assertEquals(1, counts.consumed());
+
+            var outstanding = new DatabaseService.PortableIssue(
+                    outstandingIssueId, "portable", "LATEST_PUBLISHED", 0, player, actor,
+                    1, "UNUSED", null, issuedAt.plusSeconds(1), issuedAt.plusSeconds(1));
+            database.createPortableIssue(outstanding).join();
+        }
+
+        try (var connection = java.sql.DriverManager.getConnection(
+                "jdbc:sqlite:" + temporary.resolve("data/test.db"))) {
+            assertEquals(1, connection.createStatement()
+                    .executeUpdate("DELETE FROM plugin_secret WHERE secret_id='portable-hmac-v1'"));
+        }
+        try (DatabaseService database = database()) {
+            assertFalse(database.portableSecretPresent().join());
+            assertThrows(CompletionException.class,
+                    () -> database.loadOrCreatePortableSecret().join());
+            assertEquals("UNUSED", database.loadPortableIssue(outstandingIssueId)
+                    .join().orElseThrow().state());
         }
     }
 

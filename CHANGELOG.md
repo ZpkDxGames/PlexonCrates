@@ -39,8 +39,16 @@ All notable PlexonCrates changes are documented here.
 
 - Added deterministic milestone progression with one-time/repeating thresholds, stable earned keys, and durable SQLite progress counters.
 - Added reroll offer state with exclusion/timeout semantics and audited, non-negative reroll-token ledger mutations.
-- Added bounded mass-opening planning, one-edge alternative-reward validation/resolution, and HMAC-signed portable-crate token encoding with revision policies.
+- Added bounded mass-opening planning and one-edge alternative-reward validation/resolution.
 - Added player-facing `/crates milestones` and `/crates rerolls` views plus admin reroll grant/take/set commands.
+
+### Portable crate pipeline
+
+- Added persistent HMAC signing secrets, durable issuance rows, owner binding, latest/pinned revision policies, distinct bounded batch issuance, offline Claim Inbox delivery, and the granular `plexoncrates.admin.portable` permission.
+- Added right-click reward previews with explicit confirmation; closing, changing the held item, failing a precondition, or cancelling `PortableCrateUseEvent` consumes nothing.
+- Routed confirmed portable use through the ordinary frozen reward plan, journal, limits, pity, delivery, statistics, history, and event pipeline while treating the item as the default full opening cost.
+- Added reservation release on normal failure/shutdown/restart, single-use consume transitions, duplicate/replay rejection, deterministic tamper tests, and refusal to silently rotate a lost signing secret while issuances remain outstanding.
+- Extended `/pcrates diagnose` with signer health and unused/reserved/consumed/review issuance counts.
 
 ### Documentation
 

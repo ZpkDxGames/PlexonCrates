@@ -588,7 +588,8 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             case "keys" -> "plexoncrates.admin.keys";
             case "additem", "addcommand", "remove", "chance", "weight" -> "plexoncrates.admin.rewards";
             case "wand", "link", "unlink", "set", "unset" -> "plexoncrates.admin.locations";
-            case "givekey", "virtualgrant", "portable", "open" -> "plexoncrates.admin.give";
+            case "givekey", "virtualgrant", "open" -> "plexoncrates.admin.give";
+            case "portable" -> "plexoncrates.admin.portable";
             case "rerolls" -> "plexoncrates.admin.rerolls";
             case "reload", "validate", "save" -> "plexoncrates.admin.reload";
             case "backup" -> "plexoncrates.admin.backup";
@@ -673,6 +674,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(Text.parse("<white>/pcrates givekey <player> <key> [amount]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates virtualgrant <player|uuid> <key> <amount></white> <dark_gray>—</dark_gray> <gray>Credit the optional virtual-key wallet.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates rerolls <give|take|set> <player|uuid> <amount></white> <dark_gray>—</dark_gray> <gray>Adjust audited reroll tokens.</gray>"));
+        sender.sendMessage(Text.parse("<white>/pcrates portable give <player|uuid> <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Issue signed single-use crate items.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates open <player> <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Administrative keyless opening.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates validate</white> <dark_gray>•</dark_gray> <white>reload</white> <dark_gray>•</dark_gray> <white>backup</white> <dark_gray>•</dark_gray> <white>status</white> <dark_gray>•</dark_gray> <white>diagnose</white>"));
     }

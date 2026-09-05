@@ -24,7 +24,8 @@ This is an independent implementation inspired by the usability goals and featur
 - Protected Link Wand workflow for unlimited physical blocks, native TextDisplay holograms, centralized particles, and safe unlinking.
 - Journal-first openings with immediate revalidation, per-player race locks, exact key accounting, immutable outcomes, SQLite history, and manual crash-review diagnostics.
 - Durable Claim Inbox entries for exact overflow/recovery delivery, typed virtual-key claims, and atomic reroll-token/virtual-key ledgers with idempotent mutations.
-- Deterministic milestone progression, reroll decision planning, mass-opening bounds, alternative-reward validation, and HMAC-signed portable-crate metadata primitives.
+- Deterministic milestone progression, reroll decision planning, mass-opening bounds, and alternative-reward validation.
+- HMAC-signed portable crate items with durable issuance, non-consuming preview confirmation, offline Claim Inbox delivery, restart-safe reservations, and single-use replay protection.
 - Atomic configuration reloads, consistent backups, administrative audit records, and reversible 1.0 migration.
 - Optional PlaceholderAPI and Vault integrations; no hard plugin dependency.
 
@@ -84,6 +85,8 @@ The key registry provides create, duplicate, import, provider sync, test-give, r
 
 At a linked block, left-click previews, right-click opens one, and sneak-right-click requests a bounded bulk opening. Offhand keys are ignored by default. A bulk key bypass is clamped to one opening to prevent accidental free mass openings.
 
+Right-clicking an authentic portable crate opens a reward preview and explicit confirmation. Closing it consumes nothing. Confirmation rechecks the signature, issuance UUID, owner, state, and retained revision before reserving the issuance; duplicated or replayed items can deliver only once.
+
 ## Administration
 
 `/pcrates` opens the dashboard. The GUI supports persistent guided drafts, full reward editing, exact capture, key rotation, location inspection, statistics, validation, reload, backups, and diagnostics. Drafts load asynchronously and show `Loading`, `Saving`, `Publishing`, `Saved`, `Save failed`, or `Read only`; failed writes block further mutation until retried. Publishing freezes the durable revision, validates it, commits the complete normalized graph and audit entry in one SQLite transaction, and only then swaps the active runtime snapshot. A second administrator can inspect the current definition but must confirm a permission-gated takeover before editing. Every inventory has a server-owned session UUID and crate editors carry the exact draft UUID, revision, and lease token; superseded views and pre-takeover actions are rejected. Display items are never trusted as data; all actions resolve through server-side menu state.
@@ -103,12 +106,15 @@ At a linked block, left-click previews, right-click opens one, and sneak-right-c
 | `/pcrates link <crate>` | Link the targeted block |
 | `/pcrates unlink` | Confirm unlinking the targeted block |
 | `/pcrates givekey <player> <key> [amount]` | Give the currently resolved exact key |
+| `/pcrates virtualgrant <player\|uuid> <key> <amount>` | Credit an audited virtual-key balance |
+| `/pcrates rerolls <give\|take\|set> <player\|uuid> <amount>` | Adjust an audited reroll-token balance |
+| `/pcrates portable give <player\|uuid> <crate> [amount]` | Issue distinct signed items; offline delivery uses the Claim Inbox |
 | `/pcrates open <player> <crate> [amount]` | Perform an explicit administrative keyless opening |
 | `/pcrates validate` | Validate configuration without activating it |
 | `/pcrates reload` | Validate and atomically activate a new snapshot |
 | `/pcrates backup` | Create a consistent YAML and SQLite backup |
 | `/pcrates status` | Show a concise runtime summary |
-| `/pcrates diagnose` | Show provider, schema, collision, queue, location, draft, and journal details |
+| `/pcrates diagnose` | Show provider, schema, collision, queue, journal, Claim Inbox, and portable-signer/issuance health |
 
 Compatibility editing commands remain available: `/pcrates set`, `unset`, `additem`, `addcommand`, `remove`, `chance`, and `save`. The old `/pcrates weight` spelling remains a deprecated alias during 3.x.
 
@@ -129,6 +135,7 @@ In the Crates menu, shift-left-click a crate to export it. Imported version 2 or
 | `plexoncrates.admin.rewards` | OP | Create, edit, reorder, test, copy, and remove rewards |
 | `plexoncrates.admin.locations` | OP | Use the Link Wand and manage locations |
 | `plexoncrates.admin.give` | OP | Give keys and request administrative openings |
+| `plexoncrates.admin.portable` | OP | Issue signed single-use portable crate items |
 | `plexoncrates.admin.reload` | OP | Validate, reload, and flush statistics |
 | `plexoncrates.admin.backup` | OP | Create backups |
 | `plexoncrates.admin.takeover` | OP | Confirm takeover of another administrator's writable draft lease |
@@ -223,6 +230,8 @@ Opening history, statistics, limits, pity state, and journal completion are comm
 
 Closing an animation or disconnecting after delivery cannot remove or duplicate the already-frozen outcome. Cosmetic failures are logged without undoing delivery.
 
+Portable openings join the same journal after their signed issuance is reserved. Failed preconditions and shutdown release pre-consumption reservations; startup also releases interrupted reservations. Once an issuance is consumed, copies remain invalid. The local HMAC secret persists in SQLite, and startup refuses to silently generate a replacement while outstanding issuances exist.
+
 ## Public API and events
 
 Other plugins can obtain `com.antondev.crates.api.PlexonCratesApi` from Bukkit's services manager. The API returns only immutable published definitions, exposes global/per-crate snapshot revisions, and can query crates/keys or request a validated opening.
@@ -235,7 +244,8 @@ Primary-thread Bukkit events:
 - `CrateOpenEvent` — after delivery succeeds;
 - `CrateLinkEvent` and `CrateUnlinkEvent` — cancellable before persistence;
 - `CrateDefinitionChangeEvent` — after a crate is created, updated, published, disabled, archived, or deleted.
-- `CrateDraftPublishEvent` — cancellable after full validation and before the atomic definition transaction.
+- `CrateDraftPublishEvent` — cancellable after full validation and before the atomic definition transaction;
+- `PortableCrateUseEvent` — cancellable after token/owner validation and before issuance reservation or item consumption.
 
 ## Build and test
 

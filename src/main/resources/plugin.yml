@@ -49,6 +49,7 @@ permissions:
       plexoncrates.admin.locations: true
       plexoncrates.admin.give: true
       plexoncrates.admin.rerolls: true
+      plexoncrates.admin.portable: true
       plexoncrates.admin.reload: true
       plexoncrates.admin.backup: true
       plexoncrates.admin.diagnose: true
@@ -71,6 +72,9 @@ permissions:
     default: op
   plexoncrates.admin.rerolls:
     description: Grant, take, or set audited reroll-token balances.
+    default: op
+  plexoncrates.admin.portable:
+    description: Issue signed single-use portable crate items.
     default: op
   plexoncrates.admin.give:
     description: Give exact keys and run explicit administrative openings.

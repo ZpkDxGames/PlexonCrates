@@ -25,7 +25,8 @@ The unit and MockBukkit suites cover:
 - invalid-reload rollback without changing the active runtime snapshot;
 - crate definition export/import as a validated draft with ID/path safety;
 - Link Wand persistence, duplicate prevention, unlinking, and break/explosion/piston protection.
-- Claim Inbox idempotency, interrupted-claim review recovery, virtual-key and reroll ledger no-overdraft/idempotency behavior, durable milestone state, portable issuance state transitions, and deterministic advanced planners.
+- Claim Inbox idempotency, interrupted-claim review recovery, virtual-key and reroll ledger no-overdraft/idempotency behavior, durable milestone state, and deterministic advanced planners;
+- portable token tampering, owner/revision metadata, durable secret restart behavior, signing-key-loss refusal, interrupted reservation recovery, preview-without-consumption, cancellation, duplicate-stack consumption, and replay rejection through the real opening pipeline.
 
 Surefire reports are written to `target/surefire-reports`. The release workflow independently runs the same clean verification before producing any GitHub release.
 
@@ -52,6 +53,7 @@ Use a disposable Java 25 Paper 26.2 server with the release-candidate PlexonCrat
 17. Run `/pcrates validate`, `reload`, `backup`, and `diagnose`; then introduce an invalid chance pool, missing key, and duplicate exact key template and confirm activation is rejected without changing the live snapshot.
 18. Upgrade a copied 1.0 data folder. Confirm the timestamped backup, converted definitions, imported links/statistics, migration marker, and an idempotent second restart.
 19. Inspect timings with many linked crates and concurrent animations. Confirm no per-location task, forced chunk load, unbounded database queue, or interaction-thread disk I/O appears.
-20. Verify the release checksum, `plugin.yml` version/API, JAR startup, and clean shutdown with no leaked tasks, displays, locks, sessions, or database worker.
+20. Issue a portable crate to an online player and an offline UUID. Close its preview, modify a duplicate, confirm one authentic copy, retry the remaining copy, and restart between reservation attempts. Confirm zero preview/tamper/replay consumption, exactly one reward, Claim Inbox delivery, and healthy signer/issuance counts in `/pcrates diagnose`.
+21. Verify the release checksum, `plugin.yml` version/API, JAR startup, and clean shutdown with no leaked tasks, displays, locks, sessions, or database worker.
 
 Record the Paper build, Java build, PlexonKeys version, optional integration versions, tester, date, and any deviations with the release candidate.

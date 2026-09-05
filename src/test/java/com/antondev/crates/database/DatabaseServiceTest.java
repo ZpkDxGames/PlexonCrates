@@ -305,9 +305,13 @@ class DatabaseServiceTest {
             assertTrue(database.portableSecretPresent().join());
             assertArrayEquals(secret, database.loadOrCreatePortableSecret().join());
 
+            var reward = new DatabaseService.DefinitionRewardData(
+                    "winner", 0, true, "Winner", "common", 10_000, false, bytes("settings"),
+                    List.of(), List.of(new DatabaseService.DefinitionActionData(
+                            0, "COMMAND", bytes("say portable"))));
             var definition = new DatabaseService.DefinitionBundle("portable", "PUBLISHED", 10,
                     "Portable", "Portable restart test", bytes("icon"), bytes("payload"),
-                    List.of(), List.of(), List.of(), 0, issuedAt, issuedAt);
+                    List.of(reward), List.of(), List.of(), 0, issuedAt, issuedAt);
             var draft = database.createOrResumeDefinitionDraft(
                     "CRATE", "portable", actor, "Admin", 0, bytes("draft")).join();
             database.publishDefinitionDraft(new DatabaseService.PublishRequest(

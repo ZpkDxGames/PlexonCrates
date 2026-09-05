@@ -113,7 +113,7 @@ class OpeningPipelineIntegrationTest {
     }
 
     @Test
-    void insufficientMassPaymentConsumesNothingInsteadOfSilentlyOpeningPartially() {
+    void insufficientMassPaymentConsumesNothingInsteadOfSilentlyOpeningPartially() throws Exception {
         var player = server.addPlayer("PartialBatch");
         player.setOp(false);
         var crate = plugin.crates().find("basic").orElseThrow();

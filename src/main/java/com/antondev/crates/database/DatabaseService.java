@@ -1517,6 +1517,7 @@ public final class DatabaseService implements AutoCloseable {
                     INSERT INTO opening_history(transaction_id, player_uuid, player_name, crate_id, key_id,
                         key_amount, opening_count, source, reward_ids, location, overflow_count, completed_at)
                     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(transaction_id) DO NOTHING
                     """)) {
                 history.setString(1, record.transactionId().toString());
                 history.setString(2, record.playerId().toString());

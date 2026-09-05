@@ -50,6 +50,8 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
             player.sendMessage(Text.parse("<white>/crates history [page]</white> <dark_gray>—</dark_gray> <gray>Review recent wins.</gray>"));
             player.sendMessage(Text.parse("<white>/crates claim [page|id]</white> <dark_gray>—</dark_gray> <gray>Deliver exact pending claims.</gray>"));
             player.sendMessage(Text.parse("<white>/crates keys</white> <dark_gray>—</dark_gray> <gray>View physical and optional virtual-key balances.</gray>"));
+            player.sendMessage(Text.parse("<white>/crates milestones <crate></white> <dark_gray>—</dark_gray> <gray>View durable opening progress.</gray>"));
+            player.sendMessage(Text.parse("<white>/crates rerolls</white> <dark_gray>—</dark_gray> <gray>View reroll-token balance.</gray>"));
             return true;
         }
         if (action.equals("history")) {
@@ -75,6 +77,17 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
         if (action.equals("keys")) {
             if (!allowed(player, "plexoncrates.use")) return denied(player);
             keys(player);
+            return true;
+        }
+        if (action.equals("milestones")) {
+            if (!allowed(player, "plexoncrates.milestones")) return denied(player);
+            String crateId = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "";
+            milestones(player, crateId);
+            return true;
+        }
+        if (action.equals("rerolls")) {
+            if (!allowed(player, "plexoncrates.rerolls")) return denied(player);
+            rerolls(player);
             return true;
         }
         if (action.equals("preview") || action.equals("open")) {
@@ -154,6 +167,57 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
         });
     }
 
+    private void milestones(Player player, String crateId) {
+        if (crateId.isBlank()) {
+            player.sendMessage(Text.parse("<gray>Use <white>/crates milestones <crate></white> to view one crate's progress.</gray>"));
+            return;
+        }
+        if (plugin.runtime().find(crateId).isEmpty()) {
+            invalidCrate(player);
+            return;
+        }
+        plugin.database().loadMilestoneState(player.getUniqueId(), crateId).whenComplete((state, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (error != null || state == null) {
+                    plugin.messages().send(player, "database-error");
+                    return;
+                }
+                int earned = milestoneCount(state.earnedPayload());
+                player.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Milestones</bold></gradient> <dark_gray>•</dark_gray> <gray>"
+                        + crateId + "</gray>"));
+                player.sendMessage(Text.parse("<gray>Openings:</gray> <white>" + state.openings()
+                        + "</white> <dark_gray>•</dark_gray> <gray>Earned:</gray> <white>" + earned
+                        + "</white>"));
+                player.sendMessage(Text.parse("<gray>Progress is updated only after a successful opening finalizes.</gray>"));
+            });
+        });
+    }
+
+    private void rerolls(Player player) {
+        plugin.database().loadRerollBalance(player.getUniqueId()).whenComplete((balance, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (error != null || balance == null) {
+                    plugin.messages().send(player, "database-error");
+                    return;
+                }
+                player.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Reroll Tokens</bold></gradient>"));
+                player.sendMessage(Text.parse("<gray>Available:</gray> <white>" + balance.balance()
+                        + "</white> <dark_gray>•</dark_gray> <gray>Reroll offers always retain an Accept action.</gray>"));
+            });
+        });
+    }
+
+    private static int milestoneCount(byte[] payload) {
+        if (payload == null || payload.length == 0) return 0;
+        int count = 0;
+        for (byte value : payload) if (value == '\n') count++;
+        return count + 1;
+    }
+
     private void keys(Player player) {
         plugin.database().loadVirtualKeyBalances(player.getUniqueId(), 50, 0).whenComplete((virtual, error) -> {
             if (!plugin.isEnabled()) return;
@@ -225,7 +289,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                                  @NotNull String alias, @NotNull String[] args) {
         if (args.length == 1) {
-            var values = new ArrayList<>(List.of("preview", "open", "history", "claim", "keys", "help"));
+            var values = new ArrayList<>(List.of("preview", "open", "history", "claim", "keys", "milestones", "rerolls", "help"));
             values.addAll(plugin.runtime().ordered().stream().map(Crate::id).toList());
             return filter(values, args[0]);
         }
@@ -234,6 +298,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("open")) return filter(List.of("1", "5", "10", "64"), args[2]);
         if (args.length == 2 && args[0].equalsIgnoreCase("history")) return filter(List.of("1", "2", "3"), args[1]);
+        if (args.length == 2 && args[0].equalsIgnoreCase("milestones")) return filter(plugin.runtime().ordered().stream().map(Crate::id).toList(), args[1]);
         return List.of();
     }
 

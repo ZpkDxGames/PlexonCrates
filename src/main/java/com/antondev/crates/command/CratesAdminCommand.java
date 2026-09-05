@@ -75,6 +75,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 case "chance", "weight" -> chance(sender, args);
                 case "givekey" -> giveKey(sender, args);
                 case "virtualgrant" -> virtualGrant(sender, args);
+                case "rerolls" -> rerolls(sender, args);
                 case "open" -> forceOpen(sender, args);
                 default -> help(sender);
             }
@@ -331,6 +332,70 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 }));
     }
 
+    private void rerolls(CommandSender sender, String[] args) {
+        if (args.length < 4) {
+            help(sender);
+            return;
+        }
+        String operation = args[1].toLowerCase(Locale.ROOT);
+        if (!List.of("give", "take", "set").contains(operation)) {
+            throw new IllegalArgumentException("Rerolls operation must be give, take, or set");
+        }
+        UUID target = resolveUuid(args[2]);
+        long requested;
+        try {
+            requested = Long.parseLong(args[3]);
+            if (requested < 0 || requested > 1_000_000_000L) throw new NumberFormatException();
+        } catch (NumberFormatException error) {
+            throw new IllegalArgumentException("Reroll amount must be between 0 and 1000000000");
+        }
+        if (operation.equals("set")) {
+            plugin.database().loadRerollBalance(target).whenComplete((current, loadError) -> runSync(() -> {
+                if (loadError != null || current == null) {
+                    plugin.configError(sender, asException(loadError == null
+                            ? new IllegalStateException("Reroll balance unavailable") : loadError));
+                    return;
+                }
+                long delta;
+                try {
+                    delta = Math.subtractExact(requested, current.balance());
+                } catch (ArithmeticException overflow) {
+                    plugin.configError(sender, overflow);
+                    return;
+                }
+                if (delta == 0) {
+                    sender.sendMessage(Text.parse("<gray>Reroll balance already equals <white>" + requested + "</white>.</gray>"));
+                    return;
+                }
+                applyRerollDelta(sender, target, delta, "ADMIN_SET");
+            }));
+            return;
+        }
+        long delta = operation.equals("give") ? requested : -requested;
+        applyRerollDelta(sender, target, delta, "ADMIN_" + operation.toUpperCase(Locale.ROOT));
+    }
+
+    private void applyRerollDelta(CommandSender sender, UUID target, long delta, String sourceType) {
+        String token = "admin-reroll:" + UUID.randomUUID();
+        java.util.concurrent.CompletableFuture<com.antondev.crates.database.DatabaseService.LedgerMutation> operation;
+        if (delta > 0) {
+            operation = plugin.database().creditRerolls(target, delta, token, sourceType, token, actorId(sender));
+        } else {
+            operation = plugin.database().debitRerolls(target, Math.abs(delta), token, sourceType, token, actorId(sender));
+        }
+        operation.whenComplete((mutation, error) -> runSync(() -> {
+            if (error != null) {
+                plugin.configError(sender, asException(error));
+                return;
+            }
+            if (!mutation.applied()) {
+                sender.sendMessage(Text.parse("<yellow>Reroll balance is too low; nothing changed.</yellow>"));
+                return;
+            }
+            sender.sendMessage(Text.parse("<green>Reroll balance updated:</green> <white>" + mutation.balanceAfter() + "</white>"));
+        }));
+    }
+
     private UUID resolveUuid(String raw) {
         try {
             return UUID.fromString(raw);
@@ -463,6 +528,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             case "additem", "addcommand", "remove", "chance", "weight" -> "plexoncrates.admin.rewards";
             case "wand", "link", "unlink", "set", "unset" -> "plexoncrates.admin.locations";
             case "givekey", "virtualgrant", "open" -> "plexoncrates.admin.give";
+            case "rerolls" -> "plexoncrates.admin.rerolls";
             case "reload", "validate", "save" -> "plexoncrates.admin.reload";
             case "backup" -> "plexoncrates.admin.backup";
             case "diagnose" -> "plexoncrates.admin.diagnose";
@@ -545,6 +611,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(Text.parse("<white>/pcrates remove [crate] [reward]</white> <dark_gray>•</dark_gray> <white>chance [crate] [reward] [percent]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates givekey <player> <key> [amount]</white>"));
         sender.sendMessage(Text.parse("<white>/pcrates virtualgrant <player|uuid> <key> <amount></white> <dark_gray>—</dark_gray> <gray>Credit the optional virtual-key wallet.</gray>"));
+        sender.sendMessage(Text.parse("<white>/pcrates rerolls <give|take|set> <player|uuid> <amount></white> <dark_gray>—</dark_gray> <gray>Adjust audited reroll tokens.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates open <player> <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Administrative keyless opening.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates validate</white> <dark_gray>•</dark_gray> <white>reload</white> <dark_gray>•</dark_gray> <white>backup</white> <dark_gray>•</dark_gray> <white>status</white> <dark_gray>•</dark_gray> <white>diagnose</white>"));
     }
@@ -555,7 +622,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (!sender.hasPermission("plexoncrates.admin") && !sender.hasPermission("plexoncrates.admin.gui")) return List.of();
         if (args.length == 1) return filter(List.of("gui", "create", "edit", "clone", "import", "export", "publish", "delete", "keys", "wand",
                 "link", "unlink", "set", "unset", "additem", "addcommand", "remove", "chance", "givekey",
-                "open", "virtualgrant", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
+                "open", "virtualgrant", "rerolls", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
         String action = args[0].toLowerCase(Locale.ROOT);
         if (args.length == 2 && List.of("edit", "export", "publish", "delete", "link", "set", "additem", "addcommand", "remove", "chance", "weight").contains(action)) {
             return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[1]);
@@ -563,7 +630,8 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (args.length == 2 && action.equals("clone")) return filter(plugin.crates().orderedAdmin().stream().map(Crate::id).toList(), args[1]);
         if (args.length == 2 && action.equals("keys")) return filter(List.of("sync"), args[1]);
         if (args.length == 2 && action.equals("wand")) return filter(plugin.crates().orderedAdmin().stream().map(Crate::id).toList(), args[1]);
-        if (args.length == 2 && List.of("givekey", "open").contains(action)) {
+        if (args.length == 2 && action.equals("rerolls")) return filter(List.of("give", "take", "set"), args[1]);
+        if (args.length == 2 && List.of("givekey", "open", "rerolls").contains(action)) {
             return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(), args[1]);
         }
         if (args.length == 3 && action.equals("givekey")) {

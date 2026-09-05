@@ -23,6 +23,46 @@ browser:
     material: BARRIER
     name: <red>Close</red>
     lore: []
+  claims:
+    slot: 20
+    material: CHEST
+    name: <yellow>Claim Inbox</yellow>
+    lore:
+    - <gray>Deliver exact overflow and recovery items.</gray>
+    - <dark_gray>Open the durable queue.</dark_gray>
+
+claims:
+  title: <gradient:#DDE5F0:#A3BEDF><bold>Claim Inbox</bold></gradient> <dark_gray>•</dark_gray> <gray>Page <page></gray>
+  size: 54
+  claim-slots: [10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39, 40, 41, 42, 43]
+  previous:
+    slot: 47
+    material: ARROW
+    name: <yellow>Previous page</yellow>
+    lore: []
+  back:
+    slot: 48
+    material: OAK_DOOR
+    name: <gray>Back to crates</gray>
+    lore: []
+  guide:
+    slot: 49
+    material: BOOK
+    name: <aqua>Claim Inbox</aqua>
+    lore:
+    - <gray>Pending on this page:</gray> <white><count></white>
+    - <gray>Click an exact item to deliver it safely.</gray>
+    - <dark_gray>Capacity is checked before anything changes.</dark_gray>
+  next:
+    slot: 51
+    material: ARROW
+    name: <yellow>Next page</yellow>
+    lore: []
+  close:
+    slot: 53
+    material: BARRIER
+    name: <red>Close</red>
+    lore: []
 
 preview:
   title: <crate> <dark_gray>•</dark_gray> <gray>Rewards</gray>

@@ -406,6 +406,67 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         }
     }
 
+    private void portable(CommandSender sender, String[] args) {
+        if (args.length < 4 || !args[1].equalsIgnoreCase("give")) {
+            help(sender);
+            return;
+        }
+        UUID target = resolveUuidAllowOffline(args[2]);
+        Crate crate = plugin.runtime().find(args[3]).orElse(null);
+        if (crate == null) {
+            invalidCrate(sender);
+            return;
+        }
+        int amount = args.length >= 5 ? positive(args[4], com.antondev.crates.service.PortableCrateService.MAX_BATCH) : 1;
+        UUID actor = actorId(sender);
+        plugin.portables().issueBatch(crate, com.antondev.crates.service.PortableCrateCodec.RevisionPolicy.LATEST_PUBLISHED,
+                0, target, actor, amount).whenComplete((items, error) -> runSync(() -> {
+            if (error != null) {
+                plugin.configError(sender, asException(error));
+                return;
+            }
+            Player online = Bukkit.getPlayer(target);
+            int delivered = 0;
+            for (ItemStack item : items) {
+                String issueId = plugin.portables().decode(item)
+                        .map(token -> token.payload().issueId().toString()).orElseGet(() -> UUID.randomUUID().toString());
+                if (online == null || !online.isOnline()) {
+                    queuePortableClaim(target, crate, item, issueId);
+                    continue;
+                }
+                var leftovers = online.getInventory().addItem(item).values();
+                if (leftovers.isEmpty()) {
+                    delivered++;
+                } else {
+                    leftovers.forEach(leftover -> queuePortableClaim(target, crate, leftover, issueId));
+                }
+            }
+            sender.sendMessage(Text.parse("<green>Issued <white>" + amount + "</white> portable crate item"
+                    + (amount == 1 ? "" : "s") + " for <white>" + crate.id() + "</white>."
+                    + (delivered < amount ? " Undelivered items were placed in the Claim Inbox." : "")));
+        }));
+    }
+
+    private void queuePortableClaim(UUID target, Crate crate, ItemStack item, String issueId) {
+        String token = "portable-claim:" + issueId;
+        plugin.claims().enqueueItem(target, "PORTABLE", issueId, crate.id(), null, token, item)
+                .whenComplete((ignored, error) -> {
+                    if (error != null) plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                            "Could not persist portable issuance claim " + issueId, error);
+                });
+    }
+
+    private UUID resolveUuidAllowOffline(String raw) {
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ignored) {
+            Player online = Bukkit.getPlayerExact(raw);
+            if (online == null) throw new IllegalArgumentException(
+                    "Offline portable grants require a player UUID");
+            return online.getUniqueId();
+        }
+    }
+
     private void forceOpen(CommandSender sender, String[] args) {
         if (args.length < 3) {
             help(sender);
@@ -527,7 +588,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             case "keys" -> "plexoncrates.admin.keys";
             case "additem", "addcommand", "remove", "chance", "weight" -> "plexoncrates.admin.rewards";
             case "wand", "link", "unlink", "set", "unset" -> "plexoncrates.admin.locations";
-            case "givekey", "virtualgrant", "open" -> "plexoncrates.admin.give";
+            case "givekey", "virtualgrant", "portable", "open" -> "plexoncrates.admin.give";
             case "rerolls" -> "plexoncrates.admin.rerolls";
             case "reload", "validate", "save" -> "plexoncrates.admin.reload";
             case "backup" -> "plexoncrates.admin.backup";
@@ -631,11 +692,15 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (args.length == 2 && action.equals("keys")) return filter(List.of("sync"), args[1]);
         if (args.length == 2 && action.equals("wand")) return filter(plugin.crates().orderedAdmin().stream().map(Crate::id).toList(), args[1]);
         if (args.length == 2 && action.equals("rerolls")) return filter(List.of("give", "take", "set"), args[1]);
-        if (args.length == 2 && List.of("givekey", "open", "rerolls").contains(action)) {
+        if (args.length == 2 && action.equals("portable")) return filter(List.of("give"), args[1]);
+        if (args.length == 2 && List.of("givekey", "open", "rerolls", "portable").contains(action)) {
             return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(), args[1]);
         }
         if (args.length == 3 && action.equals("givekey")) {
             return filter(plugin.crates().ordered().stream().map(Crate::keyId).distinct().toList(), args[2]);
+        }
+        if (args.length == 3 && action.equals("portable")) {
+            return filter(plugin.runtime().ordered().stream().map(Crate::id).toList(), args[2]);
         }
         if (args.length == 3 && action.equals("open")) {
             return filter(plugin.runtime().ordered().stream().map(Crate::id).toList(), args[2]);

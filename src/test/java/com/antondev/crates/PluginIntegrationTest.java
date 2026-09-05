@@ -9,6 +9,7 @@ import com.antondev.crates.domain.crate.CrateState;
 import java.nio.file.Files;
 import java.util.List;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
@@ -187,6 +188,56 @@ class PluginIntegrationTest {
     }
 
     @Test
+    void ordinaryPreviewIsAccurateNonConsumingAndListsEveryAcceptedKey() {
+        var player = server.addPlayer("PreviewUser");
+        player.setOp(true);
+        World world = server.getWorld("Survival_World");
+        assertTrue(world != null);
+        player.teleport(world.getSpawnLocation());
+        var source = plugin.runtime().find("basic").orElseThrow();
+        var crate = new com.antondev.crates.model.Crate(
+                source.id(), source.state(), source.displayOrder(), source.displayName(), source.description(),
+                source.icon(), source.permission(), source.worlds(), source.excludedWorlds(),
+                List.of("basic", "rare"), source.keyCost(), source.cooldownSeconds(), source.bulkEnabled(),
+                source.bulkMaximum(), source.animation(), source.hologramLines(), source.broadcast(),
+                source.pity(), source.rewards());
+        plugin.keys().give(player, "basic", 2);
+        plugin.keys().give(player, "rare", 4);
+        var firstReward = crate.orderedRewards().getFirst();
+        var originalLore = firstReward.displayCopy().getItemMeta().lore();
+
+        plugin.menus().openPreview(player, crate, 0, false);
+
+        assertTrue(player.getOpenInventory().getTopInventory().getHolder()
+                instanceof com.antondev.crates.gui.MenuHolder holder
+                && holder.kind() == com.antondev.crates.gui.MenuHolder.Kind.PREVIEW);
+        ItemStack rewardDisplay = player.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slots("preview.reward-slots").getFirst());
+        assertTrue(rewardDisplay != null);
+        String rewardLore = plainLore(rewardDisplay);
+        assertTrue(rewardLore.contains("Eligible chance » 28%"));
+        assertTrue(rewardLore.contains("Base chance » 28%"));
+        ItemStack open = player.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("preview.open"));
+        assertTrue(open != null);
+        String paymentLore = plainLore(open).toLowerCase(java.util.Locale.ROOT);
+        assertTrue(paymentLore.contains("basic"));
+        assertTrue(paymentLore.contains("2 available"));
+        assertTrue(paymentLore.contains("rare"));
+        assertTrue(paymentLore.contains("4 available"));
+        assertEquals(2, plugin.keys().count(player, "basic"));
+        assertEquals(4, plugin.keys().count(player, "rare"));
+        assertEquals(0, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertEquals(originalLore, firstReward.displayCopy().getItemMeta().lore());
+
+        player.closeInventory();
+        server.getScheduler().performTicks(2);
+        assertEquals(2, plugin.keys().count(player, "basic"));
+        assertEquals(4, plugin.keys().count(player, "rare"));
+        assertEquals(0, plugin.statistics().player(player.getUniqueId(), crate.id()));
+    }
+
+    @Test
     void crateExportImportsAsAValidatedDraftWithoutChangingTheSource() throws Exception {
         var exportDirectory = plugin.getDataFolder().toPath().resolve("exports");
         var exported = plugin.crates().exportDefinition("basic", exportDirectory);
@@ -214,5 +265,12 @@ class PluginIntegrationTest {
             plugin.database().awaitIdle().join();
             server.getScheduler().performTicks(2);
         }
+    }
+
+    private static String plainLore(ItemStack item) {
+        var lore = item.getItemMeta().lore();
+        if (lore == null) return "";
+        return lore.stream().map(PlainTextComponentSerializer.plainText()::serialize)
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 }

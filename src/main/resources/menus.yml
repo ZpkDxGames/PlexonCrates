@@ -78,8 +78,9 @@ preview:
     name: <green><bold>Open <crate></bold></green>
     lore:
     - ''
-    - <gray>Keys available</gray> <dark_gray>»</dark_gray> <white><keys></white>
-    - <gray>Required key</gray> <dark_gray>»</dark_gray> <key>
+    - <gray>Physical keys available</gray> <dark_gray>»</dark_gray> <white><keys></white>
+    - <gray>Accepted key</gray> <dark_gray>»</dark_gray> <key>
+    - <gray>Cost per opening</gray> <dark_gray>»</dark_gray> <white><key_cost></white>
     - ''
     - <green>Click to open one.</green>
   previous:

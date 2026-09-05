@@ -60,7 +60,7 @@ public final class MenuService implements Listener {
             Crate crate = crates.get(index);
             ItemStack icon = crate.iconCopy();
             appendLore(icon, List.of(Component.empty(),
-                    Text.parse("<gray>Keys available</gray> <dark_gray>»</dark_gray> <white>" + plugin.keys().count(player, crate.keyId()) + "</white>"),
+                    Text.parse("<gray>Accepted keys available</gray> <dark_gray>»</dark_gray> <white>" + physicalKeyCount(player, crate) + "</white>"),
                     Text.parse("<gray>Your openings</gray> <dark_gray>»</dark_gray> <white>" + plugin.statistics().player(player.getUniqueId(), crate.id()) + "</white>")));
             inventory.setItem(slots.get(index), icon);
         }
@@ -177,8 +177,9 @@ public final class MenuService implements Listener {
             inventory.setItem(rewardSlots.get(slotIndex), display);
         }
         ItemStack open = menus.item("preview.open", Text.component("crate", crate.displayName()),
-                Text.value("keys", plugin.keys().count(player, crate.keyId())),
-                Text.component("key", keyName(crate)));
+                Text.value("keys", physicalKeyCount(player, crate)),
+                Text.component("key", keyName(crate)),
+                Text.value("key_cost", crate.keyCost()));
         if (portable) {
             open.editMeta(meta -> meta.lore(List.of(
                     Component.empty(),
@@ -186,6 +187,8 @@ public final class MenuService implements Listener {
                     Text.parse("<gray>No physical key is required.</gray>"),
                     Component.empty(),
                     Text.parse("<green>Click to confirm and open one.</green>"))));
+        } else {
+            appendPhysicalPaymentSummary(open, player, crate);
         }
         inventory.setItem(menus.slot("preview.open"), open);
         if (crate.pity().enabled()) {
@@ -937,11 +940,41 @@ public final class MenuService implements Listener {
         });
     }
 
+    private long physicalKeyCount(Player player, Crate crate) {
+        long count = 0;
+        for (String keyId : crate.acceptedKeyIds()) {
+            count = Math.min(Integer.MAX_VALUE, count + plugin.keys().count(player, keyId));
+        }
+        return count;
+    }
+
+    private void appendPhysicalPaymentSummary(ItemStack item, Player player, Crate crate) {
+        var lore = new ArrayList<Component>();
+        lore.add(Component.empty());
+        lore.add(Text.parse("<gray>Accepted physical sources</gray>"));
+        for (String keyId : crate.acceptedKeyIds()) {
+            lore.add(Text.parse("<dark_gray>•</dark_gray> <key> <dark_gray>»</dark_gray> <white><count> available</white>",
+                    Text.component("key", keyName(keyId)),
+                    Text.value("count", plugin.keys().count(player, keyId))));
+        }
+        lore.add(Text.parse("<gray>Cost per opening</gray> <dark_gray>»</dark_gray> <white>" + crate.keyCost() + "</white>"));
+        appendLore(item, lore);
+    }
+
     private Component keyName(Crate crate) {
-        return plugin.keys().template(crate.keyId()).map(item -> {
+        Component names = Component.empty();
+        for (int index = 0; index < crate.acceptedKeyIds().size(); index++) {
+            if (index > 0) names = names.append(Text.parse("<dark_gray> / </dark_gray>"));
+            names = names.append(keyName(crate.acceptedKeyIds().get(index)));
+        }
+        return crate.acceptedKeyIds().isEmpty() ? Text.parse("<white>crate key</white>") : names;
+    }
+
+    private Component keyName(String keyId) {
+        return plugin.keys().template(keyId).map(item -> {
             Component name = item.getItemMeta().displayName();
-            return name == null ? Text.parse("<white>" + crate.keyId() + " key</white>") : name;
-        }).orElseGet(() -> Text.parse("<white>" + crate.keyId() + " key</white>"));
+            return name == null ? Text.parse("<white>" + keyId + " key</white>") : name;
+        }).orElseGet(() -> Text.parse("<white>" + keyId + " key</white>"));
     }
 
     private static ItemStack randomDisplay(List<CrateReward> rewards) {

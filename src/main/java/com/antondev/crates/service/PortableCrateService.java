@@ -43,9 +43,16 @@ public final class PortableCrateService {
         tokenKey = new NamespacedKey(plugin, "portable_crate_token");
     }
 
-    /** Starts one durable secret load/generation operation during plugin enable. */
+    /** Recovers interrupted reservations, then starts one durable secret load during plugin enable. */
     public void start() {
-        secretLoad = plugin.database().loadOrCreatePortableSecret().thenApply(value -> {
+        secretLoad = plugin.database().recoverPortableReservations().thenCompose(recovered -> {
+            if (recovered > 0) {
+                plugin.getLogger().warning("Released " + recovered
+                        + " interrupted portable-crate reservation"
+                        + (recovered == 1 ? "" : "s") + "; no portable items were consumed.");
+            }
+            return plugin.database().loadOrCreatePortableSecret();
+        }).thenApply(value -> {
             byte[] copy = value.clone();
             secret.set(copy);
             return copy.clone();

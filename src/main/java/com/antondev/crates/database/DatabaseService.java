@@ -1679,6 +1679,24 @@ public final class DatabaseService implements AutoCloseable {
         });
     }
 
+    /**
+     * Releases pre-consumption reservations left by an interrupted server.
+     * RESERVED means the durable consume transition never happened, so the
+     * authentic item can safely be attempted again after restart.
+     */
+    public CompletableFuture<Integer> recoverPortableReservations() {
+        return submitTransactionQuery("recover portable crate reservations", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE portable_crate_issue
+                    SET state='UNUSED', reservation_token=NULL, updated_at=?
+                    WHERE state='RESERVED'
+                    """)) {
+                statement.setLong(1, System.currentTimeMillis());
+                return statement.executeUpdate();
+            }
+        });
+    }
+
     public CompletableFuture<RerollBalance> loadRerollBalance(UUID playerId) {
         UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
         return submitQuery("load reroll balance", connection -> loadRerollBalance(connection, owner));

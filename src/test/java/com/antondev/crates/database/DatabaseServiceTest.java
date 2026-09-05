@@ -291,6 +291,58 @@ class DatabaseServiceTest {
     }
 
     @Test
+    void portableSecretAndSingleUseIssuanceSurviveRestart() throws Exception {
+        UUID issueId = UUID.randomUUID();
+        UUID player = UUID.randomUUID();
+        UUID actor = UUID.randomUUID();
+        Instant issuedAt = Instant.parse("2026-09-04T12:00:00Z");
+        byte[] secret;
+
+        try (DatabaseService database = database()) {
+            assertFalse(database.portableSecretPresent().join());
+            secret = database.loadOrCreatePortableSecret().join();
+            assertEquals(32, secret.length);
+            assertTrue(database.portableSecretPresent().join());
+            assertArrayEquals(secret, database.loadOrCreatePortableSecret().join());
+
+            var definition = new DatabaseService.DefinitionBundle("portable", "PUBLISHED", 10,
+                    "Portable", "Portable restart test", bytes("icon"), bytes("payload"),
+                    List.of(), List.of(), List.of(), 0, issuedAt, issuedAt);
+            var draft = database.createOrResumeDefinitionDraft(
+                    "CRATE", "portable", actor, "Admin", 0, bytes("draft")).join();
+            database.publishDefinitionDraft(new DatabaseService.PublishRequest(
+                    draft.draftId(), draft.revision(), draft.leaseToken(), actor, "Admin",
+                    draft.payload(), definition, issuedAt)).join();
+
+            var issue = new DatabaseService.PortableIssue(
+                    issueId, "portable", "LATEST_PUBLISHED", 0, player, actor,
+                    1, "UNUSED", null, issuedAt, issuedAt);
+            assertEquals("UNUSED", database.createPortableIssue(issue).join().state());
+            assertEquals("RESERVED", database.reservePortableIssue(issueId, "before-restart")
+                    .join().orElseThrow().state());
+            assertTrue(database.reservePortableIssue(issueId, "competing-attempt").join().isEmpty());
+        }
+
+        try (DatabaseService database = database()) {
+            assertArrayEquals(secret, database.loadOrCreatePortableSecret().join());
+            assertEquals(1, database.recoverPortableReservations().join());
+            assertEquals("UNUSED", database.loadPortableIssue(issueId).join().orElseThrow().state());
+
+            assertEquals("RESERVED", database.reservePortableIssue(issueId, "after-restart")
+                    .join().orElseThrow().state());
+            assertTrue(database.consumePortableIssue(issueId, "wrong-token").join().isEmpty());
+            assertEquals("CONSUMED", database.consumePortableIssue(issueId, "after-restart")
+                    .join().orElseThrow().state());
+            assertTrue(database.reservePortableIssue(issueId, "replay").join().isEmpty());
+
+            var counts = database.portableIssueCounts().join();
+            assertEquals(0, counts.unused());
+            assertEquals(0, counts.reserved());
+            assertEquals(1, counts.consumed());
+        }
+    }
+
+    @Test
     void archivedCanonicalDefinitionCanBeDeletedTransactionally() throws Exception {
         UUID editor = UUID.randomUUID();
         Instant now = Instant.parse("2026-09-04T12:00:00Z");

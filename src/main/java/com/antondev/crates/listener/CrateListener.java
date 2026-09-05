@@ -66,6 +66,10 @@ public final class CrateListener implements Listener {
                     plugin.messages().send(event.getPlayer(), "no-permission");
                     return;
                 }
+                if (crate.paymentPolicy() == com.antondev.crates.domain.key.KeyPaymentPolicy.PLAYER_CHOICE) {
+                    plugin.menus().openPreview(event.getPlayer(), crate, 0, false);
+                    return;
+                }
                 int amount = event.getPlayer().isSneaking() && plugin.settings().sneakBulk()
                         ? plugin.openings().bulkAmount(event.getPlayer(), crate) : 1;
                 plugin.openings().open(event.getPlayer(), crate, Math.max(1, amount), OpenSource.BLOCK,
@@ -76,7 +80,8 @@ public final class CrateListener implements Listener {
     }
 
     private void handlePortable(org.bukkit.entity.Player player, org.bukkit.inventory.ItemStack item) {
-        if (plugin.portables() == null || !plugin.portables().ready()) {
+        if (!plugin.settings().portableCratesEnabled()
+                || plugin.portables() == null || !plugin.portables().ready()) {
             plugin.messages().send(player, "opening-state-changed");
             return;
         }

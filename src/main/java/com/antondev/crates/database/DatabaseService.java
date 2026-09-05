@@ -1288,19 +1288,30 @@ public final class DatabaseService implements AutoCloseable {
     public CompletableFuture<LedgerMutation> creditVirtualKeys(
             UUID playerId, String keyId, long amount, String idempotencyToken,
             String sourceType, String sourceId, UUID actorId) {
-        return mutateVirtualKeys(playerId, keyId, amount, idempotencyToken, sourceType, sourceId, actorId, true);
+        return mutateVirtualKeys(playerId, keyId, amount, idempotencyToken, sourceType, sourceId,
+                actorId, true, -1);
     }
 
     /** Debits virtual keys only when the full amount is available; no partial debit occurs. */
     public CompletableFuture<LedgerMutation> debitVirtualKeys(
             UUID playerId, String keyId, long amount, String idempotencyToken,
             String sourceType, String sourceId, UUID actorId) {
-        return mutateVirtualKeys(playerId, keyId, amount, idempotencyToken, sourceType, sourceId, actorId, false);
+        return debitVirtualKeys(playerId, keyId, amount, idempotencyToken, sourceType, sourceId,
+                actorId, -1);
+    }
+
+    /** Debits only if the balance still has the revision frozen in the opening journal. */
+    public CompletableFuture<LedgerMutation> debitVirtualKeys(
+            UUID playerId, String keyId, long amount, String idempotencyToken,
+            String sourceType, String sourceId, UUID actorId, long expectedRevision) {
+        if (expectedRevision < -1) throw new IllegalArgumentException("Expected virtual-key revision is invalid");
+        return mutateVirtualKeys(playerId, keyId, amount, idempotencyToken, sourceType, sourceId,
+                actorId, false, expectedRevision);
     }
 
     private CompletableFuture<LedgerMutation> mutateVirtualKeys(
             UUID playerId, String keyId, long amount, String idempotencyToken,
-            String sourceType, String sourceId, UUID actorId, boolean credit) {
+            String sourceType, String sourceId, UUID actorId, boolean credit, long expectedRevision) {
         UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
         String key = requiredText(keyId, "keyId");
         if (amount < 1) throw new IllegalArgumentException("Virtual-key amount must be positive");
@@ -1319,6 +1330,9 @@ public final class DatabaseService implements AutoCloseable {
                 return new LedgerMutation(true, existing.balanceAfter(), existing.entryId(), existing.delta());
             }
             VirtualKeyBalance current = loadVirtualKeyBalance(connection, owner, key);
+            if (!credit && expectedRevision >= 0 && current.revision() != expectedRevision) {
+                return new LedgerMutation(false, current.balance(), null, 0);
+            }
             long next;
             if (credit) next = Math.addExact(current.balance(), amount);
             else {

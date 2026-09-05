@@ -7,6 +7,8 @@ import com.antondev.crates.api.event.CrateDefinitionChangeEvent;
 import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.domain.crate.AnimationType;
 import com.antondev.crates.domain.crate.CrateState;
+import com.antondev.crates.domain.key.KeyPaymentPolicy;
+import com.antondev.crates.domain.opening.OpeningMode;
 import com.antondev.crates.domain.draft.DefinitionDraft;
 import com.antondev.crates.domain.reward.PityPolicy;
 import com.antondev.crates.domain.reward.RewardLimits;
@@ -336,9 +338,12 @@ public final class CrateRegistry {
         yaml.set("access.excluded-worlds", List.of());
         yaml.set("keys.cost", 1);
         yaml.set("keys.accepted", List.of());
+        yaml.set("keys.payment-policy", "PHYSICAL_ONLY");
+        yaml.set("keys.allow-mixed-payment", false);
         yaml.set("opening.cooldown-seconds", 1);
         yaml.set("opening.bulk-enabled", true);
         yaml.set("opening.bulk-maximum", 64);
+        yaml.set("opening.mode", "RANDOM");
         yaml.set("opening.animation", "ROULETTE");
         yaml.set("opening.broadcast", "");
         yaml.set("hologram.enabled", true);
@@ -462,6 +467,16 @@ public final class CrateRegistry {
         mutate(crateId, yaml -> {
             yaml.set("keys.accepted", normalized);
             yaml.set("keys.cost", cost);
+            touch(yaml, editor);
+        });
+    }
+
+    public void setPaymentPolicy(String crateId, KeyPaymentPolicy policy, boolean allowMixed,
+                                 String editor) throws Exception {
+        java.util.Objects.requireNonNull(policy, "policy");
+        mutate(crateId, yaml -> {
+            yaml.set("keys.payment-policy", policy.name());
+            yaml.set("keys.allow-mixed-payment", allowMixed);
             touch(yaml, editor);
         });
     }
@@ -980,12 +995,20 @@ public final class CrateRegistry {
         List<String> acceptedKeys = yaml.getStringList("keys.accepted").stream().map(CrateRegistry::normalize).distinct().toList();
         for (String key : acceptedKeys) if (!validId(key)) throw path(file, "keys.accepted contains invalid ID " + key);
         int keyCost = integer(yaml.get("keys.cost"), file, "keys.cost", 0, 64);
+        KeyPaymentPolicy paymentPolicy = enumValue(KeyPaymentPolicy.class,
+                yaml.getString("keys.payment-policy", "PHYSICAL_ONLY"), file, "keys.payment-policy");
+        boolean mixedPayment = yaml.getBoolean("keys.allow-mixed-payment", false);
         if (state == CrateState.PUBLISHED && keyCost > 0 && acceptedKeys.isEmpty()) {
             throw path(file, "published crate needs an accepted key");
         }
         int cooldown = integer(yaml.get("opening.cooldown-seconds"), file, "opening.cooldown-seconds", 0, 86_400);
         boolean bulkEnabled = yaml.getBoolean("opening.bulk-enabled", true);
         int bulkMaximum = integer(yaml.get("opening.bulk-maximum"), file, "opening.bulk-maximum", 1, 10_000);
+        OpeningMode openingMode = enumValue(OpeningMode.class,
+                yaml.getString("opening.mode", "RANDOM"), file, "opening.mode");
+        if (openingMode == OpeningMode.SELECTIVE && pityEnabled(yaml)) {
+            throw path(file, "selective crates cannot enable pity");
+        }
         AnimationType animation = enumValue(AnimationType.class, yaml.getString("opening.animation", "ROULETTE"), file, "opening.animation");
         String crateBroadcast = yaml.getString("opening.broadcast", yaml.getString("broadcast", ""));
         Text.parse(crateBroadcast);
@@ -1020,7 +1043,12 @@ public final class CrateRegistry {
             throw path(file, "published reward chances must total exactly 100.00%");
         }
         return new Crate(id, state, displayOrder, display, description, icon, permission, worlds, excludedWorlds,
-                acceptedKeys, keyCost, cooldown, bulkEnabled, bulkMaximum, animation, hologram, crateBroadcast, pity, rewards);
+                acceptedKeys, keyCost, paymentPolicy, mixedPayment, cooldown, bulkEnabled, bulkMaximum,
+                openingMode, animation, hologram, crateBroadcast, pity, rewards);
+    }
+
+    private static boolean pityEnabled(YamlConfiguration yaml) {
+        return yaml.getBoolean("pity.enabled", false);
     }
 
     private static Map<String, CrateReward> parseRewards(Path file, YamlConfiguration yaml) {

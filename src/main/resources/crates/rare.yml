@@ -12,7 +12,10 @@ access:
 keys:
   cost: 1
   accepted: [rare]
+  payment-policy: PHYSICAL_ONLY
+  allow-mixed-payment: false
 opening:
+  mode: RANDOM
   cooldown-seconds: 1
   bulk-enabled: true
   bulk-maximum: 64

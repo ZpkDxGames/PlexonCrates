@@ -12,7 +12,10 @@ access:
 keys:
   cost: 1
   accepted: [epic]
+  payment-policy: PHYSICAL_ONLY
+  allow-mixed-payment: false
 opening:
+  mode: RANDOM
   cooldown-seconds: 2
   bulk-enabled: true
   bulk-maximum: 64

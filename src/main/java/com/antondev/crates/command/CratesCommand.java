@@ -81,12 +81,14 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
         }
         if (action.equals("milestones")) {
             if (!allowed(player, "plexoncrates.milestones")) return denied(player);
+            if (!plugin.settings().milestonesEnabled()) return disabled(player);
             String crateId = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "";
             milestones(player, crateId);
             return true;
         }
         if (action.equals("rerolls")) {
             if (!allowed(player, "plexoncrates.rerolls")) return denied(player);
+            if (!plugin.settings().rerollsEnabled()) return disabled(player);
             rerolls(player);
             return true;
         }
@@ -107,7 +109,13 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
             int amount = args.length >= 3 ? amount(player, args[2]) : 1;
-            if (amount > 0) plugin.openings().open(player, crate, amount, OpenSource.COMMAND, null);
+            if (amount > 0) {
+                if (crate.paymentPolicy() == com.antondev.crates.domain.key.KeyPaymentPolicy.PLAYER_CHOICE) {
+                    plugin.menus().openPreview(player, crate, 0, false);
+                } else {
+                    plugin.openings().open(player, crate, amount, OpenSource.COMMAND, null);
+                }
+            }
             return true;
         }
         if (!allowed(player, "plexoncrates.preview")) return denied(player);
@@ -219,6 +227,14 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
     }
 
     private void keys(Player player) {
+        if (!plugin.settings().virtualKeyWalletEnabled()) {
+            player.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Physical Key Balances</bold></gradient>"));
+            plugin.keys().definitions().stream()
+                    .sorted(java.util.Comparator.comparing(definition -> definition.id()))
+                    .forEach(definition -> player.sendMessage(Text.parse("<gray>Physical " + definition.id()
+                            + ":</gray> <white>" + plugin.keys().count(player, definition.id()) + "</white>")));
+            return;
+        }
         plugin.database().loadVirtualKeyBalances(player.getUniqueId(), 50, 0).whenComplete((virtual, error) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
@@ -267,6 +283,11 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
 
     private boolean denied(Player player) {
         plugin.messages().send(player, "no-permission");
+        return true;
+    }
+
+    private boolean disabled(Player player) {
+        plugin.messages().send(player, "disabled");
         return true;
     }
 

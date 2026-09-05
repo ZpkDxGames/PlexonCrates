@@ -10,6 +10,7 @@ import com.antondev.crates.model.CrateReward;
 import com.antondev.crates.service.ChanceAllocator;
 import com.antondev.crates.service.CrateRegistry;
 import com.antondev.crates.service.DraftSessionService;
+import com.antondev.crates.service.KeyPaymentPlanner;
 import com.antondev.crates.service.RewardSelector;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import net.kyori.adventure.text.Component;
@@ -201,6 +203,10 @@ public final class MenuService implements Listener {
         if (page > 0) inventory.setItem(menus.slot("preview.previous"), menus.item("preview.previous"));
         if (page + 1 < pages) inventory.setItem(menus.slot("preview.next"), menus.item("preview.next"));
         open(player, inventory);
+        if (!portable && plugin.settings().virtualKeyWalletEnabled()
+                && crate.paymentPolicy() != com.antondev.crates.domain.key.KeyPaymentPolicy.PHYSICAL_ONLY) {
+            appendVirtualPaymentSummary(player, crate, holder, inventory);
+        }
     }
 
     public void openAdmin(Player player) {
@@ -395,7 +401,12 @@ public final class MenuService implements Listener {
                     openPreview(player, crate, 0, false);
                     return;
                 }
-                if (slot == menus.slot("preview.open")) plugin.openings().open(player, crate, 1, false);
+                if (slot == menus.slot("preview.open")) {
+                    KeyPaymentPlanner.Preference preference = event.isRightClick()
+                            ? KeyPaymentPlanner.Preference.VIRTUAL : KeyPaymentPlanner.Preference.PHYSICAL;
+                    plugin.openings().open(player, crate, 1,
+                            com.antondev.crates.domain.opening.OpenSource.GUI, null, preference);
+                }
                 else if (slot == menus.slot("preview.back")) {
                     if (holder.adminOrigin()) openEditor(player, crate); else openBrowser(player);
                 } else if (slot == menus.slot("preview.previous")) openPreview(player, crate, holder.page() - 1, holder.adminOrigin());
@@ -958,7 +969,49 @@ public final class MenuService implements Listener {
                     Text.value("count", plugin.keys().count(player, keyId))));
         }
         lore.add(Text.parse("<gray>Cost per opening</gray> <dark_gray>»</dark_gray> <white>" + crate.keyCost() + "</white>"));
+        lore.add(Text.parse("<gray>Payment policy</gray> <dark_gray>»</dark_gray> <white>"
+                + crate.paymentPolicy().name().toLowerCase(Locale.ROOT).replace('_', ' ') + "</white>"));
+        if (crate.paymentPolicy() == com.antondev.crates.domain.key.KeyPaymentPolicy.PLAYER_CHOICE) {
+            lore.add(Text.parse("<yellow>Left-click physical • Right-click virtual</yellow>"));
+        } else if (crate.paymentPolicy() != com.antondev.crates.domain.key.KeyPaymentPolicy.PHYSICAL_ONLY
+                && !plugin.settings().virtualKeyWalletEnabled()) {
+            lore.add(Text.parse("<red>The virtual-key wallet is disabled.</red>"));
+        }
         appendLore(item, lore);
+    }
+
+    private void appendVirtualPaymentSummary(Player player, Crate crate, MenuHolder holder,
+                                             Inventory inventory) {
+        var futures = crate.acceptedKeyIds().stream()
+                .map(keyId -> plugin.database().loadVirtualKeyBalance(player.getUniqueId(), keyId))
+                .toList();
+        CompletableFuture<?>[] all = futures.toArray(CompletableFuture[]::new);
+        CompletableFuture.allOf(all).whenComplete((ignored, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline() || player.getOpenInventory().getTopInventory().getHolder() != holder) return;
+                ItemStack current = inventory.getItem(plugin.menusConfig().slot("preview.open"));
+                if (current == null) return;
+                if (error != null) {
+                    appendLore(current, List.of(Text.parse("<red>Virtual balances are temporarily unavailable.</red>")));
+                } else {
+                    var lore = new ArrayList<Component>();
+                    lore.add(Component.empty());
+                    lore.add(Text.parse("<gray>Virtual balances</gray>"));
+                    for (int index = 0; index < crate.acceptedKeyIds().size(); index++) {
+                        String keyId = crate.acceptedKeyIds().get(index);
+                        DatabaseService.VirtualKeyBalance balance = futures.get(index).join();
+                        lore.add(Text.parse("<dark_gray>•</dark_gray> <key> <dark_gray>»</dark_gray> <white><count> available</white>",
+                                Text.component("key", keyName(keyId)), Text.value("count", balance.balance())));
+                    }
+                    if (crate.mixedPayment()) {
+                        lore.add(Text.parse("<aqua>Mixed physical/virtual payment is enabled.</aqua>"));
+                    }
+                    appendLore(current, lore);
+                }
+                inventory.setItem(plugin.menusConfig().slot("preview.open"), current);
+            });
+        });
     }
 
     private Component keyName(Crate crate) {

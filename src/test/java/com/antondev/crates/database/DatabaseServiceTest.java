@@ -291,6 +291,24 @@ class DatabaseServiceTest {
     }
 
     @Test
+    void virtualKeyDebitRejectsAChangedFrozenRevision() throws Exception {
+        UUID player = UUID.randomUUID();
+        try (DatabaseService database = database()) {
+            database.creditVirtualKeys(player, "basic", 5, "revision-grant-1",
+                    "TEST", "revision", null).join();
+            long frozen = database.loadVirtualKeyBalance(player, "basic").join().revision();
+            database.creditVirtualKeys(player, "basic", 1, "revision-grant-2",
+                    "TEST", "revision", null).join();
+
+            var rejected = database.debitVirtualKeys(player, "basic", 1,
+                    "revision-debit", "OPENING", "tx-revision", null, frozen).join();
+
+            assertFalse(rejected.applied());
+            assertEquals(6, database.loadVirtualKeyBalance(player, "basic").join().balance());
+        }
+    }
+
+    @Test
     void portableSecretAndSingleUseIssuanceSurviveRestart() throws Exception {
         UUID issueId = UUID.randomUUID();
         UUID outstandingIssueId = UUID.randomUUID();

@@ -6,6 +6,7 @@ invalid-world: <yellow>Crates cannot be opened in this world.</yellow>
 invalid-crate: <red>Unknown crate.</red> <gray>Choose:</gray> <white><crates></white>
 invalid-amount: <red>Enter a whole amount between 1 and <maximum>.</red>
 no-key: <yellow>You need a <key> <yellow>to open this crate.</yellow> <click:run_command:/keys><aqua>[/keys]</aqua></click>
+insufficient-payment: <yellow>You do not have enough accepted physical or virtual <key><yellow>.</yellow> <click:run_command:/crates keys><aqua>[View keys]</aqua></click>
 no-eligible-rewards: <red>This crate has no rewards you are eligible to receive. Your key was not consumed.</red>
 inventory-full: <yellow>Your inventory does not have enough space for this reward. Your key was not consumed.</yellow>
 already-opening: <yellow>Your previous crate transaction is still being prepared.</yellow>

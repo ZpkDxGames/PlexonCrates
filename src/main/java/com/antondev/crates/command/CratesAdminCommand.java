@@ -304,6 +304,10 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
     }
 
     private void virtualGrant(CommandSender sender, String[] args) {
+        if (!plugin.settings().virtualKeyWalletEnabled()) {
+            plugin.messages().send(sender, "disabled");
+            return;
+        }
         if (args.length < 4) {
             help(sender);
             return;
@@ -333,6 +337,10 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
     }
 
     private void rerolls(CommandSender sender, String[] args) {
+        if (!plugin.settings().rerollsEnabled()) {
+            plugin.messages().send(sender, "disabled");
+            return;
+        }
         if (args.length < 4) {
             help(sender);
             return;
@@ -407,6 +415,10 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
     }
 
     private void portable(CommandSender sender, String[] args) {
+        if (!plugin.settings().portableCratesEnabled()) {
+            plugin.messages().send(sender, "disabled");
+            return;
+        }
         if (args.length < 4 || !args[1].equalsIgnoreCase("give")) {
             help(sender);
             return;

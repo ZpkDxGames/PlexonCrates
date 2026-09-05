@@ -113,6 +113,54 @@ class OpeningPipelineIntegrationTest {
     }
 
     @Test
+    void insufficientMassPaymentConsumesNothingInsteadOfSilentlyOpeningPartially() {
+        var player = server.addPlayer("PartialBatch");
+        player.setOp(false);
+        var crate = plugin.crates().find("basic").orElseThrow();
+        plugin.keys().give(player, crate.keyId(), 1);
+
+        assertFalse(plugin.openings().open(player, crate, 2, false));
+
+        assertEquals(1, plugin.keys().count(player, crate.keyId()));
+        assertEquals(0, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertTrue(plugin.database().history(player.getUniqueId(), 10, 0).isEmpty());
+    }
+
+    @Test
+    void virtualOnlyOpeningDebitsTheFrozenRevisionAndDeliversOnce() throws Exception {
+        var crate = enableVirtualWallet("VIRTUAL_ONLY", false);
+        var player = server.addPlayer("VirtualOnly");
+        player.setOp(false);
+        plugin.database().creditVirtualKeys(player.getUniqueId(), "basic", 2,
+                "test-grant", "TEST", "virtual-only", null).join();
+
+        assertTrue(plugin.openings().open(player, crate, 1, false));
+        awaitVirtualOpeningCommit();
+
+        assertEquals(1, plugin.database().loadVirtualKeyBalance(player.getUniqueId(), "basic").join().balance());
+        assertEquals(0, plugin.keys().count(player, "basic"));
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertEquals(1, plugin.database().history(player.getUniqueId(), 10, 0).size());
+    }
+
+    @Test
+    void cancelledVirtualOpeningDebitsNothing() throws Exception {
+        var crate = enableVirtualWallet("VIRTUAL_ONLY", false);
+        var player = server.addPlayer("VirtualCancelled");
+        player.setOp(false);
+        plugin.database().creditVirtualKeys(player.getUniqueId(), "basic", 1,
+                "test-cancel-grant", "TEST", "virtual-cancel", null).join();
+        server.getPluginManager().registerEvents(new Canceller(), plugin);
+
+        assertTrue(plugin.openings().open(player, crate, 1, false));
+        awaitVirtualOpeningCommit();
+
+        assertEquals(1, plugin.database().loadVirtualKeyBalance(player.getUniqueId(), "basic").join().balance());
+        assertEquals(0, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertTrue(plugin.database().history(player.getUniqueId(), 10, 0).isEmpty());
+    }
+
+    @Test
     void keyBypassCannotAccidentallyMassOpen() throws Exception {
         var player = server.addPlayer("Operator");
         player.setOp(true);
@@ -148,11 +196,34 @@ class OpeningPipelineIntegrationTest {
         assertTrue(plugin.reloadFor(server.getConsoleSender()));
     }
 
+    private com.antondev.crates.model.Crate enableVirtualWallet(String policy, boolean mixed) throws Exception {
+        var configFile = new java.io.File(plugin.getDataFolder(), "config.yml");
+        var config = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(configFile);
+        config.set("features.virtual-key-wallet", true);
+        config.save(configFile);
+        assertTrue(plugin.reloadFor(server.getConsoleSender()));
+        plugin.crates().createDraft("virtual_test", "TEST");
+        plugin.crates().setAcceptedKeys("virtual_test", List.of("basic"), 1, "TEST");
+        plugin.crates().setPaymentPolicy("virtual_test",
+                com.antondev.crates.domain.key.KeyPaymentPolicy.valueOf(policy), mixed, "TEST");
+        plugin.crates().addCapturedReward("virtual_test", "reward", 1,
+                new ItemStack(Material.DIAMOND), "TEST");
+        plugin.crates().publish("virtual_test", plugin.keys(), "TEST");
+        return plugin.crates().find("virtual_test").orElseThrow();
+    }
+
     private void awaitOpeningCommit() {
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
+    }
+
+    private void awaitVirtualOpeningCommit() {
+        for (int pass = 0; pass < 10; pass++) {
+            plugin.database().awaitIdle().join();
+            server.getScheduler().performTicks(2);
+        }
     }
 
     private static final class Canceller implements Listener {

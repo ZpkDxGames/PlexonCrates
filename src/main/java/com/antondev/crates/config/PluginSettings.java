@@ -63,7 +63,15 @@ public record PluginSettings(
         boolean vaultEnabled,
         boolean consoleLogging,
         boolean fileLogging,
-        String logDateFormat) {
+        String logDateFormat,
+        boolean milestonesEnabled,
+        boolean rerollsEnabled,
+        boolean massOpeningEnabled,
+        boolean claimInboxEnabled,
+        boolean virtualKeyWalletEnabled,
+        boolean selectiveOpeningEnabled,
+        boolean alternativeRewardsEnabled,
+        boolean portableCratesEnabled) {
 
     public static PluginSettings load(File file) {
         YamlConfiguration c = YamlConfiguration.loadConfiguration(file);
@@ -135,7 +143,13 @@ public record PluginSettings(
                 integer(c, "editing.session-timeout-minutes", 1, 240), deniedMaterials,
                 lower(c.getStringList("locations.allowed-worlds")), c.getBoolean("integrations.placeholderapi"),
                 c.getBoolean("integrations.vault"),
-                c.getBoolean("logging.console"), c.getBoolean("logging.file"), dateFormat);
+                c.getBoolean("logging.console"), c.getBoolean("logging.file"), dateFormat,
+                c.getBoolean("features.milestones", true), c.getBoolean("features.rerolls", true),
+                c.getBoolean("features.mass-opening", true), c.getBoolean("features.claim-inbox", true),
+                c.getBoolean("features.virtual-key-wallet", false),
+                c.getBoolean("features.selective-opening", true),
+                c.getBoolean("features.alternative-rewards", true),
+                c.getBoolean("features.portable-crates", true));
     }
 
     public boolean allows(World world) {

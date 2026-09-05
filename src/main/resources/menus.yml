@@ -129,6 +129,40 @@ selective-confirm:
     lore:
     - <gray>No key or state is consumed.</gray>
 
+reroll:
+  title: <crate> <dark_gray>•</dark_gray> <gray>Choose your reward</gray>
+  size: 27
+  guide:
+    slot: 4
+    material: BOOK
+    name: <aqua>Reward decision</aqua>
+    lore:
+    - <gray>Your opening payment has already been consumed.</gray>
+    - <gray>Close or timeout safely accepts the current reward.</gray>
+  accept:
+    slot: 11
+    material: LIME_CONCRETE
+    name: <green><bold>Accept Reward</bold></green>
+    lore: [<green>Deliver this exact reward now.</green>]
+  candidate:
+    slot: 13
+    material: CHEST
+    name: <yellow>Current Reward</yellow>
+    lore: []
+  reroll:
+    slot: 15
+    material: ENDER_EYE
+    name: <light_purple><bold>Reroll</bold></light_purple>
+    lore:
+    - '<gray>Remaining:</gray> <white><remaining></white>'
+    - '<gray>Cost:</gray> <white><cost></white>'
+    - <state>
+  countdown:
+    slot: 22
+    material: CLOCK
+    name: <yellow>Auto-accept</yellow>
+    lore: ['<gray>Seconds remaining:</gray> <white><seconds></white>']
+
 opening:
   title: <crate> <dark_gray>•</dark_gray> <gray>Opening…</gray>
   size: 27
@@ -240,6 +274,11 @@ editor:
     material: IRON_DOOR
     name: <gold>Access rules</gold>
     lore: ['<gray>Permission:</gray> <white><permission></white>', <gray>Edit allowed and excluded worlds.</gray>]
+  rerolls:
+    slot: 38
+    material: ENDER_EYE
+    name: <light_purple>Rerolls</light_purple>
+    lore: ['<gray>State:</gray> <white><reroll_state></white>', '<gray>Maximum:</gray> <white><reroll_max></white>', '<gray>Cost:</gray> <white><reroll_cost></white>', <dark_gray>Left toggle • Right configure</dark_gray>]
   draft-status:
     slot: 40
     material: PAPER

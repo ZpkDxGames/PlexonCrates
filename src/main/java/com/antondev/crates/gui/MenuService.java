@@ -39,6 +39,8 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
@@ -476,6 +478,53 @@ public final class MenuService implements Listener {
         open(player, inventory);
     }
 
+    /** Opens or refreshes the non-movable post-consumption reroll decision. */
+    public void openReroll(Player player) {
+        Optional<com.antondev.crates.service.OpeningService.RerollView> optional =
+                plugin.openings().rerollView(player);
+        if (optional.isEmpty()) return;
+        var view = optional.get();
+        Inventory current = player.getOpenInventory().getTopInventory();
+        if (current != null && current.getHolder() instanceof MenuHolder holder
+                && holder.kind() == MenuHolder.Kind.REROLL
+                && holder.rewardId().equals(view.transactionId().toString())) {
+            renderReroll(current, holder, view);
+            return;
+        }
+        MenuConfig menus = plugin.menusConfig();
+        MenuHolder holder = new MenuHolder(MenuHolder.Kind.REROLL, view.crate().id(),
+                view.transactionId().toString(), 0, false,
+                plugin.runtime().crateRevision(view.crate().id()));
+        Inventory inventory = create(holder, menus.size("reroll"),
+                menus.title("reroll", Text.component("crate", view.crate().displayName())));
+        renderReroll(inventory, holder, view);
+        open(player, inventory);
+    }
+
+    public void refreshReroll(Player player) {
+        Inventory current = player.getOpenInventory().getTopInventory();
+        if (current == null || !(current.getHolder() instanceof MenuHolder holder)
+                || holder.kind() != MenuHolder.Kind.REROLL) return;
+        plugin.openings().rerollView(player).ifPresent(view -> renderReroll(current, holder, view));
+    }
+
+    private void renderReroll(Inventory inventory, MenuHolder holder,
+                              com.antondev.crates.service.OpeningService.RerollView view) {
+        MenuConfig menus = plugin.menusConfig();
+        fill(inventory);
+        inventory.setItem(menus.slot("reroll.guide"), menus.item("reroll.guide"));
+        inventory.setItem(menus.slot("reroll.accept"), menus.item("reroll.accept"));
+        inventory.setItem(menus.slot("reroll.candidate"), view.candidate().displayCopy());
+        inventory.setItem(menus.slot("reroll.reroll"), menus.item("reroll.reroll",
+                Text.value("remaining", view.remaining()), Text.value("cost", view.cost()),
+                Text.component("state", Text.parse(view.state()))));
+        inventory.setItem(menus.slot("reroll.countdown"), menus.item("reroll.countdown",
+                Text.value("seconds", view.secondsRemaining())));
+        holder.bind(menus.slot("reroll.accept"), "accept-reroll", view.transactionId().toString());
+        holder.bind(menus.slot("reroll.reroll"), view.canReroll() ? "request-reroll" : "noop",
+                view.transactionId().toString());
+    }
+
     public void closeAll() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.getOpenInventory().getTopInventory() != null
@@ -537,6 +586,12 @@ public final class MenuService implements Listener {
             case EDITOR -> editorClick(player, holder.crateId(), slot);
             case CONFIRM_DELETE -> confirmClick(player, holder, slot);
             case OPENING -> { }
+            case REROLL -> {
+                MenuHolder.Action action = holder.action(slot);
+                if (action == null) return;
+                if (action.id().equals("accept-reroll")) plugin.openings().acceptReroll(player, "ACCEPT");
+                else if (action.id().equals("request-reroll")) plugin.openings().requestReroll(player);
+            }
             case SUMMARY -> {
                 if (slot == menus.slot("summary.close")) player.closeInventory();
             }
@@ -708,13 +763,27 @@ public final class MenuService implements Listener {
     public void close(InventoryCloseEvent event) {
         if (event.getInventory().getHolder() instanceof MenuHolder holder) {
             plugin.guiSessions().close(event.getPlayer().getUniqueId(), holder.sessionId());
+            if (holder.kind() == MenuHolder.Kind.REROLL && event.getPlayer() instanceof Player player) {
+                plugin.openings().acceptReroll(player, "CLOSE");
+            }
         }
     }
 
     @EventHandler
     public void quit(PlayerQuitEvent event) {
+        plugin.openings().acceptReroll(event.getPlayer(), "DISCONNECT");
         rewardSearch.remove(event.getPlayer().getUniqueId());
         plugin.guiSessions().clear(event.getPlayer().getUniqueId());
+    }
+
+    @EventHandler
+    public void death(PlayerDeathEvent event) {
+        plugin.openings().acceptReroll(event.getEntity(), "DEATH");
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void teleport(PlayerTeleportEvent event) {
+        plugin.openings().acceptReroll(event.getPlayer(), "TELEPORT");
     }
 
     private void claimsClick(Player player, MenuHolder holder, int slot) {

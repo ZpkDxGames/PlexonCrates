@@ -20,6 +20,7 @@ import com.antondev.crates.service.AlternativeRewardResolver;
 import com.antondev.crates.service.CrateRegistry;
 import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.LocationStore;
+import com.antondev.crates.service.RerollService;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -118,9 +119,13 @@ public final class AdminMenuService {
                 Text.value("opening_mode", crate.openingMode()),
                 Text.value("cooldown", crate.cooldownSeconds()), Text.value("bulk", crate.bulkEnabled()),
                 Text.value("bulk_max", crate.bulkMaximum()),
+                Text.value("reroll_state", !plugin.settings().rerollsEnabled() ? "globally disabled"
+                        : crate.rerolls().enabled() ? "enabled" : "disabled"),
+                Text.value("reroll_max", crate.rerolls().maximum()),
+                Text.value("reroll_cost", rerollCost(crate.rerolls())),
                 Text.value("permission", crate.permission().isBlank() ? "none" : crate.permission())};
         for (String action : List.of("preview", "rename", "key", "rewards", "description", "order",
-                "create-reward", "wand", "opening", "display", "access", "disable",
+                "create-reward", "wand", "opening", "display", "access", "rerolls", "disable",
                 "publish", "archive", "clone", "back", "delete")) {
             int slot = menus.slot("editor." + action);
             inventory.setItem(slot, menus.item("editor." + action, tags));
@@ -478,6 +483,7 @@ public final class AdminMenuService {
             case "create-reward" -> createReward(player, action.value());
             case "wand" -> { plugin.wand().give(player, action.value()); player.closeInventory(); }
             case "opening" -> editOpening(player, action.value(), event);
+            case "rerolls" -> editRerolls(player, action.value(), event);
             case "display" -> editDisplay(player, action.value());
             case "access" -> editAccess(player, action.value());
             case "disable" -> {
@@ -622,6 +628,69 @@ public final class AdminMenuService {
                 player.getName());
         saveDraftRevision(player, crateId, "OPENING", "Changed opening animation");
         refreshCrate(player, crateId);
+    }
+
+    private void editRerolls(Player player, String crateId, InventoryClickEvent event) throws Exception {
+        if (!requireWritableDraft(player, crateId)) return;
+        Crate crate = plugin.crates().find(crateId).orElseThrow();
+        if (!event.isRightClick()) {
+            if (!crate.rerolls().enabled() && !plugin.settings().rerollsEnabled()) {
+                plugin.messages().send(player, "disabled");
+                return;
+            }
+            RerollService.Policy next = crate.rerolls().enabled()
+                    ? RerollService.Policy.disabled() : RerollService.Policy.recommended();
+            plugin.crates().setRerollPolicy(crateId, next, player.getName());
+            saveDraftRevision(player, crateId, "REROLLS", next.enabled()
+                    ? "Enabled crate rerolls" : "Disabled crate rerolls");
+            refreshCrate(player, crateId);
+            return;
+        }
+        if (!plugin.settings().rerollsEnabled()) {
+            plugin.messages().send(player, "disabled");
+            return;
+        }
+        plugin.editSessions().request(player, Text.parse(
+                "<light_purple>Enter <white>maximum,cost-type,cost,permission,exclude-previous,timeout,mass-allowed</white>. "
+                        + "Types: TOKEN, PERMISSION, MONEY, KEY. Use - for no permission.</light_purple>"),
+                (target, value) -> {
+                    if (!requireWritableDraft(target, crateId)) return;
+                    String[] parts = value.split(",", -1);
+                    if (parts.length != 7) {
+                        throw new IllegalArgumentException("Use maximum,cost-type,cost,permission,exclude-previous,timeout,mass-allowed");
+                    }
+                    int maximum = Integer.parseInt(parts[0].trim());
+                    RerollService.CostType type = RerollService.CostType.valueOf(
+                            parts[1].trim().toUpperCase(Locale.ROOT));
+                    long cost = Long.parseLong(parts[2].trim());
+                    String permission = parts[3].trim().equals("-") ? "" : parts[3].trim();
+                    boolean exclude = strictBoolean(parts[4], "exclude-previous");
+                    int timeout = Integer.parseInt(parts[5].trim());
+                    boolean mass = strictBoolean(parts[6], "mass-allowed");
+                    RerollService.Policy policy = new RerollService.Policy(true, maximum, type, cost,
+                            permission, exclude, timeout, RerollService.TimeoutPolicy.ACCEPT_CURRENT, mass);
+                    plugin.crates().setRerollPolicy(crateId, policy, target.getName());
+                    saveDraftRevision(target, crateId, "REROLLS", "Configured crate reroll policy");
+                    refreshCrate(target, crateId);
+                });
+    }
+
+    private static boolean strictBoolean(String raw, String label) {
+        String value = raw.trim().toLowerCase(Locale.ROOT);
+        if (!value.equals("true") && !value.equals("false")) {
+            throw new IllegalArgumentException(label + " must be true or false");
+        }
+        return Boolean.parseBoolean(value);
+    }
+
+    private static String rerollCost(RerollService.Policy policy) {
+        if (!policy.enabled()) return "none";
+        return switch (policy.costType()) {
+            case TOKEN -> policy.cost() + " token" + (policy.cost() == 1 ? "" : "s");
+            case PERMISSION -> "permission " + policy.permission();
+            case MONEY -> policy.cost() + " Vault money";
+            case KEY -> policy.cost() + " additional key" + (policy.cost() == 1 ? "" : "s");
+        };
     }
 
     private void editDisplay(Player player, String crateId) {

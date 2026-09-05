@@ -22,13 +22,15 @@ public final class MenuConfig {
         installDraftFallbacks(yaml);
         installClaimFallbacks(yaml);
         installSelectiveFallbacks(yaml);
+        installRerollFallbacks(yaml);
         validateMenu("browser", List.of("info", "close"));
         validateMenu("preview", List.of("open", "previous", "back", "next"));
         validateMenu("selective-confirm", List.of("guide", "confirm", "reward", "cancel"));
         validateMenu("opening", List.of("marker"));
+        validateMenu("reroll", List.of("guide", "accept", "candidate", "reroll", "countdown"));
         validateMenu("admin", List.of("crates", "keys", "locations", "rewards", "statistics", "system", "close"));
         validateMenu("editor", List.of("preview", "rename", "key", "rewards", "description", "order",
-                "create-reward", "wand", "opening", "display", "access", "disable",
+                "create-reward", "wand", "opening", "display", "access", "rerolls", "disable",
                 "draft-status", "publish", "archive", "undo", "clone", "back", "takeover", "delete"));
         validateMenu("confirm-delete", List.of("confirm", "cancel"));
         validateMenu("summary", List.of("close"));
@@ -164,6 +166,33 @@ public final class MenuConfig {
         installItem(yaml, "selective-confirm.reward", 13, "CHEST", "<yellow>Chosen reward</yellow>", List.of());
         installItem(yaml, "selective-confirm.cancel", 15, "RED_CONCRETE", "<red>Back to choices</red>",
                 List.of("<gray>No key or state is consumed.</gray>"));
+    }
+
+    private static void installRerollFallbacks(YamlConfiguration yaml) {
+        if (!yaml.contains("reroll")) {
+            yaml.set("reroll.title", "<crate> <dark_gray>•</dark_gray> <gray>Choose your reward</gray>");
+            yaml.set("reroll.size", 27);
+            installItem(yaml, "reroll.guide", 4, "BOOK", "<aqua>Reward decision</aqua>", List.of(
+                    "<gray>Your opening payment has already been consumed.</gray>",
+                    "<gray>Close or timeout safely accepts the current reward.</gray>"));
+            installItem(yaml, "reroll.accept", 11, "LIME_CONCRETE",
+                    "<green><bold>Accept Reward</bold></green>",
+                    List.of("<green>Deliver this exact reward now.</green>"));
+            installItem(yaml, "reroll.candidate", 13, "CHEST", "<yellow>Current Reward</yellow>", List.of());
+            installItem(yaml, "reroll.reroll", 15, "ENDER_EYE",
+                    "<light_purple><bold>Reroll</bold></light_purple>", List.of(
+                            "<gray>Remaining:</gray> <white><remaining></white>",
+                            "<gray>Cost:</gray> <white><cost></white>", "<state>"));
+            installItem(yaml, "reroll.countdown", 22, "CLOCK", "<yellow>Auto-accept</yellow>", List.of(
+                    "<gray>Seconds remaining:</gray> <white><seconds></white>"));
+        }
+        if (!yaml.contains("editor.rerolls")) {
+            installItem(yaml, "editor.rerolls", 38, "ENDER_EYE", "<light_purple>Rerolls</light_purple>", List.of(
+                    "<gray>State:</gray> <white><reroll_state></white>",
+                    "<gray>Maximum:</gray> <white><reroll_max></white>",
+                    "<gray>Cost:</gray> <white><reroll_cost></white>",
+                    "<dark_gray>Left toggle • Right configure</dark_gray>"));
+        }
     }
 
     private static void installDraftFallbacks(YamlConfiguration yaml) {

@@ -255,6 +255,7 @@ public final class DatabaseService implements AutoCloseable {
             String crateId, String lifecycle, int displayOrder, String displayName, String description,
             byte[] iconBytes, byte[] settingsPayload, List<DefinitionRewardData> rewards,
             List<DefinitionKeyData> keys, List<String> acceptedKeyIds, int keyCost,
+            byte[] rerollPolicyPayload,
             Instant createdAt, Instant updatedAt) {
         public DefinitionBundle {
             crateId = requiredText(crateId, "crateId");
@@ -263,6 +264,7 @@ public final class DatabaseService implements AutoCloseable {
             description = java.util.Objects.requireNonNull(description, "description");
             iconBytes = copyBytes(iconBytes, "icon bytes");
             settingsPayload = copyBytes(settingsPayload, "definition payload");
+            rerollPolicyPayload = copyBytes(rerollPolicyPayload, "reroll policy payload");
             rewards = List.copyOf(rewards);
             keys = List.copyOf(keys);
             acceptedKeyIds = List.copyOf(acceptedKeyIds);
@@ -273,8 +275,23 @@ public final class DatabaseService implements AutoCloseable {
             }
         }
 
+        /** Compatibility constructor for definition bundles created before normalized reroll policy storage. */
+        public DefinitionBundle(String crateId, String lifecycle, int displayOrder, String displayName,
+                                String description, byte[] iconBytes, byte[] settingsPayload,
+                                List<DefinitionRewardData> rewards, List<DefinitionKeyData> keys,
+                                List<String> acceptedKeyIds, int keyCost, Instant createdAt,
+                                Instant updatedAt) {
+            this(crateId, lifecycle, displayOrder, displayName, description, iconBytes, settingsPayload,
+                    rewards, keys, acceptedKeyIds, keyCost,
+                    "enabled=false\nmaximum=0\ncost-type=TOKEN\ncost=0\npermission=\n"
+                            .concat("exclude-previous=true\ntimeout-seconds=15\ntimeout-policy=ACCEPT_CURRENT\n")
+                            .concat("mass-allowed=false\n").getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    createdAt, updatedAt);
+        }
+
         @Override public byte[] iconBytes() { return iconBytes.clone(); }
         @Override public byte[] settingsPayload() { return settingsPayload.clone(); }
+        @Override public byte[] rerollPolicyPayload() { return rerollPolicyPayload.clone(); }
     }
 
     public record StoredDefinition(
@@ -2832,6 +2849,16 @@ public final class DatabaseService implements AutoCloseable {
                     statement.executeUpdate();
                 }
             }
+        }
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO reroll_policy(crate_id, policy_payload, revision) VALUES(?, ?, ?)
+                ON CONFLICT(crate_id) DO UPDATE SET policy_payload=excluded.policy_payload,
+                    revision=excluded.revision
+                """)) {
+            statement.setString(1, bundle.crateId());
+            statement.setBytes(2, bundle.rerollPolicyPayload());
+            statement.setLong(3, revision);
+            statement.executeUpdate();
         }
     }
 

@@ -353,6 +353,15 @@ public final class CrateRegistry {
         yaml.set("pity.enabled", false);
         yaml.set("pity.threshold", 0);
         yaml.set("pity.reward-ids", List.of());
+        yaml.set("rerolls.enabled", false);
+        yaml.set("rerolls.maximum", 0);
+        yaml.set("rerolls.cost-type", RerollService.CostType.TOKEN.name());
+        yaml.set("rerolls.cost", 0);
+        yaml.set("rerolls.permission", "");
+        yaml.set("rerolls.exclude-previous", true);
+        yaml.set("rerolls.timeout-seconds", 15);
+        yaml.set("rerolls.timeout-policy", RerollService.TimeoutPolicy.ACCEPT_CURRENT.name());
+        yaml.set("rerolls.mass-allowed", false);
         yaml.createSection("milestones");
         yaml.createSection("rewards");
         yaml.set("audit.created-at", now.toString());
@@ -517,6 +526,22 @@ public final class CrateRegistry {
                 throw new IllegalArgumentException("Disable pity before selecting the SELECTIVE opening mode");
             }
             yaml.set("opening.mode", mode.name());
+            touch(yaml, editor);
+        });
+    }
+
+    public void setRerollPolicy(String crateId, RerollService.Policy policy, String editor) throws Exception {
+        java.util.Objects.requireNonNull(policy, "policy");
+        mutate(crateId, yaml -> {
+            yaml.set("rerolls.enabled", policy.enabled());
+            yaml.set("rerolls.maximum", policy.maximum());
+            yaml.set("rerolls.cost-type", policy.costType().name());
+            yaml.set("rerolls.cost", policy.cost());
+            yaml.set("rerolls.permission", policy.permission());
+            yaml.set("rerolls.exclude-previous", policy.excludePrevious());
+            yaml.set("rerolls.timeout-seconds", policy.timeoutSeconds());
+            yaml.set("rerolls.timeout-policy", policy.timeoutPolicy().name());
+            yaml.set("rerolls.mass-allowed", policy.massAllowed());
             touch(yaml, editor);
         });
     }
@@ -1138,6 +1163,30 @@ public final class CrateRegistry {
         PityPolicy pity = new PityPolicy(pityEnabled, pityThreshold, pityRewards, pityRarity,
                 yaml.getBoolean("pity.administrative-openings-count", false));
 
+        boolean rerollsEnabled = yaml.getBoolean("rerolls.enabled", false);
+        int rerollMaximum = integer(yaml.get("rerolls.maximum", rerollsEnabled ? 1 : 0), file,
+                "rerolls.maximum", 0, 64);
+        RerollService.CostType rerollCostType = enumValue(RerollService.CostType.class,
+                yaml.getString("rerolls.cost-type", "TOKEN"), file, "rerolls.cost-type");
+        long rerollCost = nonNegativeLong(yaml.get("rerolls.cost",
+                rerollCostType == RerollService.CostType.PERMISSION ? 0 : 1), file, "rerolls.cost");
+        String rerollPermission = yaml.getString("rerolls.permission",
+                rerollCostType == RerollService.CostType.PERMISSION
+                        ? "plexoncrates.rerolls.free" : "").trim();
+        RerollService.Policy rerolls;
+        try {
+            rerolls = new RerollService.Policy(rerollsEnabled, rerollMaximum, rerollCostType,
+                    rerollCost, rerollPermission, yaml.getBoolean("rerolls.exclude-previous", true),
+                    integer(yaml.get("rerolls.timeout-seconds", 15), file,
+                            "rerolls.timeout-seconds", 1, 86_400),
+                    enumValue(RerollService.TimeoutPolicy.class,
+                            yaml.getString("rerolls.timeout-policy", "ACCEPT_CURRENT"), file,
+                            "rerolls.timeout-policy"),
+                    yaml.getBoolean("rerolls.mass-allowed", false));
+        } catch (IllegalArgumentException error) {
+            throw path(file, error.getMessage());
+        }
+
         var rewards = parseRewards(file, yaml);
         for (String pityReward : pityRewards) if (!rewards.containsKey(pityReward)) {
             throw path(file, "pity references unknown reward " + pityReward);
@@ -1157,7 +1206,7 @@ public final class CrateRegistry {
         Map<String, CrateMilestone> milestones = parseMilestones(file, yaml, rewards);
         return new Crate(id, state, displayOrder, display, description, icon, permission, worlds, excludedWorlds,
                 acceptedKeys, keyCost, paymentPolicy, mixedPayment, cooldown, bulkEnabled, bulkMaximum,
-                openingMode, animation, hologram, crateBroadcast, pity, milestones, rewards);
+                openingMode, animation, hologram, crateBroadcast, pity, rerolls, milestones, rewards);
     }
 
     private static boolean pityEnabled(YamlConfiguration yaml) {

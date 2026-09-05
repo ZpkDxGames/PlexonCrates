@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.DoubleSupplier;
@@ -198,6 +199,44 @@ public final class RewardStateService {
                                             boolean alternativesEnabled, boolean bypassLimits, long now) {
         return resolveAgainst(playerId, crate, source, baseIneligibility, alternativesEnabled, bypassLimits, now,
                 players, global);
+    }
+
+    /**
+     * Returns the exact source-to-actual outcomes available to a single reroll at
+     * the current state snapshot, including the opening's active pity guarantee.
+     */
+    public List<Outcome> rerollOutcomes(
+            UUID playerId, Crate crate, OpenSource source,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now) {
+        List<Outcome> available = availableResolved(playerId, crate, baseIneligibility,
+                alternativesEnabled, bypassLimits, now, players, global);
+        int misses = pity.getOrDefault(new PlayerCrateKey(playerId, crate.id()), 0);
+        if (countsPity(crate.pity(), source) && due(crate.pity(), misses)) {
+            available = available.stream()
+                    .filter(outcome -> pityReward(crate.pity(), outcome.source())).toList();
+        }
+        return List.copyOf(available);
+    }
+
+    /** Selects one weighted replacement while excluding previously shown actual rewards. */
+    public Plan planRerollResolved(
+            UUID playerId, Crate crate, OpenSource source,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now,
+            Set<String> excludedActualRewardIds) {
+        Set<String> excluded = excludedActualRewardIds == null ? Set.of() : Set.copyOf(excludedActualRewardIds);
+        List<Outcome> available = rerollOutcomes(playerId, crate, source, baseIneligibility,
+                alternativesEnabled, bypassLimits, now).stream()
+                .filter(outcome -> !excluded.contains(outcome.actual().id())).toList();
+        if (available.isEmpty()) return new Plan(List.of(), false);
+        List<CrateReward> tickets = available.stream().map(Outcome::source).toList();
+        Optional<CrateReward> selected = RewardSelector.selectAt(tickets, normalizedRoll());
+        if (selected.isEmpty()) return new Plan(List.of(), false);
+        Outcome outcome = available.stream()
+                .filter(candidate -> candidate.source().id().equals(selected.get().id()))
+                .findFirst().orElseThrow();
+        return new Plan(List.of(outcome.actual()), false, List.of(outcome));
     }
 
     /** Compatibility revalidation for a direct frozen selection. */

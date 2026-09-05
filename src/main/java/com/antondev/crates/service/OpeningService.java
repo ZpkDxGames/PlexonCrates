@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -56,6 +57,8 @@ public final class OpeningService {
     private final ItemSnapshotCodec itemSnapshots = new ItemSnapshotCodec();
     private final Set<UUID> locks = new HashSet<>();
     private final Map<UUID, PendingOpening> pending = new HashMap<>();
+    /** One post-consumption accept-or-reroll decision per player. */
+    private final Map<UUID, RerollDecision> rerollDecisions = new HashMap<>();
     private final Map<UUID, Map<String, Long>> cooldowns = new HashMap<>();
     /** Reserved portable requests waiting to be attached to the journal transaction. */
     private final Map<UUID, PortableContext> portableRequests = new HashMap<>();
@@ -65,6 +68,18 @@ public final class OpeningService {
         this.log = log;
         this.economy = new VaultEconomyBridge(plugin);
         this.placeholders = new PlaceholderBridge(plugin);
+    }
+
+    public record RerollView(UUID transactionId, Crate crate, CrateReward candidate,
+                             int remaining, String cost, long secondsRemaining,
+                             boolean canReroll, boolean processing, String state) {
+        public RerollView {
+            transactionId = java.util.Objects.requireNonNull(transactionId, "transactionId");
+            crate = java.util.Objects.requireNonNull(crate, "crate");
+            candidate = java.util.Objects.requireNonNull(candidate, "candidate");
+            cost = java.util.Objects.requireNonNull(cost, "cost");
+            state = java.util.Objects.requireNonNull(state, "state");
+        }
     }
 
     /**
@@ -201,6 +216,10 @@ public final class OpeningService {
         if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Crate openings must begin on the primary server thread");
         Crate published = plugin.runtime().find(crate.id()).orElse(null);
         if (published != null) crate = published;
+        if (!rerollDecisions.isEmpty()) {
+            plugin.messages().send(player, "already-opening");
+            return false;
+        }
         if (!locks.add(player.getUniqueId())) {
             plugin.messages().send(player, "already-opening");
             return false;
@@ -334,7 +353,8 @@ public final class OpeningService {
 
         PortableContext portableContext = portable ? portableRequests.remove(player.getUniqueId()) : null;
         if (portable && portableContext == null) return reject(player, "opening-state-changed");
-        PendingOpening opening = new PendingOpening(plan, crate, rewardPlan, payment, milestonePlan, portableContext);
+        PendingOpening opening = new PendingOpening(plan, crate, rewardPlan, payment, milestonePlan,
+                portableContext, plannedAt, false, List.of());
         pending.put(transactionId, opening);
         DatabaseService.JournalRecord journal = new DatabaseService.JournalRecord(transactionId,
                 player.getUniqueId(), player.getName(), crate.id(), payment.keyId(), payment.total(),
@@ -414,6 +434,397 @@ public final class OpeningService {
     public boolean economyAvailable() { return economy.available(); }
     public String economyDiagnostic() { return economy.diagnostic(); }
 
+    public Optional<RerollView> rerollView(Player player) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Reroll views require the primary thread");
+        RerollDecision decision = rerollDecisions.get(player.getUniqueId());
+        if (decision == null) return Optional.empty();
+        PendingOpening opening = pending.get(decision.transactionId);
+        if (opening == null || opening.selected().isEmpty()) return Optional.empty();
+        long nowMillis = System.currentTimeMillis();
+        Instant now = Instant.ofEpochMilli(nowMillis);
+        boolean active = plugin.settings().rerollsEnabled()
+                && player.hasPermission("plexoncrates.rerolls")
+                && plugin.runtime().crateRevision(opening.plan().crateId()) == opening.plan().runtimeRevision()
+                && !decision.offer.timedOut(now)
+                && decision.offer.remaining(decision.policy) > 0;
+        List<String> eligible = eligibleRerollIds(player, opening, nowMillis);
+        boolean hasReplacement = !RerollService.replacementCandidates(
+                decision.policy, decision.offer, eligible).isEmpty();
+        String state = "<green>Click to request another eligible reward.</green>";
+        if (decision.processing) state = "<yellow>Validating and reserving this reroll…</yellow>";
+        else if (!active) state = "<red>Reroll is no longer available.</red>";
+        else if (!hasReplacement) state = "<red>No different eligible reward remains.</red>";
+        else if (!costSourceAvailable(player, opening.crate(), decision.policy)) {
+            state = "<red>The configured reroll payment is unavailable.</red>";
+        }
+        boolean canReroll = active && hasReplacement && !decision.processing
+                && costSourceAvailable(player, opening.crate(), decision.policy);
+        long seconds = Math.max(0, java.time.Duration.between(now, decision.offer.expiresAt()).toSeconds() + 1);
+        return Optional.of(new RerollView(decision.transactionId, opening.crate(),
+                opening.selected().getFirst(), decision.offer.remaining(decision.policy),
+                rerollCostDescription(decision.policy), seconds, canReroll, decision.processing, state));
+    }
+
+    /** Requests one journaled reroll while retaining the current candidate until payment succeeds. */
+    public boolean requestReroll(Player player) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Rerolls require the primary thread");
+        RerollDecision decision = rerollDecisions.get(player.getUniqueId());
+        PendingOpening opening = decision == null ? null : pending.get(decision.transactionId);
+        RerollView view = rerollView(player).orElse(null);
+        if (decision == null || opening == null || view == null || !view.canReroll()) return false;
+
+        long now = System.currentTimeMillis();
+        Function<CrateReward, AlternativeRewardResolver.Reason> eligibility = baseIneligibility(player, now);
+        Set<String> excluded = decision.policy.excludePrevious()
+                ? new LinkedHashSet<>(decision.offer.shownCandidates()) : Set.of(decision.offer.candidate());
+        boolean bypassLimits = opening.plan().source() == OpenSource.ADMIN_FORCE
+                || player.hasPermission("plexoncrates.bypass.limit");
+        RewardStateService.Plan replacement = plugin.rewardStates().planRerollResolved(
+                player.getUniqueId(), opening.crate(), opening.plan().source(), eligibility,
+                plugin.settings().alternativeRewardsEnabled(), bypassLimits, now, excluded);
+        if (replacement.rewards().size() != 1) return false;
+        String replacementId = replacement.rewards().getFirst().id();
+        List<String> eligibleIds = eligibleRerollIds(player, opening, now);
+        RerollService.Offer<String> nextOffer = RerollService.replace(decision.policy, decision.offer,
+                eligibleIds, replacementId, Instant.ofEpochMilli(now)).orElse(null);
+        if (nextOffer == null || !replacementValid(player, opening, replacement, now, bypassLimits)) return false;
+        ExtraKeyPayment extraKey = decision.policy.costType() == RerollService.CostType.KEY
+                ? extraKeyPayment(player, opening.crate(), decision.policy.cost()).orElse(null) : null;
+        if (decision.policy.costType() == RerollService.CostType.KEY
+                && decision.policy.cost() > 0 && extraKey == null) return false;
+
+        int attempt = decision.offer.rerollsUsed() + 1;
+        decision.processing = true;
+        String reservation = "attempt=" + attempt + ",status=COST_RESERVED,type="
+                + decision.policy.costType() + ",amount=" + decision.policy.cost()
+                + ",candidate=" + replacementId;
+        plugin.database().updateJournal(decision.transactionId, "REROLL_COST_RESERVED",
+                transactionDetail(opening) + ";" + reservation).whenComplete((ignored, error) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        RerollDecision current = rerollDecisions.get(player.getUniqueId());
+                        if (current != decision || !decision.processing) return;
+                        if (error != null) {
+                            failReroll(player, decision, "journal reservation failed");
+                            return;
+                        }
+                        consumeRerollCost(player, decision, opening, replacement, nextOffer,
+                                now, bypassLimits, extraKey, attempt);
+                    });
+                });
+        plugin.menus().refreshReroll(player);
+        return true;
+    }
+
+    /** Accepts the current candidate. Close, quit, teleport, death, and timeout all use this path. */
+    public boolean acceptReroll(Player player, String reason) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Reroll acceptance requires the primary thread");
+        RerollDecision decision = rerollDecisions.remove(player.getUniqueId());
+        if (decision == null) return false;
+        PendingOpening opening = pending.get(decision.transactionId);
+        if (opening == null) {
+            locks.remove(player.getUniqueId());
+            return false;
+        }
+        String acceptedReason = reason == null || reason.isBlank() ? "ACCEPT" : reason.trim().toUpperCase(Locale.ROOT);
+        opening = opening.withAudit("decision=ACCEPT,candidate=" + decision.offer.candidate()
+                + ",reason=" + acceptedReason);
+        pending.put(decision.transactionId, opening);
+        plugin.database().updateJournal(decision.transactionId, "REROLL_ACCEPTED", transactionDetail(opening));
+        try {
+            boolean bypassLimits = opening.plan().source() == OpenSource.ADMIN_FORCE
+                    || player.hasPermission("plexoncrates.bypass.limit");
+            finishDelivery(decision.transactionId, opening, player, opening.crate(), bypassLimits);
+        } catch (RuntimeException error) {
+            plugin.getLogger().log(Level.SEVERE,
+                    "Consumed reroll opening " + decision.transactionId + " could not be delivered", error);
+            plugin.database().updateJournal(decision.transactionId, "FAILED",
+                    transactionDetail(opening) + ";manual-review=" + concise(error));
+            plugin.messages().send(player, "opening-failed", Text.value("transaction", decision.transactionId));
+        } finally {
+            pending.remove(decision.transactionId);
+            locks.remove(player.getUniqueId());
+        }
+        return true;
+    }
+
+    private boolean beginRerollDecision(UUID transactionId, PendingOpening opening, Player player,
+                                        Crate current, boolean bypassLimits) {
+        RerollService.Policy policy = current.rerolls();
+        if (!plugin.settings().rerollsEnabled() || !policy.enabled()
+                || !player.hasPermission("plexoncrates.rerolls")
+                || current.openingMode() != OpeningMode.RANDOM
+                || opening.plan().source() == OpenSource.ADMIN_FORCE
+                || opening.plan().openingCount() != 1) return false;
+        List<String> eligible = eligibleRerollIds(player, opening, opening.stateAt());
+        String candidate = opening.selected().getFirst().id();
+        if (!eligible.contains(candidate) || eligible.stream().distinct().count() < 2) return false;
+        RerollService.Offer<String> offer = RerollService.start(policy, candidate, eligible,
+                Instant.ofEpochMilli(opening.stateAt()));
+        if (RerollService.replacementCandidates(policy, offer, eligible).isEmpty()) return false;
+
+        RerollDecision decision = new RerollDecision(transactionId, policy, offer);
+        PendingOpening offered = opening.withAudit("candidate[0]=" + candidate + ",decision=OFFERED");
+        pending.put(transactionId, offered);
+        rerollDecisions.put(player.getUniqueId(), decision);
+        scheduleRerollTimeout(player.getUniqueId(), decision);
+        plugin.database().updateJournal(transactionId, "AWAITING_DECISION", transactionDetail(offered))
+                .whenComplete((ignored, error) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (rerollDecisions.get(player.getUniqueId()) != decision) return;
+                        if (error != null) {
+                            acceptReroll(player, "JOURNAL_FAILURE");
+                        } else if (!player.isOnline()) {
+                            acceptReroll(player, "DISCONNECT");
+                        } else {
+                            plugin.menus().openReroll(player);
+                        }
+                    });
+                });
+        return true;
+    }
+
+    private void consumeRerollCost(Player player, RerollDecision decision, PendingOpening opening,
+                                   RewardStateService.Plan replacement,
+                                   RerollService.Offer<String> nextOffer, long selectedAt,
+                                   boolean bypassLimits, ExtraKeyPayment extraKey, int attempt) {
+        if (!replacementValid(player, opening, replacement, selectedAt, bypassLimits)) {
+            failReroll(player, decision, "replacement changed before cost consumption");
+            return;
+        }
+        RerollService.Policy policy = decision.policy;
+        switch (policy.costType()) {
+            case PERMISSION -> {
+                if (!player.hasPermission(policy.permission())) {
+                    failReroll(player, decision, "required permission is missing");
+                } else {
+                    journalConsumedReroll(player, decision, opening, replacement, nextOffer,
+                            selectedAt, bypassLimits, null, attempt);
+                }
+            }
+            case MONEY -> {
+                if (!plugin.settings().vaultEnabled() || !economy.withdraw(player, policy.cost())) {
+                    failReroll(player, decision, "Vault payment was rejected");
+                } else {
+                    journalConsumedReroll(player, decision, opening, replacement, nextOffer,
+                            selectedAt, bypassLimits,
+                            new ConsumedRerollCost(policy.costType(), policy.cost(), ""), attempt);
+                }
+            }
+            case KEY -> {
+                if (policy.cost() > 0 && (extraKey == null
+                        || !plugin.keys().consume(player, extraKey.transaction(), extraKey.amount()))) {
+                    failReroll(player, decision, "additional key payment was unavailable");
+                } else {
+                    journalConsumedReroll(player, decision, opening, replacement, nextOffer,
+                            selectedAt, bypassLimits,
+                            policy.cost() == 0 ? null : new ConsumedRerollCost(
+                                    policy.costType(), policy.cost(), extraKey.keyId()), attempt);
+                }
+            }
+            case TOKEN -> {
+                if (policy.cost() == 0) {
+                    journalConsumedReroll(player, decision, opening, replacement, nextOffer,
+                            selectedAt, bypassLimits, null, attempt);
+                    return;
+                }
+                String token = "reroll-cost:" + decision.transactionId + ":" + attempt;
+                plugin.database().debitRerolls(player.getUniqueId(), policy.cost(), token,
+                        "OPENING_REROLL", decision.transactionId.toString(), null)
+                        .whenComplete((mutation, error) -> {
+                            if (!plugin.isEnabled()) return;
+                            Bukkit.getScheduler().runTask(plugin, () -> {
+                                if (error != null || mutation == null || !mutation.applied()) {
+                                    if (rerollDecisions.get(player.getUniqueId()) == decision) {
+                                        failReroll(player, decision, "reroll token balance was insufficient");
+                                    }
+                                    return;
+                                }
+                                ConsumedRerollCost charged = new ConsumedRerollCost(
+                                        policy.costType(), policy.cost(), "");
+                                if (rerollDecisions.get(player.getUniqueId()) != decision
+                                        || !decision.processing
+                                        || !replacementValid(player, opening, replacement,
+                                                selectedAt, bypassLimits)) {
+                                    refundRerollCost(player, decision, charged, attempt,
+                                            "decision closed while token debit completed");
+                                    return;
+                                }
+                                journalConsumedReroll(player, decision, opening, replacement, nextOffer,
+                                        selectedAt, bypassLimits, charged, attempt);
+                            });
+                        });
+            }
+        }
+    }
+
+    private void journalConsumedReroll(Player player, RerollDecision decision, PendingOpening opening,
+                                       RewardStateService.Plan replacement,
+                                       RerollService.Offer<String> nextOffer, long selectedAt,
+                                       boolean bypassLimits, ConsumedRerollCost charged, int attempt) {
+        String detail = transactionDetail(opening) + ";attempt=" + attempt
+                + ",status=COST_CONSUMED,type=" + decision.policy.costType()
+                + ",amount=" + decision.policy.cost()
+                + ",candidate=" + replacement.rewards().getFirst().id();
+        plugin.database().updateJournal(decision.transactionId, "REROLL_COST_CONSUMED", detail)
+                .whenComplete((ignored, error) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (error != null || rerollDecisions.get(player.getUniqueId()) != decision
+                                || !decision.processing
+                                || !replacementValid(player, opening, replacement, selectedAt, bypassLimits)) {
+                            if (charged != null) refundRerollCost(player, decision, charged, attempt,
+                                    error == null ? "candidate invalidated after cost" : "cost journal failed");
+                            else if (rerollDecisions.get(player.getUniqueId()) == decision) {
+                                failReroll(player, decision, "cost journal failed");
+                            }
+                            return;
+                        }
+                        String candidate = replacement.rewards().getFirst().id();
+                        PendingOpening updated = opening.withRewardPlan(replacement, selectedAt,
+                                "attempt=" + attempt + ",status=REROLLED,type="
+                                        + decision.policy.costType() + ",amount=" + decision.policy.cost()
+                                        + ",candidate=" + candidate);
+                        pending.put(decision.transactionId, updated);
+                        decision.offer = nextOffer;
+                        decision.processing = false;
+                        Bukkit.getPluginManager().callEvent(new CrateRewardSelectEvent(
+                                player, updated.plan(), updated.plan().deliveries().getFirst()));
+                        plugin.database().updateJournal(decision.transactionId, "AWAITING_DECISION",
+                                transactionDetail(updated));
+                        scheduleRerollTimeout(player.getUniqueId(), decision);
+                        plugin.menus().openReroll(player);
+                    });
+                });
+    }
+
+    private void refundRerollCost(Player player, RerollDecision decision,
+                                  ConsumedRerollCost charged, int attempt, String reason) {
+        switch (charged.type()) {
+            case TOKEN -> plugin.database().creditRerolls(player.getUniqueId(), charged.amount(),
+                    "reroll-refund:" + decision.transactionId + ":" + attempt,
+                    "OPENING_REROLL_REFUND", decision.transactionId.toString(), null)
+                    .whenComplete((ignored, error) -> {
+                        if (!plugin.isEnabled()) return;
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (error != null) plugin.getLogger().log(Level.SEVERE,
+                                    "Reroll-token refund failed for " + decision.transactionId, error);
+                            if (rerollDecisions.get(player.getUniqueId()) == decision) {
+                                failReroll(player, decision, reason + "; token refunded");
+                            }
+                        });
+                    });
+            case MONEY -> {
+                if (!economy.deposit(player, charged.amount())) {
+                    plugin.getLogger().severe("Vault reroll refund failed for " + decision.transactionId);
+                }
+                if (rerollDecisions.get(player.getUniqueId()) == decision) {
+                    failReroll(player, decision, reason + "; Vault payment refunded");
+                }
+            }
+            case KEY -> {
+                plugin.keys().give(player, charged.keyId(), Math.toIntExact(charged.amount()));
+                if (rerollDecisions.get(player.getUniqueId()) == decision) {
+                    failReroll(player, decision, reason + "; key payment refunded");
+                }
+            }
+            case PERMISSION -> {
+                if (rerollDecisions.get(player.getUniqueId()) == decision) failReroll(player, decision, reason);
+            }
+        }
+    }
+
+    private void failReroll(Player player, RerollDecision decision, String reason) {
+        if (rerollDecisions.get(player.getUniqueId()) != decision) return;
+        decision.processing = false;
+        PendingOpening opening = pending.get(decision.transactionId);
+        if (opening != null) {
+            opening = opening.withAudit("attempt=" + (decision.offer.rerollsUsed() + 1)
+                    + ",status=FAILED,reason=" + reason.replace(';', ','));
+            pending.put(decision.transactionId, opening);
+            plugin.database().updateJournal(decision.transactionId, "AWAITING_DECISION",
+                    transactionDetail(opening));
+        }
+        player.sendActionBar(Text.parse("<red>Reroll failed:</red> <gray>" + reason + ".</gray>"));
+        plugin.menus().openReroll(player);
+    }
+
+    private boolean replacementValid(Player player, PendingOpening opening,
+                                     RewardStateService.Plan replacement, long selectedAt,
+                                     boolean bypassLimits) {
+        if (!player.isOnline() || plugin.runtime().crateRevision(opening.plan().crateId())
+                != opening.plan().runtimeRevision()) return false;
+        Function<CrateReward, AlternativeRewardResolver.Reason> eligibility =
+                baseIneligibility(player, selectedAt);
+        if (!plugin.rewardStates().canApplyResolved(player.getUniqueId(), opening.crate(), replacement,
+                opening.plan().source(), eligibility, plugin.settings().alternativeRewardsEnabled(),
+                bypassLimits, selectedAt)) return false;
+        if (plugin.settings().overflowPolicy() != OverflowPolicy.REJECT) return true;
+        List<ItemStack> items = replacement.rewards().stream()
+                .flatMap(reward -> reward.itemCopies().stream()).toList();
+        return InventoryPlanner.fits(player.getInventory().getStorageContents(), items);
+    }
+
+    private List<String> eligibleRerollIds(Player player, PendingOpening opening, long now) {
+        boolean bypassLimits = opening.plan().source() == OpenSource.ADMIN_FORCE
+                || player.hasPermission("plexoncrates.bypass.limit");
+        return plugin.rewardStates().rerollOutcomes(player.getUniqueId(), opening.crate(),
+                opening.plan().source(), baseIneligibility(player, now),
+                plugin.settings().alternativeRewardsEnabled(), bypassLimits, now).stream()
+                .map(outcome -> outcome.actual().id()).distinct().toList();
+    }
+
+    private boolean costSourceAvailable(Player player, Crate crate, RerollService.Policy policy) {
+        return switch (policy.costType()) {
+            case TOKEN -> true; // The authoritative balance is checked atomically after journal reservation.
+            case PERMISSION -> player.hasPermission(policy.permission());
+            case MONEY -> plugin.settings().vaultEnabled() && economy.available();
+            case KEY -> policy.cost() == 0 || extraKeyPayment(player, crate, policy.cost()).isPresent();
+        };
+    }
+
+    private Optional<ExtraKeyPayment> extraKeyPayment(Player player, Crate crate, long rawAmount) {
+        if (rawAmount < 0 || rawAmount > Integer.MAX_VALUE) return Optional.empty();
+        int amount = (int) rawAmount;
+        if (amount == 0) return Optional.empty();
+        for (String keyId : crate.acceptedKeyIds()) {
+            KeyService.KeyTransaction transaction = plugin.keys().begin(keyId).orElse(null);
+            if (transaction != null && plugin.keys().count(player, transaction) >= amount) {
+                return Optional.of(new ExtraKeyPayment(transaction, keyId, amount));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private void scheduleRerollTimeout(UUID playerId, RerollDecision decision) {
+        int generation = ++decision.generation;
+        long ticks = Math.max(1L, decision.policy.timeoutSeconds() * 20L);
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (rerollDecisions.get(playerId) != decision || decision.generation != generation) return;
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null) acceptReroll(player, "TIMEOUT");
+            else {
+                PendingOpening opening = pending.get(decision.transactionId);
+                plugin.database().updateJournal(decision.transactionId, "FAILED",
+                        (opening == null ? "" : transactionDetail(opening) + ";")
+                                + "consumed opening lost its online player; manual review required");
+                rerollDecisions.remove(playerId);
+                pending.remove(decision.transactionId);
+                locks.remove(playerId);
+            }
+        }, ticks);
+    }
+
+    private static String rerollCostDescription(RerollService.Policy policy) {
+        return switch (policy.costType()) {
+            case TOKEN -> policy.cost() + " token" + (policy.cost() == 1 ? "" : "s");
+            case PERMISSION -> "free with " + policy.permission();
+            case MONEY -> policy.cost() + " Vault money";
+            case KEY -> policy.cost() + " additional key" + (policy.cost() == 1 ? "" : "s");
+        };
+    }
+
     public boolean testDeliver(Player player, Crate crate, CrateReward reward) {
         if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Reward tests must run on the primary server thread");
         if (!player.hasPermission("plexoncrates.admin.rewards")) return reject(player, "no-permission");
@@ -439,8 +850,18 @@ public final class OpeningService {
 
     public void clear() {
         String reason = "Plugin disabled before inventory mutation";
+        for (UUID playerId : List.copyOf(rerollDecisions.keySet())) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null) acceptReroll(player, "PLUGIN_STOP");
+        }
         for (var entry : List.copyOf(pending.entrySet())) {
             PendingOpening opening = entry.getValue();
+            if (opening.paymentConsumed()) {
+                plugin.database().updateJournal(entry.getKey(), "FAILED",
+                        transactionDetail(opening)
+                                + ";consumed opening requires manual recovery after plugin stop");
+                continue;
+            }
             if (opening.portable() != null) {
                 plugin.database().releasePortableIssue(opening.portable().issueId(),
                         opening.portable().reservationToken(), reason);
@@ -451,6 +872,7 @@ public final class OpeningService {
             plugin.database().releasePortableIssue(context.issueId(), context.reservationToken(), reason);
         }
         pending.clear();
+        rerollDecisions.clear();
         portableRequests.clear();
         locks.clear();
         cooldowns.clear();
@@ -465,6 +887,11 @@ public final class OpeningService {
         try {
             if (player == null || !player.isOnline()) {
                 abortPrepared(transactionId, "Player disconnected before key consumption", false);
+                return;
+            }
+            if (!rerollDecisions.isEmpty()) {
+                abortPrepared(transactionId, "Another consumed opening is awaiting a reroll decision", false);
+                plugin.messages().send(player, "already-opening");
                 return;
             }
             Crate active = plan.runtimeRevision() > 0
@@ -487,6 +914,8 @@ public final class OpeningService {
             }
             boolean bypassLimits = plan.source() == OpenSource.ADMIN_FORCE || player.hasPermission("plexoncrates.bypass.limit");
             long revalidatedAt = System.currentTimeMillis();
+            opening = opening.withStateAt(revalidatedAt);
+            pending.put(transactionId, opening);
             Function<CrateReward, AlternativeRewardResolver.Reason> eligibility =
                     baseIneligibility(player, revalidatedAt);
             if (!plugin.rewardStates().canApplyResolved(player.getUniqueId(), current, opening.rewardPlan(),
@@ -531,7 +960,7 @@ public final class OpeningService {
                 plugin.messages().send(player, "insufficient-payment", Text.component("key", keyName(current)));
                 return;
             }
-            finishConsumed(transactionId, opening, player, current, eligibility, bypassLimits);
+            deferred = afterPaymentConsumed(transactionId, opening, player, current, bypassLimits);
         } catch (RuntimeException error) {
             plugin.getLogger().log(Level.SEVERE, "Opening " + transactionId + " failed during the main-thread commit", error);
             plugin.database().updateJournal(transactionId, "FAILED", concise(error));
@@ -590,7 +1019,7 @@ public final class OpeningService {
                             if (!plugin.rewardStates().canApplyResolved(player.getUniqueId(), current,
                                     opening.rewardPlan(), opening.plan().source(), eligibility,
                                     plugin.settings().alternativeRewardsEnabled(), bypassLimits,
-                                    System.currentTimeMillis())) {
+                                    opening.stateAt())) {
                                 refundVirtualAndAbort(opening, "Reward state changed after virtual debit");
                                 return;
                             }
@@ -598,9 +1027,12 @@ public final class OpeningService {
                                 refundVirtualAndAbort(opening, "Physical-key consumption failed after virtual debit");
                                 return;
                             }
-                            finishConsumed(transactionId, opening, player, current, eligibility, bypassLimits);
-                            pending.remove(transactionId);
-                            locks.remove(player.getUniqueId());
+                            boolean awaitingDecision = afterPaymentConsumed(transactionId, opening, player,
+                                    current, bypassLimits);
+                            if (!awaitingDecision) {
+                                pending.remove(transactionId);
+                                locks.remove(player.getUniqueId());
+                            }
                         } catch (RuntimeException failure) {
                             plugin.getLogger().log(Level.SEVERE,
                                     "Opening " + transactionId + " failed after virtual-key consumption", failure);
@@ -620,18 +1052,30 @@ public final class OpeningService {
                 && plugin.keys().consume(player, payment.physicalTransaction(), payment.physicalAmount());
     }
 
-    private void finishConsumed(UUID transactionId, PendingOpening opening, Player player, Crate current,
-                                Function<CrateReward, AlternativeRewardResolver.Reason> eligibility,
-                                boolean bypassLimits) {
+    /** Enters the durable post-payment boundary and either opens a decision or delivers directly. */
+    private boolean afterPaymentConsumed(UUID transactionId, PendingOpening opening, Player player,
+                                         Crate current, boolean bypassLimits) {
+        opening = opening.withPaymentConsumed("payment=CONSUMED");
+        pending.put(transactionId, opening);
         OpeningPlan plan = opening.plan();
         if (opening.payment().physicalAmount() > 0) {
             Bukkit.getPluginManager().callEvent(new CrateKeyConsumeEvent(player, plan));
         }
         plugin.database().updateJournal(transactionId, "CONSUMED", transactionDetail(opening));
+        if (beginRerollDecision(transactionId, opening, player, current, bypassLimits)) return true;
+        finishDelivery(transactionId, opening, player, current, bypassLimits);
+        return false;
+    }
+
+    private void finishDelivery(UUID transactionId, PendingOpening opening, Player player, Crate current,
+                                boolean bypassLimits) {
+        OpeningPlan plan = opening.plan();
+        Function<CrateReward, AlternativeRewardResolver.Reason> eligibility =
+                baseIneligibility(player, opening.stateAt());
         DeliveryResult delivered = deliver(player, current, opening.selected(), plan, true);
         DatabaseService.RewardStateCommit rewardState = plugin.rewardStates().applyResolved(player.getUniqueId(),
                 current, opening.rewardPlan(), plan.source(), eligibility,
-                plugin.settings().alternativeRewardsEnabled(), bypassLimits, System.currentTimeMillis());
+                plugin.settings().alternativeRewardsEnabled(), bypassLimits, opening.stateAt());
         DatabaseService.MilestoneProgressCommit milestoneState = plugin.milestoneProgress().apply(opening.milestones());
         List<DatabaseService.MilestoneItemClaim> milestoneClaims = freezeMilestoneClaims(opening);
         if (!milestoneClaims.isEmpty()) milestoneState = milestoneState.withClaims(milestoneClaims);
@@ -640,7 +1084,7 @@ public final class OpeningService {
         DatabaseService.OpeningRecord record = new DatabaseService.OpeningRecord(transactionId,
                 player.getUniqueId(), player.getName(), current.id(), plan.keyId(), plan.keyAmount(),
                 plan.openingCount(), plan.source().name(), String.join(",", plan.rewardIds()),
-                locationText(plan.location()), delivered.overflowCount(), opening.rewardPlan().outcomeDetail(),
+                locationText(plan.location()), delivered.overflowCount(), transactionDetail(opening),
                 Instant.now());
         DatabaseService.MilestoneProgressCommit frozenMilestones = milestoneState;
         plugin.database().completeOpening(record, rewardState, frozenMilestones).whenComplete((ignored, error) -> {
@@ -757,16 +1201,19 @@ public final class OpeningService {
                     locks.remove(player.getUniqueId());
                     return;
                 }
+                boolean awaitingDecision = false;
                 try {
-                    finishConsumed(transactionId, opening, player, current, eligibility, bypassLimits);
+                    awaitingDecision = afterPaymentConsumed(transactionId, opening, player, current, bypassLimits);
                 } catch (RuntimeException failure) {
                     plugin.getLogger().log(Level.SEVERE,
                             "Portable opening " + transactionId + " failed after consumption", failure);
                     plugin.database().updateJournal(transactionId, "FAILED", concise(failure));
                     plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
                 } finally {
-                    pending.remove(transactionId);
-                    locks.remove(player.getUniqueId());
+                    if (!awaitingDecision) {
+                        pending.remove(transactionId);
+                        locks.remove(player.getUniqueId());
+                    }
                 }
             });
         });
@@ -1016,20 +1463,75 @@ public final class OpeningService {
     }
 
     private static String transactionDetail(PendingOpening opening) {
-        return opening.payment().detail() + ";" + opening.rewardPlan().outcomeDetail();
+        return opening.payment().detail() + ";" + opening.rewardPlan().outcomeDetail()
+                + ";rerolls[" + String.join(";", opening.decisionAudit()) + "]";
     }
 
     private record PendingOpening(OpeningPlan plan, Crate crate, RewardStateService.Plan rewardPlan,
                                   PaymentChoice payment, MilestoneProgressService.Plan milestones,
-                                  PortableContext portable) {
+                                  PortableContext portable, long stateAt, boolean paymentConsumed,
+                                  List<String> decisionAudit) {
         private PendingOpening {
             rewardPlan = java.util.Objects.requireNonNull(rewardPlan, "rewardPlan");
             payment = java.util.Objects.requireNonNull(payment, "payment");
             milestones = java.util.Objects.requireNonNull(milestones, "milestones");
+            decisionAudit = List.copyOf(decisionAudit);
+            if (stateAt < 0) throw new IllegalArgumentException("Opening state time cannot be negative");
         }
 
         private List<CrateReward> selected() { return rewardPlan.rewards(); }
+
+        private PendingOpening withStateAt(long value) {
+            return new PendingOpening(plan, crate, rewardPlan, payment, milestones, portable,
+                    value, paymentConsumed, decisionAudit);
+        }
+
+        private PendingOpening withPaymentConsumed(String audit) {
+            return withAudit(audit, true);
+        }
+
+        private PendingOpening withAudit(String audit) {
+            return withAudit(audit, paymentConsumed);
+        }
+
+        private PendingOpening withAudit(String audit, boolean consumed) {
+            var next = new ArrayList<>(decisionAudit);
+            next.add(audit);
+            return new PendingOpening(plan, crate, rewardPlan, payment, milestones, portable,
+                    stateAt, consumed, next);
+        }
+
+        private PendingOpening withRewardPlan(RewardStateService.Plan replacement, long value,
+                                              String audit) {
+            List<RewardDelivery> deliveries = replacement.rewards().stream()
+                    .map(OpeningService::delivery).toList();
+            OpeningPlan updated = new OpeningPlan(plan.transactionId(), plan.playerId(), plan.playerName(),
+                    plan.crateId(), plan.keyId(), plan.keyAmount(), plan.openingCount(), plan.source(),
+                    plan.location(), plan.runtimeRevision(), deliveries, plan.createdAt());
+            var next = new ArrayList<>(decisionAudit);
+            next.add(audit);
+            return new PendingOpening(updated, crate, replacement, payment, milestones, portable,
+                    value, paymentConsumed, next);
+        }
     }
+
+    private static final class RerollDecision {
+        private final UUID transactionId;
+        private final RerollService.Policy policy;
+        private RerollService.Offer<String> offer;
+        private int generation;
+        private boolean processing;
+
+        private RerollDecision(UUID transactionId, RerollService.Policy policy,
+                               RerollService.Offer<String> offer) {
+            this.transactionId = transactionId;
+            this.policy = policy;
+            this.offer = offer;
+        }
+    }
+
+    private record ExtraKeyPayment(KeyService.KeyTransaction transaction, String keyId, int amount) {}
+    private record ConsumedRerollCost(RerollService.CostType type, long amount, String keyId) {}
 
     private record PaymentOption(KeyService.KeyTransaction transaction,
                                  KeyPaymentPlanner.Availability availability,

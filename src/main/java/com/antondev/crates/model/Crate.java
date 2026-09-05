@@ -5,6 +5,7 @@ import com.antondev.crates.domain.crate.CrateState;
 import com.antondev.crates.domain.key.KeyPaymentPolicy;
 import com.antondev.crates.domain.opening.OpeningMode;
 import com.antondev.crates.domain.reward.PityPolicy;
+import com.antondev.crates.service.RerollService;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -36,6 +37,7 @@ public record Crate(
         List<Component> hologramLines,
         String broadcast,
         PityPolicy pity,
+        RerollService.Policy rerolls,
         Map<String, CrateMilestone> milestones,
         Map<String, CrateReward> rewards) {
 
@@ -50,6 +52,22 @@ public record Crate(
         rewards = Collections.unmodifiableMap(new LinkedHashMap<>(rewards));
         paymentPolicy = java.util.Objects.requireNonNull(paymentPolicy, "paymentPolicy");
         openingMode = java.util.Objects.requireNonNull(openingMode, "openingMode");
+        rerolls = java.util.Objects.requireNonNull(rerolls, "rerolls");
+    }
+
+    /** Source-compatible constructor for the pre-reroll 3.0 model. */
+    public Crate(String id, CrateState state, int displayOrder, Component displayName,
+                 List<Component> description, ItemStack icon, String permission,
+                 Set<String> worlds, Set<String> excludedWorlds, List<String> acceptedKeyIds,
+                 int keyCost, KeyPaymentPolicy paymentPolicy, boolean mixedPayment,
+                 int cooldownSeconds, boolean bulkEnabled, int bulkMaximum,
+                 OpeningMode openingMode, AnimationType animation, List<Component> hologramLines,
+                 String broadcast, PityPolicy pity, Map<String, CrateMilestone> milestones,
+                 Map<String, CrateReward> rewards) {
+        this(id, state, displayOrder, displayName, description, icon, permission, worlds,
+                excludedWorlds, acceptedKeyIds, keyCost, paymentPolicy, mixedPayment,
+                cooldownSeconds, bulkEnabled, bulkMaximum, openingMode, animation,
+                hologramLines, broadcast, pity, RerollService.Policy.disabled(), milestones, rewards);
     }
 
     /** Source-compatible constructor for the 2.x/early-3.x physical random model. */
@@ -62,7 +80,7 @@ public record Crate(
         this(id, state, displayOrder, displayName, description, icon, permission, worlds,
                 excludedWorlds, acceptedKeyIds, keyCost, KeyPaymentPolicy.PHYSICAL_ONLY, false,
                 cooldownSeconds, bulkEnabled, bulkMaximum, OpeningMode.RANDOM, animation,
-                hologramLines, broadcast, pity, Map.of(), rewards);
+                hologramLines, broadcast, pity, RerollService.Policy.disabled(), Map.of(), rewards);
     }
 
     @Override public ItemStack icon() { return icon.clone(); }

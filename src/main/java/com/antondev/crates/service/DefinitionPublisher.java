@@ -106,6 +106,9 @@ public final class DefinitionPublisher {
                     && publication.crate().rewards().values().stream().anyMatch(CrateReward::hasAlternative)) {
                 throw new IllegalStateException("Alternative rewards are disabled globally; remove their mappings or enable the feature before publishing");
             }
+            if (!plugin.settings().rerollsEnabled() && publication.crate().rerolls().enabled()) {
+                throw new IllegalStateException("Rerolls are disabled globally; disable this crate's reroll policy or enable the feature before publishing");
+            }
             List<String> issues = crates.publishingIssues(publication.crate(), keys);
             if (!issues.isEmpty()) throw new IllegalStateException(String.join(" ", issues));
         }
@@ -207,7 +210,21 @@ public final class DefinitionPublisher {
         return new DatabaseService.DefinitionBundle(crate.id(), crate.state().name(), crate.displayOrder(),
                 Text.serialize(crate.displayName()), crate.description().stream().map(Text::serialize)
                         .collect(java.util.stream.Collectors.joining("\n")),
-                icon.bytes(), payload, rewards, definitionKeys, crate.acceptedKeyIds(), crate.keyCost(), now, now);
+                icon.bytes(), payload, rewards, definitionKeys, crate.acceptedKeyIds(), crate.keyCost(),
+                rerollSettings(crate.rerolls()), now, now);
+    }
+
+    private static byte[] rerollSettings(RerollService.Policy policy) {
+        String value = "enabled=" + policy.enabled()
+                + "\nmaximum=" + policy.maximum()
+                + "\ncost-type=" + policy.costType()
+                + "\ncost=" + policy.cost()
+                + "\npermission=" + policy.permission()
+                + "\nexclude-previous=" + policy.excludePrevious()
+                + "\ntimeout-seconds=" + policy.timeoutSeconds()
+                + "\ntimeout-policy=" + policy.timeoutPolicy()
+                + "\nmass-allowed=" + policy.massAllowed() + "\n";
+        return value.getBytes(StandardCharsets.UTF_8);
     }
 
     private static DatabaseService.DefinitionKeyData key(

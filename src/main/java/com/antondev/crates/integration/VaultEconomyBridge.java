@@ -21,16 +21,25 @@ public final class VaultEconomyBridge {
     }
 
     public boolean deposit(OfflinePlayer player, double amount) {
+        return transact(player, amount, true);
+    }
+
+    public boolean withdraw(OfflinePlayer player, double amount) {
+        return transact(player, amount, false);
+    }
+
+    private boolean transact(OfflinePlayer player, double amount, boolean deposit) {
         if (amount <= 0) return true;
         Optional<Binding> resolved = resolve();
         if (resolved.isEmpty()) return false;
         try {
             Binding current = resolved.get();
-            Object response = current.deposit().invoke(current.provider(), player, amount);
+            Method operation = deposit ? current.deposit() : current.withdraw();
+            Object response = operation.invoke(current.provider(), player, amount);
             Object success = current.success().invoke(response);
             return success instanceof Boolean value && value;
         } catch (ReflectiveOperationException | RuntimeException error) {
-            diagnostic = "Vault economy deposit failed: " + concise(error);
+            diagnostic = "Vault economy " + (deposit ? "deposit" : "withdrawal") + " failed: " + concise(error);
             return false;
         }
     }
@@ -54,9 +63,10 @@ public final class VaultEconomyBridge {
                 return Optional.empty();
             }
             Method deposit = economy.getMethod("depositPlayer", OfflinePlayer.class, double.class);
+            Method withdraw = economy.getMethod("withdrawPlayer", OfflinePlayer.class, double.class);
             Class<?> response = deposit.getReturnType();
             Method success = response.getMethod("transactionSuccess");
-            current = new Binding(provider, deposit, success);
+            current = new Binding(provider, deposit, withdraw, success);
             binding = current;
             diagnostic = "Vault economy provider is ready.";
             return Optional.of(current);
@@ -70,5 +80,5 @@ public final class VaultEconomyBridge {
         return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
-    private record Binding(Object provider, Method deposit, Method success) {}
+    private record Binding(Object provider, Method deposit, Method withdraw, Method success) {}
 }

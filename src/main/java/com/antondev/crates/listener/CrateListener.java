@@ -6,6 +6,7 @@ import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.domain.opening.OpenSource;
 import java.util.List;
 import org.bukkit.block.Block;
+import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -34,7 +35,16 @@ public final class CrateListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void interact(PlayerInteractEvent event) {
-        if (event.getHand() != EquipmentSlot.HAND || event.getClickedBlock() == null) return;
+        if (event.getHand() != EquipmentSlot.HAND) return;
+        if (plugin.portables() != null && plugin.portables().isPortable(event.getItem())) {
+            event.setCancelled(true);
+            if (event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_AIR
+                    || event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK) {
+                handlePortable(event.getPlayer(), event.getItem());
+            }
+            return;
+        }
+        if (event.getClickedBlock() == null) return;
         var link = plugin.locations().at(event.getClickedBlock()).orElse(null);
         if (link == null) return;
         Crate crate = plugin.runtime().find(link.crateId()).orElse(null);
@@ -63,6 +73,40 @@ public final class CrateListener implements Listener {
             }
             default -> { }
         }
+    }
+
+    private void handlePortable(org.bukkit.entity.Player player, org.bukkit.inventory.ItemStack item) {
+        if (plugin.portables() == null || !plugin.portables().ready()) {
+            plugin.messages().send(player, "opening-state-changed");
+            return;
+        }
+        org.bukkit.inventory.ItemStack expected = item == null ? null : item.clone();
+        plugin.portables().verify(expected).whenComplete((issue, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (error != null || issue == null || issue.isEmpty()) {
+                    plugin.messages().send(player, "invalid-crate");
+                    return;
+                }
+                var record = issue.get();
+                if (record.issuedTo() != null && !record.issuedTo().equals(player.getUniqueId())) {
+                    plugin.messages().send(player, "no-permission");
+                    return;
+                }
+                if (!record.state().equals("UNUSED")) {
+                    player.sendActionBar(com.antondev.crates.config.Text.parse(
+                            "<yellow>This portable crate has already been used or needs review.</yellow>"));
+                    return;
+                }
+                Crate crate = plugin.runtime().find(record.crateId()).orElse(null);
+                if (crate == null || crate.state() != com.antondev.crates.domain.crate.CrateState.PUBLISHED) {
+                    plugin.messages().send(player, "opening-state-changed");
+                    return;
+                }
+                plugin.openings().openPortable(player, crate, record, expected);
+            });
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)

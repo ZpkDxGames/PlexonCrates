@@ -28,7 +28,10 @@ class PortableCrateCodecTest {
     void tamperingOrShortSecretsAreRejected() {
         var issued = PortableCrateCodec.issue(
                 "basic", PortableCrateCodec.RevisionPolicy.LATEST_PUBLISHED, 0, null, SECRET);
-        String tampered = issued.encoded().substring(0, issued.encoded().length() - 1) + "A";
+        int changed = issued.encoded().indexOf('.') + 4;
+        char replacement = issued.encoded().charAt(changed) == 'A' ? 'B' : 'A';
+        String tampered = issued.encoded().substring(0, changed) + replacement
+                + issued.encoded().substring(changed + 1);
 
         assertFalse(PortableCrateCodec.verifies(tampered, SECRET));
         assertThrows(IllegalArgumentException.class,

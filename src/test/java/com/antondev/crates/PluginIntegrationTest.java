@@ -129,6 +129,55 @@ class PluginIntegrationTest {
     }
 
     @Test
+    void portableItemsAuthenticateConsumeOnceAndRejectDuplicatedReplay() {
+        var player = server.addPlayer("PortableUser");
+        player.setOp(true);
+        World world = server.getWorld("Survival_World");
+        assertTrue(world != null);
+        player.teleport(world.getSpawnLocation());
+        var crate = plugin.runtime().find("basic").orElseThrow();
+
+        ItemStack issued = plugin.portables().issue(
+                crate, com.antondev.crates.service.PortableCrateCodec.RevisionPolicy.LATEST_PUBLISHED,
+                0, player.getUniqueId(), null).join();
+        assertTrue(plugin.portables().isPortable(issued));
+        var issue = plugin.portables().verify(issued).join().orElseThrow();
+        assertEquals("UNUSED", issue.state());
+        assertEquals(player.getUniqueId(), issue.issuedTo());
+
+        NamespacedKey tokenKey = new NamespacedKey(plugin, "portable_crate_token");
+        ItemStack tampered = issued.clone();
+        tampered.editMeta(meta -> {
+            String token = meta.getPersistentDataContainer().get(tokenKey, PersistentDataType.STRING);
+            assertTrue(token != null);
+            int changed = token.indexOf('.') + 4;
+            char replacement = token.charAt(changed) == 'A' ? 'B' : 'A';
+            meta.getPersistentDataContainer().set(tokenKey, PersistentDataType.STRING,
+                    token.substring(0, changed) + replacement + token.substring(changed + 1));
+        });
+        assertTrue(plugin.portables().decode(tampered).isEmpty());
+
+        issued.setAmount(2);
+        player.getInventory().setItemInMainHand(issued);
+        assertTrue(plugin.openings().openPortable(player, crate, issue, issued.clone()));
+        awaitPortableCommit();
+
+        assertEquals("CONSUMED", plugin.database().loadPortableIssue(issue.issueId())
+                .join().orElseThrow().state());
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        ItemStack replay = player.getInventory().getItemInMainHand();
+        assertTrue(plugin.portables().isPortable(replay));
+        assertEquals(1, replay.getAmount());
+
+        assertTrue(plugin.openings().openPortable(player, crate, issue, replay.clone()));
+        awaitPortableCommit();
+
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertTrue(plugin.portables().isPortable(player.getInventory().getItemInMainHand()));
+        assertEquals(1, player.getInventory().getItemInMainHand().getAmount());
+    }
+
+    @Test
     void crateExportImportsAsAValidatedDraftWithoutChangingTheSource() throws Exception {
         var exportDirectory = plugin.getDataFolder().toPath().resolve("exports");
         var exported = plugin.crates().exportDefinition("basic", exportDirectory);
@@ -149,5 +198,12 @@ class PluginIntegrationTest {
         server.getScheduler().performTicks(2);
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
+    }
+
+    private void awaitPortableCommit() {
+        for (int pass = 0; pass < 6; pass++) {
+            plugin.database().awaitIdle().join();
+            server.getScheduler().performTicks(2);
+        }
     }
 }

@@ -143,6 +143,7 @@ class OpeningPipelineIntegrationTest {
                 new com.antondev.crates.domain.reward.RewardLimits(1, 0, 0, 0, 0, 0, 0),
                 "", "", "", "", "TEST");
         plugin.crates().publish("selective_test", plugin.keys(), "TEST");
+        assertTrue(plugin.reloadFor(server.getConsoleSender()));
         var crate = plugin.runtime().find("selective_test").orElseThrow();
         var player = server.addPlayer("SelectiveUser");
         player.setOp(false);

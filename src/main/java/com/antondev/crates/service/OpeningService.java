@@ -71,11 +71,30 @@ public final class OpeningService {
         if (!Bukkit.isPrimaryThread()) {
             throw new IllegalStateException("Crate openings must begin on the primary server thread");
         }
-        if (issue == null || expectedItem == null
-                || plugin.portables().decode(expectedItem).filter(token ->
-                        token.payload().issueId().equals(issue.issueId())
-                                && token.payload().crateId().equals(crate.id())).isEmpty()) {
+        var token = expectedItem == null ? null : plugin.portables().decode(expectedItem).orElse(null);
+        if (issue == null || token == null
+                || !token.payload().issueId().equals(issue.issueId())
+                || !token.payload().crateId().equals(issue.crateId())
+                || !issue.crateId().equals(crate.id())
+                || !token.payload().revisionPolicy().name().equals(issue.revisionPolicy())
+                || token.payload().pinnedRevision() != issue.pinnedRevision()
+                || !java.util.Objects.equals(token.payload().issuedTo(), issue.issuedTo())
+                || issue.signatureVersion() != com.antondev.crates.service.PortableCrateCodec.VERSION) {
             plugin.messages().send(player, "invalid-crate");
+            return false;
+        }
+        if (issue.issuedTo() != null && !issue.issuedTo().equals(player.getUniqueId())) {
+            plugin.messages().send(player, "no-permission");
+            return false;
+        }
+        if (!issue.state().equals("UNUSED")) {
+            player.sendActionBar(Text.parse(
+                    "<yellow>This portable crate has already been used or needs review.</yellow>"));
+            return false;
+        }
+        if (issue.revisionPolicy().equals("PINNED_REVISION")
+                && issue.pinnedRevision() != plugin.runtime().crateRevision(issue.crateId())) {
+            plugin.messages().send(player, "opening-state-changed");
             return false;
         }
         String reservation = UUID.randomUUID().toString();

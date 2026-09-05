@@ -107,19 +107,53 @@ public final class MenuService implements Listener {
     }
 
     public void openPreview(Player player, Crate crate, int requestedPage, boolean adminOrigin) {
+        renderPreview(player, crate, requestedPage, adminOrigin, null);
+    }
+
+    /** Opens a non-consuming confirmation preview for one verified portable issuance. */
+    public void openPortablePreview(Player player, Crate crate, DatabaseService.PortableIssue issue) {
+        if (issue == null || !issue.crateId().equals(crate.id())) {
+            plugin.messages().send(player, "invalid-crate");
+            return;
+        }
+        if (issue.issuedTo() != null && !issue.issuedTo().equals(player.getUniqueId())) {
+            plugin.messages().send(player, "no-permission");
+            return;
+        }
+        if (!issue.state().equals("UNUSED")) {
+            player.sendActionBar(Text.parse(
+                    "<yellow>This portable crate has already been used or needs review.</yellow>"));
+            return;
+        }
+        long activeRevision = plugin.runtime().crateRevision(crate.id());
+        if (issue.revisionPolicy().equals("PINNED_REVISION")
+                && issue.pinnedRevision() != activeRevision) {
+            plugin.messages().send(player, "opening-state-changed");
+            return;
+        }
+        renderPreview(player, crate, 0, false, issue.issueId());
+    }
+
+    private void renderPreview(Player player, Crate crate, int requestedPage,
+                               boolean adminOrigin, UUID portableIssueId) {
         MenuConfig menus = plugin.menusConfig();
         List<Integer> rewardSlots = menus.slots("preview.reward-slots");
         List<CrateReward> rewards = crate.orderedRewards().stream().filter(CrateReward::enabled).toList();
         int pages = Math.max(1, (rewards.size() + rewardSlots.size() - 1) / rewardSlots.size());
         int page = Math.max(0, Math.min(requestedPage, pages - 1));
-        MenuHolder holder = new MenuHolder(MenuHolder.Kind.PREVIEW, crate.id(), "", page, adminOrigin,
+        boolean portable = portableIssueId != null;
+        MenuHolder holder = new MenuHolder(
+                portable ? MenuHolder.Kind.PORTABLE_PREVIEW : MenuHolder.Kind.PREVIEW,
+                crate.id(), portable ? portableIssueId.toString() : "", page, adminOrigin,
                 adminOrigin ? 0 : plugin.runtime().crateRevision(crate.id()));
         if (adminOrigin) holder.bindDraft(plugin.adminMenus().ensureDraft(player, crate.id()));
-        Inventory inventory = create(holder, menus.size("preview"), menus.title("preview", Text.component("crate", crate.displayName())));
+        Inventory inventory = create(holder, menus.size("preview"),
+                menus.title("preview", Text.component("crate", crate.displayName())));
         fill(inventory);
         long now = System.currentTimeMillis();
         boolean bypassLimits = player.hasPermission("plexoncrates.bypass.limit");
-        List<CrateReward> eligible = rewards.stream().filter(reward -> previewEligible(player, crate, reward, now, bypassLimits)).toList();
+        List<CrateReward> eligible = rewards.stream()
+                .filter(reward -> previewEligible(player, crate, reward, now, bypassLimits)).toList();
         int start = page * rewardSlots.size();
         for (int slotIndex = 0; slotIndex < rewardSlots.size() && start + slotIndex < rewards.size(); slotIndex++) {
             CrateReward reward = rewards.get(start + slotIndex);
@@ -143,7 +177,16 @@ public final class MenuService implements Listener {
             inventory.setItem(rewardSlots.get(slotIndex), display);
         }
         ItemStack open = menus.item("preview.open", Text.component("crate", crate.displayName()),
-                Text.value("keys", plugin.keys().count(player, crate.keyId())), Text.component("key", keyName(crate)));
+                Text.value("keys", plugin.keys().count(player, crate.keyId())),
+                Text.component("key", keyName(crate)));
+        if (portable) {
+            open.editMeta(meta -> meta.lore(List.of(
+                    Component.empty(),
+                    Text.parse("<gray>Cost</gray> <dark_gray>»</dark_gray> <white>1 portable crate item</white>"),
+                    Text.parse("<gray>No physical key is required.</gray>"),
+                    Component.empty(),
+                    Text.parse("<green>Click to confirm and open one.</green>"))));
+        }
         inventory.setItem(menus.slot("preview.open"), open);
         if (crate.pity().enabled()) {
             int remaining = plugin.rewardStates().pityRemaining(player.getUniqueId(), crate);
@@ -355,6 +398,7 @@ public final class MenuService implements Listener {
                 } else if (slot == menus.slot("preview.previous")) openPreview(player, crate, holder.page() - 1, holder.adminOrigin());
                 else if (slot == menus.slot("preview.next")) openPreview(player, crate, holder.page() + 1, holder.adminOrigin());
             }
+            case PORTABLE_PREVIEW -> portablePreviewClick(player, holder, slot);
             case ADMIN -> adminClick(player, slot);
             case EDITOR -> editorClick(player, holder.crateId(), slot);
             case CONFIRM_DELETE -> confirmClick(player, holder, slot);
@@ -364,6 +408,76 @@ public final class MenuService implements Listener {
             }
             default -> { }
         }
+    }
+
+    private void portablePreviewClick(Player player, MenuHolder holder, int slot) {
+        MenuConfig menus = plugin.menusConfig();
+        Crate crate = plugin.runtime().find(holder.crateId()).orElse(null);
+        UUID issueId;
+        try {
+            issueId = UUID.fromString(holder.rewardId());
+        } catch (IllegalArgumentException invalid) {
+            player.closeInventory();
+            plugin.messages().send(player, "invalid-crate");
+            return;
+        }
+        if (crate == null || holder.revision() != plugin.runtime().crateRevision(holder.crateId())) {
+            player.closeInventory();
+            plugin.messages().send(player, "opening-state-changed");
+            return;
+        }
+        if (slot == menus.slot("preview.back")) {
+            player.closeInventory();
+            return;
+        }
+        if (slot == menus.slot("preview.previous")) {
+            renderPreview(player, crate, holder.page() - 1, false, issueId);
+            return;
+        }
+        if (slot == menus.slot("preview.next")) {
+            renderPreview(player, crate, holder.page() + 1, false, issueId);
+            return;
+        }
+        if (slot != menus.slot("preview.open")) return;
+
+        ItemStack expected = player.getInventory().getItemInMainHand().clone();
+        player.closeInventory();
+        plugin.portables().verify(expected).whenComplete((verified, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (error != null) {
+                    plugin.getLogger().log(java.util.logging.Level.WARNING,
+                            "Portable issuance verification failed for " + issueId, error);
+                    plugin.messages().send(player, "opening-state-changed");
+                    return;
+                }
+                if (verified == null || verified.isEmpty()
+                        || !verified.get().issueId().equals(issueId)) {
+                    plugin.messages().send(player, "invalid-crate");
+                    return;
+                }
+                DatabaseService.PortableIssue issue = verified.get();
+                if (issue.issuedTo() != null && !issue.issuedTo().equals(player.getUniqueId())) {
+                    plugin.messages().send(player, "no-permission");
+                    return;
+                }
+                if (!issue.state().equals("UNUSED")) {
+                    player.sendActionBar(Text.parse(
+                            "<yellow>This portable crate has already been used or needs review.</yellow>"));
+                    return;
+                }
+                Crate active = plugin.runtime().find(issue.crateId()).orElse(null);
+                long activeRevision = plugin.runtime().crateRevision(issue.crateId());
+                if (active == null || activeRevision != holder.revision()
+                        || issue.revisionPolicy().equals("PINNED_REVISION")
+                        && issue.pinnedRevision() != activeRevision) {
+                    plugin.messages().send(player, "opening-state-changed");
+                    return;
+                }
+                plugin.openings().openPortable(player, active, issue, expected);
+            });
+        });
     }
 
     @EventHandler

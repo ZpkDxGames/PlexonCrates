@@ -159,7 +159,16 @@ class PluginIntegrationTest {
 
         issued.setAmount(2);
         player.getInventory().setItemInMainHand(issued);
-        assertTrue(plugin.openings().openPortable(player, crate, issue, issued.clone()));
+        plugin.menus().openPortablePreview(player, crate, issue);
+        assertTrue(player.getOpenInventory().getTopInventory().getHolder()
+                instanceof com.antondev.crates.gui.MenuHolder holder
+                && holder.kind() == com.antondev.crates.gui.MenuHolder.Kind.PORTABLE_PREVIEW);
+        assertEquals("UNUSED", plugin.database().loadPortableIssue(issue.issueId())
+                .join().orElseThrow().state());
+        assertEquals(2, player.getInventory().getItemInMainHand().getAmount());
+
+        player.simulateInventoryClick(player.getOpenInventory(),
+                org.bukkit.event.inventory.ClickType.LEFT, plugin.menusConfig().slot("preview.open"));
         awaitPortableCommit();
 
         assertEquals("CONSUMED", plugin.database().loadPortableIssue(issue.issueId())

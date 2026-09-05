@@ -109,7 +109,7 @@ public final class CrateListener implements Listener {
                     plugin.messages().send(player, "opening-state-changed");
                     return;
                 }
-                plugin.openings().openPortable(player, crate, record, expected);
+                plugin.menus().openPortablePreview(player, crate, record);
             });
         });
     }

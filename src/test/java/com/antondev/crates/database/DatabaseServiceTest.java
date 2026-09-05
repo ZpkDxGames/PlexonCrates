@@ -439,6 +439,38 @@ class DatabaseServiceTest {
     }
 
     @Test
+    void openingFinalizationAtomicallyPersistsMilestoneProgressAndClaimOnce() throws Exception {
+        UUID player = UUID.randomUUID();
+        UUID transaction = UUID.randomUUID();
+        Instant created = Instant.parse("2026-09-05T12:00:00Z");
+        byte[] item = bytes("exact-milestone-item");
+        String fingerprint = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(item));
+        try (DatabaseService database = database()) {
+            database.prepareJournal(new DatabaseService.JournalRecord(transaction, player, "Tonim", "basic",
+                    "basic", 1, 1, "COMMAND", "diamond", created)).join();
+            var milestoneState = new DatabaseService.MilestoneState(player, "basic", 1, 0, 1,
+                    bytes("first_open#0"), created.plusSeconds(1));
+            var milestoneClaim = new DatabaseService.MilestoneItemClaim(UUID.randomUUID(),
+                    "milestone:" + transaction + ":first_open#0:0", "first_open#0", "diamond",
+                    item, 1, fingerprint, false, created.plusSeconds(1));
+            var milestones = new DatabaseService.MilestoneProgressCommit(
+                    milestoneState, 0, List.of(milestoneClaim));
+            var opening = new DatabaseService.OpeningRecord(transaction, player, "Tonim", "basic", "basic",
+                    1, 1, "COMMAND", "diamond", "", 0, created.plusSeconds(1));
+
+            database.completeOpening(opening, DatabaseService.RewardStateCommit.empty(), milestones).join();
+            database.completeOpening(opening, DatabaseService.RewardStateCommit.empty(), milestones).join();
+
+            assertEquals(1, database.history(player, 10, 0).size());
+            assertEquals(1, database.loadMilestoneState(player, "basic").join().openings());
+            assertArrayEquals(bytes("first_open#0"),
+                    database.loadMilestoneState(player, "basic").join().earnedPayload());
+            assertEquals(1, database.loadClaims(player, 10, 0).join().size());
+            assertEquals(1, database.pendingClaimCount(player).join());
+        }
+    }
+
+    @Test
     void legacyImportMarkerMakesRetryIdempotent() throws Exception {
         UUID player = UUID.randomUUID();
         UUID world = UUID.randomUUID();

@@ -24,6 +24,7 @@ import com.antondev.crates.service.DisplayService;
 import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.KeyService;
 import com.antondev.crates.service.LocationStore;
+import com.antondev.crates.service.MilestoneProgressService;
 import com.antondev.crates.service.OpeningLog;
 import com.antondev.crates.service.OpeningService;
 import com.antondev.crates.service.StatsStore;
@@ -63,6 +64,7 @@ public class PlexonCrates extends JavaPlugin {
     private KeyService keys;
     private StatsStore statistics;
     private RewardStateService rewardStates;
+    private MilestoneProgressService milestoneProgress;
     private DraftSessionService draftSessions;
     private DefinitionPublisher definitionPublisher;
     private DisplayService displays;
@@ -122,6 +124,7 @@ public class PlexonCrates extends JavaPlugin {
             }
             statistics = new StatsStore(database.loadStatistics());
             rewardStates = new RewardStateService(database.loadRewardStates());
+            milestoneProgress = new MilestoneProgressService(database.loadMilestoneStates());
             openingLog = new OpeningLog(this);
             displays = new DisplayService(this);
             draftSessions = new DraftSessionService(database, this::draftStateChanged);
@@ -431,6 +434,7 @@ public class PlexonCrates extends JavaPlugin {
     public KeyService keys() { return keys; }
     public StatsStore statistics() { return statistics; }
     public RewardStateService rewardStates() { return rewardStates; }
+    public MilestoneProgressService milestoneProgress() { return milestoneProgress; }
     public DraftSessionService draftSessions() { return draftSessions; }
     public DefinitionPublisher definitionPublisher() { return definitionPublisher; }
     public DisplayService displays() { return displays; }

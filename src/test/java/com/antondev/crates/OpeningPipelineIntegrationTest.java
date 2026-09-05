@@ -127,6 +127,38 @@ class OpeningPipelineIntegrationTest {
     }
 
     @Test
+    void massOpeningAtomicallyEarnsOneExactMilestoneClaim() throws Exception {
+        plugin.crates().createDraft("milestone_test", "TEST");
+        plugin.crates().setAcceptedKeys("milestone_test", List.of("basic"), 1, "TEST");
+        plugin.crates().setOpening("milestone_test", 0, true, 64,
+                com.antondev.crates.domain.crate.AnimationType.INSTANT, "TEST");
+        plugin.crates().addCapturedReward("milestone_test", "diamond", 100,
+                new ItemStack(Material.DIAMOND), "TEST");
+        plugin.crates().setMilestone("milestone_test", "first_open", 1,
+                com.antondev.crates.service.MilestoneService.RepeatPolicy.ONCE, 0,
+                com.antondev.crates.service.MilestoneService.DeliveryPolicy.CLAIM, "diamond",
+                net.kyori.adventure.text.Component.text("First Open"), new ItemStack(Material.CHEST), true, "TEST");
+        plugin.crates().publish("milestone_test", plugin.keys(), "TEST");
+        var crate = plugin.crates().find("milestone_test").orElseThrow();
+        var player = server.addPlayer("MilestoneUser");
+        player.setOp(false);
+        plugin.keys().give(player, "basic", 2);
+
+        assertTrue(plugin.openings().open(player, crate, 2, false));
+        awaitVirtualOpeningCommit();
+
+        var state = plugin.database().loadMilestoneState(player.getUniqueId(), crate.id()).join();
+        assertEquals(2, state.openings());
+        assertEquals(java.util.Set.of("first_open#0"),
+                com.antondev.crates.service.MilestoneProgressService.decodeEarned(state.earnedPayload()));
+        var claims = plugin.database().loadClaims(player.getUniqueId(), 10, 0).join();
+        assertEquals(1, claims.size());
+        assertEquals("MILESTONE", claims.getFirst().sourceType());
+        assertEquals("diamond", claims.getFirst().rewardId());
+        assertEquals(2, plugin.database().history(player.getUniqueId(), 10, 0).getFirst().openingCount());
+    }
+
+    @Test
     void virtualOnlyOpeningDebitsTheFrozenRevisionAndDeliversOnce() throws Exception {
         var crate = enableVirtualWallet("VIRTUAL_ONLY", false);
         var player = server.addPlayer("VirtualOnly");

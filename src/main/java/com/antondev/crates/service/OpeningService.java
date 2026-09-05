@@ -2,6 +2,7 @@ package com.antondev.crates.service;
 
 import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.api.event.CrateKeyConsumeEvent;
+import com.antondev.crates.api.event.CrateMilestoneEarnEvent;
 import com.antondev.crates.api.event.CrateOpenEvent;
 import com.antondev.crates.api.event.CratePreOpenEvent;
 import com.antondev.crates.api.event.CrateRewardSelectEvent;
@@ -21,6 +22,7 @@ import com.antondev.crates.integration.VaultEconomyBridge;
 import com.antondev.crates.item.ItemSnapshotCodec;
 import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.model.Crate;
+import com.antondev.crates.model.CrateMilestone;
 import com.antondev.crates.model.CrateReward;
 import java.time.Instant;
 import java.time.Duration;
@@ -265,6 +267,9 @@ public final class OpeningService {
         }
 
         List<RewardDelivery> deliveries = selected.stream().map(OpeningService::delivery).toList();
+        MilestoneProgressService.Plan milestonePlan = plugin.milestoneProgress().plan(player.getUniqueId(), crate,
+                requested, source, milestone -> milestone.reward().eligible(player),
+                plugin.settings().milestonesEnabled());
         UUID transactionId = UUID.randomUUID();
         OpeningPlan plan = new OpeningPlan(transactionId, player.getUniqueId(), player.getName(), crate.id(),
                 payment.keyId(), payment.total(), requested, source, location,
@@ -281,7 +286,7 @@ public final class OpeningService {
 
         PortableContext portableContext = portable ? portableRequests.remove(player.getUniqueId()) : null;
         if (portable && portableContext == null) return reject(player, "opening-state-changed");
-        PendingOpening opening = new PendingOpening(plan, crate, selected, payment, portableContext);
+        PendingOpening opening = new PendingOpening(plan, crate, selected, payment, milestonePlan, portableContext);
         pending.put(transactionId, opening);
         DatabaseService.JournalRecord journal = new DatabaseService.JournalRecord(transactionId,
                 player.getUniqueId(), player.getName(), crate.id(), payment.keyId(), payment.total(),
@@ -440,6 +445,11 @@ public final class OpeningService {
                 plugin.messages().send(player, "no-eligible-rewards");
                 return;
             }
+            if (!plugin.milestoneProgress().canApply(opening.milestones())) {
+                abortPrepared(transactionId, "Milestone progress changed before consumption", false);
+                plugin.messages().send(player, "opening-state-changed");
+                return;
+            }
             PaymentChoice payment = opening.payment();
             if (payment.physicalAmount() > 0
                     && (payment.physicalTransaction() == null
@@ -566,16 +576,67 @@ public final class OpeningService {
         DeliveryResult delivered = deliver(player, current, opening.selected(), plan, true);
         DatabaseService.RewardStateCommit rewardState = plugin.rewardStates().apply(player.getUniqueId(), current,
                 opening.selected(), plan.source(), eligibility, bypassLimits, System.currentTimeMillis());
+        DatabaseService.MilestoneProgressCommit milestoneState = plugin.milestoneProgress().apply(opening.milestones());
+        List<DatabaseService.MilestoneItemClaim> milestoneClaims = freezeMilestoneClaims(opening);
+        if (!milestoneClaims.isEmpty()) milestoneState = milestoneState.withClaims(milestoneClaims);
         plugin.statistics().record(player.getUniqueId(), current.id(), plan.openingCount());
         setCooldown(player, current);
         DatabaseService.OpeningRecord record = new DatabaseService.OpeningRecord(transactionId,
                 player.getUniqueId(), player.getName(), current.id(), plan.keyId(), plan.keyAmount(),
                 plan.openingCount(), plan.source().name(), String.join(",", plan.rewardIds()),
                 locationText(plan.location()), delivered.overflowCount(), Instant.now());
-        plugin.database().completeOpening(record, rewardState);
+        DatabaseService.MilestoneProgressCommit frozenMilestones = milestoneState;
+        plugin.database().completeOpening(record, rewardState, frozenMilestones).whenComplete((ignored, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (error != null) {
+                    plugin.getLogger().log(Level.SEVERE,
+                            "Atomic opening finalization failed for " + transactionId, error);
+                    return;
+                }
+                completeMilestones(player, opening, milestoneClaims);
+            });
+        });
         Bukkit.getPluginManager().callEvent(new CrateOpenEvent(player, plan, delivered.overflowCount()));
         if (delivered.overflowCount() > 0) notifyOverflow(player);
         showResult(player, current, opening.selected(), plan);
+    }
+
+    private List<DatabaseService.MilestoneItemClaim> freezeMilestoneClaims(PendingOpening opening) {
+        if (opening.milestones().newlyEarned().isEmpty()) return List.of();
+        var claims = new ArrayList<DatabaseService.MilestoneItemClaim>();
+        int index = 0;
+        for (MilestoneProgressService.Earning earning : opening.milestones().newlyEarned()) {
+            CrateMilestone milestone = earning.milestone();
+            for (ItemStack item : milestone.reward().itemCopies()) {
+                ItemSnapshotCodec.Snapshot snapshot = itemSnapshots.capture(item);
+                String token = "milestone:" + opening.plan().transactionId() + ":"
+                        + earning.earned().key() + ":" + index++;
+                claims.add(new DatabaseService.MilestoneItemClaim(UUID.randomUUID(), token,
+                        earning.earned().key(), milestone.reward().id(), snapshot.bytes(),
+                        snapshot.capturedAmount(), snapshot.sha256(),
+                        milestone.deliveryPolicy() == MilestoneService.DeliveryPolicy.AUTO_DELIVER,
+                        opening.plan().createdAt()));
+            }
+        }
+        return List.copyOf(claims);
+    }
+
+    private void completeMilestones(Player player, PendingOpening opening,
+                                    List<DatabaseService.MilestoneItemClaim> claims) {
+        if (opening.milestones().newlyEarned().isEmpty()) return;
+        if (player.isOnline()) {
+            for (MilestoneProgressService.Earning earning : opening.milestones().newlyEarned()) {
+                player.sendMessage(Text.parse("<gold>Milestone earned:</gold> <white><milestone></white>",
+                        Text.component("milestone", earning.milestone().displayName())));
+                Bukkit.getPluginManager().callEvent(new CrateMilestoneEarnEvent(player, opening.plan(),
+                        earning.milestone(), earning.earned()));
+            }
+            boolean manual = claims.stream().anyMatch(claim -> !claim.autoDeliver());
+            if (manual) plugin.messages().send(player, "milestone-claim-pending");
+            claims.stream().filter(DatabaseService.MilestoneItemClaim::autoDeliver)
+                    .forEach(claim -> plugin.claims().claim(player, claim.claimId()));
+        }
     }
 
     private void refundVirtualAndAbort(PendingOpening opening, String reason) {
@@ -872,10 +933,12 @@ public final class OpeningService {
     }
 
     private record PendingOpening(OpeningPlan plan, Crate crate, List<CrateReward> selected,
-                                  PaymentChoice payment, PortableContext portable) {
+                                  PaymentChoice payment, MilestoneProgressService.Plan milestones,
+                                  PortableContext portable) {
         private PendingOpening {
             selected = List.copyOf(selected);
             payment = java.util.Objects.requireNonNull(payment, "payment");
+            milestones = java.util.Objects.requireNonNull(milestones, "milestones");
         }
     }
 

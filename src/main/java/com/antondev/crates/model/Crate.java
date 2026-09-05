@@ -36,6 +36,7 @@ public record Crate(
         List<Component> hologramLines,
         String broadcast,
         PityPolicy pity,
+        Map<String, CrateMilestone> milestones,
         Map<String, CrateReward> rewards) {
 
     public Crate {
@@ -45,6 +46,7 @@ public record Crate(
         excludedWorlds = Set.copyOf(excludedWorlds);
         acceptedKeyIds = List.copyOf(acceptedKeyIds);
         hologramLines = List.copyOf(hologramLines);
+        milestones = Collections.unmodifiableMap(new LinkedHashMap<>(milestones));
         rewards = Collections.unmodifiableMap(new LinkedHashMap<>(rewards));
         paymentPolicy = java.util.Objects.requireNonNull(paymentPolicy, "paymentPolicy");
         openingMode = java.util.Objects.requireNonNull(openingMode, "openingMode");
@@ -60,12 +62,13 @@ public record Crate(
         this(id, state, displayOrder, displayName, description, icon, permission, worlds,
                 excludedWorlds, acceptedKeyIds, keyCost, KeyPaymentPolicy.PHYSICAL_ONLY, false,
                 cooldownSeconds, bulkEnabled, bulkMaximum, OpeningMode.RANDOM, animation,
-                hologramLines, broadcast, pity, rewards);
+                hologramLines, broadcast, pity, Map.of(), rewards);
     }
 
     @Override public ItemStack icon() { return icon.clone(); }
     public ItemStack iconCopy() { return icon.clone(); }
     public List<CrateReward> orderedRewards() { return List.copyOf(rewards.values()); }
+    public List<CrateMilestone> orderedMilestones() { return List.copyOf(milestones.values()); }
 
     /** Compatibility alias used by the 1.0 API and commands. */
     public boolean enabled() { return state == CrateState.PUBLISHED; }

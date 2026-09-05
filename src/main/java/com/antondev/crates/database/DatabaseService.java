@@ -434,6 +434,57 @@ public final class DatabaseService implements AutoCloseable {
         @Override public byte[] earnedPayload() { return earnedPayload.clone(); }
     }
 
+    /** Frozen exact item claim created atomically when a milestone is earned. */
+    public record MilestoneItemClaim(
+            UUID claimId, String idempotencyToken, String milestoneKey, String rewardId,
+            byte[] itemBytes, int itemAmount, String itemSha256, boolean autoDeliver,
+            Instant createdAt) {
+        public MilestoneItemClaim {
+            claimId = java.util.Objects.requireNonNull(claimId, "claimId");
+            idempotencyToken = requiredText(idempotencyToken, "idempotencyToken");
+            milestoneKey = requiredText(milestoneKey, "milestoneKey");
+            rewardId = requiredText(rewardId, "rewardId");
+            itemBytes = copyBytes(itemBytes, "milestone item bytes");
+            itemSha256 = requiredText(itemSha256, "itemSha256").toLowerCase(java.util.Locale.ROOT);
+            createdAt = java.util.Objects.requireNonNull(createdAt, "createdAt");
+            if (itemAmount < 1 || !itemSha256.matches("[0-9a-f]{64}")
+                    || !itemSha256.equals(sha256(itemBytes))) {
+                throw new IllegalArgumentException("Invalid milestone exact-item claim");
+            }
+        }
+
+        @Override public byte[] itemBytes() { return itemBytes.clone(); }
+    }
+
+    /** Milestone counter/earning mutation committed with opening history and claims. */
+    public record MilestoneProgressCommit(
+            MilestoneState state, long expectedRevision, List<MilestoneItemClaim> claims) {
+        public MilestoneProgressCommit {
+            claims = List.copyOf(claims);
+            if (state == null) {
+                if (expectedRevision != 0 || !claims.isEmpty()) {
+                    throw new IllegalArgumentException("Empty milestone commits cannot carry mutations");
+                }
+            } else if (expectedRevision < 0 || state.revision() != expectedRevision + 1) {
+                throw new IllegalArgumentException("Milestone revision must advance exactly once");
+            }
+        }
+
+        public static MilestoneProgressCommit empty() {
+            return new MilestoneProgressCommit(null, 0, List.of());
+        }
+
+        public boolean changed() { return state != null; }
+
+        public MilestoneProgressCommit withClaims(List<MilestoneItemClaim> frozenClaims) {
+            if (!changed()) {
+                if (frozenClaims == null || frozenClaims.isEmpty()) return this;
+                throw new IllegalStateException("Cannot attach claims without milestone progress");
+            }
+            return new MilestoneProgressCommit(state, expectedRevision, frozenClaims);
+        }
+    }
+
     /** Durable single-use portable-crate issuance state. */
     public record PortableIssue(
             UUID issueId, String crateId, String revisionPolicy, long pinnedRevision,
@@ -1479,6 +1530,22 @@ public final class DatabaseService implements AutoCloseable {
         return submitQuery("load milestone state", connection -> loadMilestoneState(connection, owner, id));
     }
 
+    /** Startup snapshot for the main-thread milestone planner. */
+    public List<MilestoneState> loadMilestoneStates() throws SQLException {
+        var result = new ArrayList<MilestoneState>();
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT player_uuid, crate_id, openings, last_cycle, revision, earned_payload, updated_at
+                FROM milestone_state ORDER BY player_uuid, crate_id
+                """); ResultSet rows = statement.executeQuery()) {
+            while (rows.next()) {
+                result.add(new MilestoneState(UUID.fromString(rows.getString(1)), rows.getString(2),
+                        rows.getLong(3), rows.getLong(4), rows.getLong(5), rows.getBytes(6),
+                        Instant.ofEpochMilli(rows.getLong(7))));
+            }
+        }
+        return List.copyOf(result);
+    }
+
     /**
      * Persists cumulative milestone progress with a compare-free single-writer
      * transaction. The caller supplies the earned-key payload produced by
@@ -1917,10 +1984,18 @@ public final class DatabaseService implements AutoCloseable {
     }
 
     public CompletableFuture<Void> completeOpening(OpeningRecord record) {
-        return completeOpening(record, RewardStateCommit.empty());
+        return completeOpening(record, RewardStateCommit.empty(), MilestoneProgressCommit.empty());
     }
 
     public CompletableFuture<Void> completeOpening(OpeningRecord record, RewardStateCommit state) {
+        return completeOpening(record, state, MilestoneProgressCommit.empty());
+    }
+
+    public CompletableFuture<Void> completeOpening(
+            OpeningRecord record, RewardStateCommit state, MilestoneProgressCommit milestones) {
+        java.util.Objects.requireNonNull(record, "record");
+        java.util.Objects.requireNonNull(state, "state");
+        java.util.Objects.requireNonNull(milestones, "milestones");
         return submitTransaction("complete opening", connection -> {
             try (PreparedStatement history = connection.prepareStatement("""
                     INSERT INTO opening_history(transaction_id, player_uuid, player_name, crate_id, key_id,
@@ -2009,6 +2084,36 @@ public final class DatabaseService implements AutoCloseable {
                     pity.setString(2, state.pity().crateId());
                     pity.setInt(3, state.pity().misses());
                     pity.executeUpdate();
+                }
+            }
+            if (milestones.changed()) {
+                MilestoneState next = milestones.state();
+                if (!next.playerId().equals(record.playerId()) || !next.crateId().equals(record.crateId())) {
+                    throw new IllegalStateException("Milestone mutation does not belong to the opening");
+                }
+                MilestoneState current = loadMilestoneState(connection, next.playerId(), next.crateId());
+                if (current.revision() != milestones.expectedRevision()) {
+                    throw new IllegalStateException("Milestone progress changed before atomic finalization");
+                }
+                try (PreparedStatement milestone = connection.prepareStatement("""
+                        INSERT INTO milestone_state(player_uuid, crate_id, openings, last_cycle,
+                            earned_payload, revision, updated_at)
+                        VALUES(?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(player_uuid, crate_id) DO UPDATE SET openings=excluded.openings,
+                            last_cycle=excluded.last_cycle, earned_payload=excluded.earned_payload,
+                            revision=excluded.revision, updated_at=excluded.updated_at
+                        """)) {
+                    milestone.setString(1, next.playerId().toString());
+                    milestone.setString(2, next.crateId());
+                    milestone.setLong(3, next.openings());
+                    milestone.setLong(4, next.lastCycle());
+                    milestone.setBytes(5, next.earnedPayload());
+                    milestone.setLong(6, next.revision());
+                    milestone.setLong(7, next.updatedAt().toEpochMilli());
+                    milestone.executeUpdate();
+                }
+                for (MilestoneItemClaim claim : milestones.claims()) {
+                    insertMilestoneClaim(connection, record, claim);
                 }
             }
             updateJournal(connection, record.transactionId(), "COMPLETED", "");
@@ -3139,6 +3244,34 @@ public final class DatabaseService implements AutoCloseable {
                 return rows.next() ? Optional.of(claimEntry(rows)) : Optional.empty();
             }
         }
+    }
+
+    private static void insertMilestoneClaim(
+            Connection connection, OpeningRecord opening, MilestoneItemClaim claim) throws SQLException {
+        String sourceId = opening.transactionId() + ":" + claim.milestoneKey();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO claim_entry(claim_id, idempotency_token, player_uuid, source_type, source_id,
+                    crate_id, reward_id, item_bytes, item_amount, item_sha256, state, last_result,
+                    created_at, updated_at)
+                VALUES(?, ?, ?, 'MILESTONE', ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?)
+                ON CONFLICT(idempotency_token) DO NOTHING
+                """)) {
+            statement.setString(1, claim.claimId().toString());
+            statement.setString(2, claim.idempotencyToken());
+            statement.setString(3, opening.playerId().toString());
+            statement.setString(4, sourceId);
+            statement.setString(5, opening.crateId());
+            statement.setString(6, claim.rewardId());
+            statement.setBytes(7, claim.itemBytes());
+            statement.setInt(8, claim.itemAmount());
+            statement.setString(9, claim.itemSha256());
+            statement.setLong(10, claim.createdAt().toEpochMilli());
+            statement.setLong(11, claim.createdAt().toEpochMilli());
+            statement.executeUpdate();
+        }
+        ClaimEntry existing = loadClaimByToken(connection, claim.idempotencyToken()).orElseThrow();
+        ensureItemClaimMatch(existing, opening.playerId(), "MILESTONE", sourceId, opening.crateId(),
+                claim.rewardId(), claim.itemBytes(), claim.itemAmount(), claim.itemSha256());
     }
 
     private static VirtualKeyBalance loadVirtualKeyBalance(Connection connection, UUID playerId, String keyId)

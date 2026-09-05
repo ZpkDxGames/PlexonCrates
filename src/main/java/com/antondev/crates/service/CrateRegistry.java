@@ -16,6 +16,7 @@ import com.antondev.crates.domain.reward.RewardRarity;
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.item.ItemSnapshotCodec;
 import com.antondev.crates.model.Crate;
+import com.antondev.crates.model.CrateMilestone;
 import com.antondev.crates.model.CrateReward;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -352,6 +353,7 @@ public final class CrateRegistry {
         yaml.set("pity.enabled", false);
         yaml.set("pity.threshold", 0);
         yaml.set("pity.reward-ids", List.of());
+        yaml.createSection("milestones");
         yaml.createSection("rewards");
         yaml.set("audit.created-at", now.toString());
         yaml.set("audit.updated-at", now.toString());
@@ -504,6 +506,55 @@ public final class CrateRegistry {
             yaml.set("opening.bulk-enabled", bulkEnabled);
             yaml.set("opening.bulk-maximum", bulkMaximum);
             yaml.set("opening.animation", animation.name());
+            touch(yaml, editor);
+        });
+    }
+
+    public void setMilestone(String crateId, String rawMilestoneId, int threshold,
+                             MilestoneService.RepeatPolicy repeatPolicy, int cycleLength,
+                             MilestoneService.DeliveryPolicy deliveryPolicy, String rawRewardId,
+                             Component displayName, ItemStack displayItem, boolean previewVisible,
+                             String editor) throws Exception {
+        String milestoneId = normalize(rawMilestoneId);
+        String rewardId = normalize(rawRewardId);
+        if (!validId(milestoneId)) throw new IllegalArgumentException("Invalid milestone ID");
+        if (!validId(rewardId)) throw new IllegalArgumentException("Invalid milestone reward ID");
+        java.util.Objects.requireNonNull(repeatPolicy, "repeatPolicy");
+        java.util.Objects.requireNonNull(deliveryPolicy, "deliveryPolicy");
+        java.util.Objects.requireNonNull(displayName, "displayName");
+        if (displayItem == null || displayItem.getType().isAir()) {
+            throw new IllegalArgumentException("Milestone display item cannot be empty");
+        }
+        // Validate the threshold/cycle pair through the deterministic calculator contract.
+        new MilestoneService.Definition(milestoneId, threshold, repeatPolicy, cycleLength, 0, deliveryPolicy);
+        mutate(crateId, yaml -> {
+            if (!yaml.contains("rewards." + rewardId)) {
+                throw new IllegalArgumentException("Unknown milestone reward: " + rewardId);
+            }
+            String path = "milestones." + milestoneId;
+            boolean existing = yaml.isConfigurationSection(path);
+            int position = existing ? yaml.getInt(path + ".position", 0)
+                    : yaml.getConfigurationSection("milestones") == null ? 0
+                    : yaml.getConfigurationSection("milestones").getKeys(false).size();
+            yaml.set(path + ".threshold", threshold);
+            yaml.set(path + ".repeat", repeatPolicy.name());
+            yaml.set(path + ".cycle-length", cycleLength);
+            yaml.set(path + ".position", position);
+            yaml.set(path + ".delivery", deliveryPolicy.name());
+            yaml.set(path + ".reward-id", rewardId);
+            yaml.set(path + ".display-name", Text.serialize(displayName));
+            yaml.set(path + ".display", null);
+            yaml.set(path + ".display.base64", ItemCodec.capture(displayItem, false));
+            yaml.set(path + ".preview-visible", previewVisible);
+            touch(yaml, editor);
+        });
+    }
+
+    public void removeMilestone(String crateId, String milestoneId, String editor) throws Exception {
+        mutate(crateId, yaml -> {
+            String path = "milestones." + normalize(milestoneId);
+            if (!yaml.isConfigurationSection(path)) throw new IllegalArgumentException("Milestone not found");
+            yaml.set(path, null);
             touch(yaml, editor);
         });
     }
@@ -1042,9 +1093,10 @@ public final class CrateRegistry {
         if (state == CrateState.PUBLISHED && publishedTotal != ChanceAllocator.TOTAL_BASIS_POINTS) {
             throw path(file, "published reward chances must total exactly 100.00%");
         }
+        Map<String, CrateMilestone> milestones = parseMilestones(file, yaml, rewards);
         return new Crate(id, state, displayOrder, display, description, icon, permission, worlds, excludedWorlds,
                 acceptedKeys, keyCost, paymentPolicy, mixedPayment, cooldown, bulkEnabled, bulkMaximum,
-                openingMode, animation, hologram, crateBroadcast, pity, rewards);
+                openingMode, animation, hologram, crateBroadcast, pity, milestones, rewards);
     }
 
     private static boolean pityEnabled(YamlConfiguration yaml) {
@@ -1155,6 +1207,53 @@ public final class CrateRegistry {
             }
         }
         return rewards;
+    }
+
+    private static Map<String, CrateMilestone> parseMilestones(
+            Path file, YamlConfiguration yaml, Map<String, CrateReward> rewards) {
+        ConfigurationSection section = yaml.getConfigurationSection("milestones");
+        if (section == null) return Map.of();
+        var milestones = new LinkedHashMap<String, CrateMilestone>();
+        var boundaries = new LinkedHashSet<String>();
+        int authoredPosition = 0;
+        for (String rawId : section.getKeys(false)) {
+            String id = normalize(rawId);
+            if (!validId(id) || !id.equals(rawId)) throw path(file, "invalid milestone ID " + rawId);
+            String base = "milestones." + id;
+            if (!yaml.isConfigurationSection(base)) throw path(file, base + " must be a section");
+            int threshold = integer(yaml.get(base + ".threshold"), file, base + ".threshold", 1, 1_000_000_000);
+            MilestoneService.RepeatPolicy repeat = enumValue(MilestoneService.RepeatPolicy.class,
+                    yaml.getString(base + ".repeat", "ONCE"), file, base + ".repeat");
+            int cycleLength = integer(yaml.get(base + ".cycle-length", 0), file,
+                    base + ".cycle-length", 0, 1_000_000_000);
+            int position = integer(yaml.get(base + ".position", authoredPosition), file,
+                    base + ".position", 0, 1_000_000);
+            MilestoneService.DeliveryPolicy delivery = enumValue(MilestoneService.DeliveryPolicy.class,
+                    yaml.getString(base + ".delivery", "CLAIM"), file, base + ".delivery");
+            MilestoneService.Definition definition;
+            try {
+                definition = new MilestoneService.Definition(id, threshold, repeat, cycleLength, position, delivery);
+            } catch (IllegalArgumentException error) {
+                throw path(file, base + " is invalid: " + error.getMessage(), error);
+            }
+            String boundary = repeat + ":" + threshold + ":" + cycleLength;
+            if (!boundaries.add(boundary)) throw path(file, "duplicate milestone earning boundary at " + base);
+            String rewardId = normalize(required(yaml, file, base + ".reward-id"));
+            CrateReward reward = rewards.get(rewardId);
+            if (reward == null) throw path(file, base + " references unknown reward " + rewardId);
+            if (reward.itemCopies().isEmpty() || !reward.commands().isEmpty() || reward.experiencePoints() > 0
+                    || reward.experienceLevels() > 0 || reward.money() > 0) {
+                throw path(file, base + " must reference an exact-item-only reward for durable milestone delivery");
+            }
+            Component displayName = Text.parse(yaml.getString(base + ".display-name",
+                    Text.serialize(reward.displayName())));
+            ConfigurationSection displaySection = yaml.getConfigurationSection(base + ".display");
+            ItemStack displayItem = displaySection == null ? reward.displayCopy() : ItemCodec.read(displaySection);
+            milestones.put(id, new CrateMilestone(definition, displayName, displayItem, reward,
+                    yaml.getBoolean(base + ".preview-visible", true)));
+            authoredPosition++;
+        }
+        return Collections.unmodifiableMap(milestones);
     }
 
     private static YamlConfiguration read(Path file) {

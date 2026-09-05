@@ -51,7 +51,13 @@ public final class GuiSessionService {
         }
         if (!holder.draftBound()) return Validation.CURRENT;
         Optional<DraftSessionService.View> view = drafts.view(playerId, holder.crateId());
-        return view.isPresent() && holder.matchesDraft(view.get())
+        if (view.isEmpty()) return Validation.STALE_DRAFT;
+        DraftSessionService.View currentView = view.get();
+        if (holder.matchesDraft(currentView)) return Validation.CURRENT;
+        // A save can finish between opening the replacement inventory and the scheduled status refresh. The
+        // server may safely fast-forward that active holder inside the same draft UUID and lease; a takeover or
+        // a holder claiming a future revision still fails closed.
+        return holder.advanceDraft(currentView) && holder.matchesDraft(currentView)
                 ? Validation.CURRENT : Validation.STALE_DRAFT;
     }
 

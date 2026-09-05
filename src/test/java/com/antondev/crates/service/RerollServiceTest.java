@@ -38,4 +38,18 @@ class RerollServiceTest {
         assertTrue(decision.timedOut());
         assertFalse(decision.rerolled());
     }
+
+    @Test
+    void weightedCallerReplacementCannotRepeatCurrentCandidate() {
+        var now = Instant.parse("2026-09-05T00:00:00Z");
+        var policy = new RerollService.Policy(true, 2, RerollService.CostType.TOKEN,
+                0, "", false, 15, RerollService.TimeoutPolicy.ACCEPT_CURRENT, false);
+        var offer = RerollService.start(policy, "a", List.of("a", "b"), now);
+
+        assertTrue(RerollService.replace(policy, offer, List.of("a", "b"), "a", now).isEmpty());
+        var replacement = RerollService.replace(policy, offer, List.of("a", "b"), "b", now)
+                .orElseThrow();
+        assertEquals("b", replacement.candidate());
+        assertEquals(1, replacement.rerollsUsed());
+    }
 }

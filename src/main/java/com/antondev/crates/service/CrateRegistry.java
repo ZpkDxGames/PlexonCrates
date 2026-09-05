@@ -1169,7 +1169,8 @@ public final class CrateRegistry {
         RerollService.CostType rerollCostType = enumValue(RerollService.CostType.class,
                 yaml.getString("rerolls.cost-type", "TOKEN"), file, "rerolls.cost-type");
         long rerollCost = nonNegativeLong(yaml.get("rerolls.cost",
-                rerollCostType == RerollService.CostType.PERMISSION ? 0 : 1), file, "rerolls.cost");
+                !rerollsEnabled || rerollCostType == RerollService.CostType.PERMISSION ? 0 : 1),
+                file, "rerolls.cost");
         String rerollPermission = yaml.getString("rerolls.permission",
                 rerollCostType == RerollService.CostType.PERMISSION
                         ? "plexoncrates.rerolls.free" : "").trim();

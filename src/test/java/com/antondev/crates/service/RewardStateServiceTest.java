@@ -229,6 +229,25 @@ class RewardStateServiceTest {
                 ignored -> null, true, false, NOW).rewards().isEmpty());
     }
 
+    @Test
+    void rerollPlannerUsesEligibleWeightedTicketsAndExcludesShownActualReward() {
+        UUID player = UUID.randomUUID();
+        CrateReward first = reward("first", 75, RewardRarity.COMMON, RewardLimits.unlimited());
+        CrateReward second = reward("second", 25, RewardRarity.RARE, RewardLimits.unlimited());
+        Crate crate = crate(PityPolicy.disabled(), first, second);
+        RewardStateService state = service(0.90);
+
+        assertEquals(Set.of("first", "second"), state.rerollOutcomes(player, crate, OpenSource.GUI,
+                ignored -> null, true, false, NOW).stream().map(outcome -> outcome.actual().id())
+                .collect(java.util.stream.Collectors.toSet()));
+        RewardStateService.Plan replacement = state.planRerollResolved(player, crate, OpenSource.GUI,
+                ignored -> null, true, false, NOW, Set.of("first"));
+
+        assertEquals(List.of("second"), replacement.rewards().stream().map(CrateReward::id).toList());
+        assertTrue(state.canApplyResolved(player, crate, replacement, OpenSource.GUI,
+                ignored -> null, true, false, NOW));
+    }
+
     private static RewardStateService service(double roll) {
         return new RewardStateService(new DatabaseService.RewardStateSnapshot(List.of(), List.of(), List.of()),
                 () -> roll);

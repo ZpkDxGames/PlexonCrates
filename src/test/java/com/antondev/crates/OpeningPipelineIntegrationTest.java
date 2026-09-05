@@ -266,6 +266,103 @@ class OpeningPipelineIntegrationTest {
     }
 
     @Test
+    void tokenRerollConsumesOpeningKeyOnceChargesOnceAndDeliversOnlyReplacement() throws Exception {
+        var crate = createRerollCrate("reroll_token", 15, true);
+        var player = server.addPlayer("TokenReroll");
+        player.setOp(false);
+        plugin.keys().give(player, "basic", 1);
+        plugin.database().creditRerolls(player.getUniqueId(), 1,
+                "reroll-test-grant", "TEST", "reroll-token", null).join();
+
+        assertTrue(plugin.openings().open(player, crate, 1, false));
+        awaitRerollDecision(player);
+        var before = plugin.openings().rerollView(player).orElseThrow();
+        String original = before.candidate().id();
+        assertEquals(0, plugin.keys().count(player, "basic"));
+        assertEquals(1, plugin.database().loadRerollBalance(player.getUniqueId()).join().balance());
+        assertTrue(plugin.database().history(player.getUniqueId(), 10, 0).isEmpty());
+
+        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
+                plugin.menusConfig().slot("reroll.reroll"));
+        awaitRerollDecision(player);
+        var after = plugin.openings().rerollView(player).orElseThrow();
+        assertFalse(original.equals(after.candidate().id()));
+        assertEquals(0, plugin.database().loadRerollBalance(player.getUniqueId()).join().balance());
+
+        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
+                plugin.menusConfig().slot("reroll.accept"));
+        awaitVirtualOpeningCommit();
+
+        assertEquals(0, plugin.keys().count(player, "basic"));
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        var history = plugin.database().history(player.getUniqueId(), 10, 0);
+        assertEquals(1, history.size());
+        assertEquals(after.candidate().id(), history.getFirst().rewardIds());
+        assertTrue(history.getFirst().outcomeDetail().contains("status=REROLLED"));
+        assertTrue(history.getFirst().outcomeDetail().contains("decision=ACCEPT"));
+    }
+
+    @Test
+    void singleEligibleRewardSkipsRerollAndChargesNothing() throws Exception {
+        var crate = createRerollCrate("reroll_single", 15, false);
+        var player = server.addPlayer("SingleReroll");
+        player.setOp(false);
+        plugin.keys().give(player, "basic", 1);
+        plugin.database().creditRerolls(player.getUniqueId(), 1,
+                "single-reroll-grant", "TEST", "reroll-single", null).join();
+
+        assertTrue(plugin.openings().open(player, crate, 1, false));
+        awaitVirtualOpeningCommit();
+
+        assertTrue(plugin.openings().rerollView(player).isEmpty());
+        assertEquals(1, plugin.database().loadRerollBalance(player.getUniqueId()).join().balance());
+        assertEquals(1, plugin.database().history(player.getUniqueId(), 10, 0).size());
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+    }
+
+    @Test
+    void closingRerollDecisionAcceptsCurrentCandidateExactlyOnce() throws Exception {
+        var crate = createRerollCrate("reroll_close", 15, true);
+        var player = server.addPlayer("CloseReroll");
+        player.setOp(false);
+        plugin.keys().give(player, "basic", 1);
+
+        assertTrue(plugin.openings().open(player, crate, 1, false));
+        awaitRerollDecision(player);
+        String accepted = plugin.openings().rerollView(player).orElseThrow().candidate().id();
+        player.closeInventory();
+        awaitVirtualOpeningCommit();
+
+        var history = plugin.database().history(player.getUniqueId(), 10, 0);
+        assertEquals(1, history.size());
+        assertEquals(accepted, history.getFirst().rewardIds());
+        assertTrue(history.getFirst().outcomeDetail().contains("reason=CLOSE"));
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertFalse(plugin.openings().isOpening(player.getUniqueId()));
+    }
+
+    @Test
+    void rerollTimeoutAcceptsCurrentCandidateExactlyOnce() throws Exception {
+        var crate = createRerollCrate("reroll_timeout", 1, true);
+        var player = server.addPlayer("TimeoutReroll");
+        player.setOp(false);
+        plugin.keys().give(player, "basic", 1);
+
+        assertTrue(plugin.openings().open(player, crate, 1, false));
+        awaitRerollDecision(player);
+        String accepted = plugin.openings().rerollView(player).orElseThrow().candidate().id();
+        server.getScheduler().performTicks(21);
+        awaitVirtualOpeningCommit();
+
+        var history = plugin.database().history(player.getUniqueId(), 10, 0);
+        assertEquals(1, history.size());
+        assertEquals(accepted, history.getFirst().rewardIds());
+        assertTrue(history.getFirst().outcomeDetail().contains("reason=TIMEOUT"));
+        assertEquals(1, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        assertFalse(plugin.openings().isOpening(player.getUniqueId()));
+    }
+
+    @Test
     void draftCannotPublishWithAnEmptyPoolOrUnresolvedKey() throws Exception {
         plugin.crates().createDraft("unfinished", "TEST");
 
@@ -299,6 +396,26 @@ class OpeningPipelineIntegrationTest {
                 new ItemStack(Material.DIAMOND), "TEST");
         plugin.crates().publish("virtual_test", plugin.keys(), "TEST");
         return plugin.crates().find("virtual_test").orElseThrow();
+    }
+
+    private com.antondev.crates.model.Crate createRerollCrate(
+            String id, int timeoutSeconds, boolean twoRewards) throws Exception {
+        plugin.crates().createDraft(id, "TEST");
+        plugin.crates().setAcceptedKeys(id, List.of("basic"), 1, "TEST");
+        plugin.crates().setOpening(id, 0, true, 10,
+                com.antondev.crates.domain.crate.AnimationType.INSTANT, "TEST");
+        plugin.crates().addCapturedReward(id, "diamond", 100,
+                new ItemStack(Material.DIAMOND), "TEST");
+        if (twoRewards) {
+            plugin.crates().addCapturedReward(id, "emerald", 50,
+                    new ItemStack(Material.EMERALD), "TEST");
+        }
+        plugin.crates().setRerollPolicy(id, new com.antondev.crates.service.RerollService.Policy(
+                true, 1, com.antondev.crates.service.RerollService.CostType.TOKEN, 1, "", true,
+                timeoutSeconds, com.antondev.crates.service.RerollService.TimeoutPolicy.ACCEPT_CURRENT,
+                false), "TEST");
+        plugin.crates().publish(id, plugin.keys(), "TEST");
+        return plugin.crates().find(id).orElseThrow();
     }
 
     private int openSelectiveConfirmation(org.bukkit.entity.Player player,
@@ -335,6 +452,16 @@ class OpeningPipelineIntegrationTest {
             plugin.database().awaitIdle().join();
             server.getScheduler().performTicks(2);
         }
+    }
+
+    private void awaitRerollDecision(org.bukkit.entity.Player player) {
+        for (int pass = 0; pass < 10; pass++) {
+            plugin.database().awaitIdle().join();
+            server.getScheduler().performTicks(2);
+            if (plugin.openings().rerollView(player).isPresent()
+                    && !plugin.openings().rerollView(player).orElseThrow().processing()) return;
+        }
+        assertTrue(plugin.openings().rerollView(player).isPresent(), "reroll decision did not become ready");
     }
 
     private static final class Canceller implements Listener {

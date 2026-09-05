@@ -264,6 +264,15 @@ public final class DatabaseService implements AutoCloseable {
         }
     }
 
+    public record DeleteResult(String crateId, long definitionRevision, long runtimeRevision, boolean removed) {
+        public DeleteResult {
+            crateId = requiredText(crateId, "crateId");
+            if (definitionRevision < 0 || runtimeRevision < 0) {
+                throw new IllegalArgumentException("Definition revisions cannot be negative");
+            }
+        }
+    }
+
     public record DefinitionCounts(int rewards, int items, int actions, int keyLinks) {}
 
     private final Logger logger;
@@ -1389,9 +1398,48 @@ public final class DatabaseService implements AutoCloseable {
                     throw new IllegalStateException("Draft changed before publication completed");
                 }
             }
-            StoredDefinition stored = new StoredDefinition(draft.targetId(), nextRevision, "PUBLISHED",
-                    publication.definition().settingsPayload(), publication.createdAt());
+            StoredDefinition stored = new StoredDefinition(draft.targetId(), nextRevision,
+                    publication.definition().lifecycle(), publication.definition().settingsPayload(),
+                    publication.createdAt());
             return new PublishResult(stored, nextRuntimeRevision);
+        });
+    }
+
+    /** Deletes an archived canonical definition in one transaction, including its normalized children and audit row. */
+    public CompletableFuture<DeleteResult> deleteDefinition(String crateId, UUID actorId, String actorName) {
+        String id = requiredText(crateId, "crateId");
+        UUID actor = java.util.Objects.requireNonNull(actorId, "actorId");
+        String name = requiredText(actorName, "actorName");
+        return submitTransactionQuery("delete canonical definition", connection -> {
+            String lifecycle;
+            long definitionRevision;
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT lifecycle, published_revision FROM crate_definition WHERE crate_id = ?")) {
+                statement.setString(1, id);
+                try (ResultSet rows = statement.executeQuery()) {
+                    if (!rows.next()) return new DeleteResult(id, 0, runtimeRevision(connection), false);
+                    lifecycle = rows.getString(1);
+                    definitionRevision = rows.getLong(2);
+                }
+            }
+            if (!List.of("DRAFT", "ARCHIVED").contains(lifecycle)) {
+                throw new IllegalStateException("Only an archived or unpublished definition can be deleted");
+            }
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "DELETE FROM definition_draft WHERE target_type = 'CRATE' AND target_id = ?")) {
+                statement.setString(1, id);
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "DELETE FROM crate_definition WHERE crate_id = ?")) {
+                statement.setString(1, id);
+                if (statement.executeUpdate() != 1) throw new IllegalStateException("Definition changed before deletion completed");
+            }
+            long nextRuntimeRevision = Math.addExact(runtimeRevision(connection), 1);
+            setRuntimeRevision(connection, nextRuntimeRevision);
+            insertAudit(connection, actor, name, "DELETE", "CRATE", id,
+                    "Deleted archived canonical definition", System.currentTimeMillis());
+            return new DeleteResult(id, definitionRevision, nextRuntimeRevision, true);
         });
     }
 
@@ -1625,7 +1673,7 @@ public final class DatabaseService implements AutoCloseable {
         var definitions = new ArrayList<StoredDefinition>();
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT crate_id, published_revision, lifecycle, settings_payload, updated_at
-                FROM crate_definition WHERE lifecycle = 'PUBLISHED'
+                FROM crate_definition WHERE lifecycle IN ('PUBLISHED', 'DISABLED', 'ARCHIVED')
                 ORDER BY display_order, crate_id
                 """); ResultSet rows = statement.executeQuery()) {
             while (rows.next()) {
@@ -1861,9 +1909,10 @@ public final class DatabaseService implements AutoCloseable {
     }
 
     private static void requirePublished(DefinitionBundle bundle) {
-        if (!bundle.lifecycle().equals("PUBLISHED")) {
-            throw new IllegalArgumentException("Only published definitions can enter the runtime store");
+        if (!List.of("PUBLISHED", "DISABLED", "ARCHIVED").contains(bundle.lifecycle())) {
+            throw new IllegalArgumentException("Only published, disabled, or archived definitions can enter the canonical store");
         }
+        if (!bundle.lifecycle().equals("PUBLISHED")) return;
         int total = bundle.rewards().stream().filter(DefinitionRewardData::enabled)
                 .mapToInt(DefinitionRewardData::chanceBasisPoints).sum();
         if (total != 10_000) {

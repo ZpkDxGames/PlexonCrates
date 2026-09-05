@@ -768,7 +768,7 @@ public final class AdminMenuService {
                     }
                 });
                 loads.add(plugin.draftSessions().openCrate(actor, player.getName(), crate.id(),
-                        plugin.runtime().crateRevision(crate.id()), payload));
+                        plugin.definitionRevision(crate.id()), payload));
             }
         } catch (Exception error) {
             plugin.configError(player, error);
@@ -1184,14 +1184,26 @@ public final class AdminMenuService {
                         plugin.configError(target, asException(error));
                         return;
                     }
-                    try {
-                        plugin.crates().delete(crateId);
-                        plugin.database().audit(new DatabaseService.AuditRecord(target.getUniqueId(), target.getName(),
-                                "DELETE", "CRATE", crateId, "Deleted confirmed crate definition", Instant.now()));
-                        openCrates(target, 0);
-                    } catch (Exception deleteError) {
-                        plugin.configError(target, deleteError);
-                    }
+                    plugin.definitionRepository().delete(crateId, target.getUniqueId(), target.getName())
+                            .whenComplete((deleted, deleteError) -> runFor(target.getUniqueId(), current -> {
+                                if (deleteError != null) {
+                                    plugin.configError(current, asException(deleteError));
+                                    return;
+                                }
+                                try {
+                                    plugin.runtime().remove(deleted.runtimeRevision(), deleted.definitionRevision(), crateId);
+                                    plugin.forgetDefinitionRevision(crateId);
+                                    plugin.crates().delete(crateId);
+                                    if (!deleted.removed()) {
+                                        plugin.database().audit(new DatabaseService.AuditRecord(current.getUniqueId(),
+                                                current.getName(), "DELETE", "CRATE", crateId,
+                                                "Deleted confirmed unpublished crate definition", Instant.now()));
+                                    }
+                                    openCrates(current, 0);
+                                } catch (Exception deleteErrorAfterCommit) {
+                                    plugin.configError(current, deleteErrorAfterCommit);
+                                }
+                            }));
                 }));
     }
 
@@ -1318,7 +1330,7 @@ public final class AdminMenuService {
                     throw new IllegalStateException(error);
                 }
             });
-            long baseRevision = plugin.runtime().crateRevision(crateId);
+            long baseRevision = plugin.definitionRevision(crateId);
             plugin.draftSessions().openCrate(player.getUniqueId(), player.getName(), crateId, baseRevision, payload)
                     .whenComplete((view, error) -> {
                         if (error == null) runFor(player.getUniqueId(), target -> restoreLoadedDraft(target, crateId));

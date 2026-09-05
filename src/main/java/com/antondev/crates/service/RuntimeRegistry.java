@@ -51,4 +51,8 @@ public final class RuntimeRegistry {
         RuntimeSnapshot.Entry entry = new RuntimeSnapshot.Entry(crateRevision, crate, payload);
         active.updateAndGet(current -> current.install(runtimeRevision, entry));
     }
+
+    public void remove(long runtimeRevision, long crateRevision, String crateId) {
+        active.updateAndGet(current -> current.remove(runtimeRevision, crateId, crateRevision));
+    }
 }

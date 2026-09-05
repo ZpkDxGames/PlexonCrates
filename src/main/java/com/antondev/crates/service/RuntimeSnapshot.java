@@ -94,6 +94,17 @@ public final class RuntimeSnapshot {
         return new RuntimeSnapshot(Math.max(revision, nextRuntimeRevision), next.values());
     }
 
+    RuntimeSnapshot remove(long nextRuntimeRevision, String crateId, long crateRevision) {
+        String id = normalize(crateId);
+        Entry current = entries.get(id);
+        if (current == null || current.revision() > crateRevision) {
+            return new RuntimeSnapshot(Math.max(revision, nextRuntimeRevision), entries.values());
+        }
+        var next = new LinkedHashMap<>(entries);
+        next.remove(id);
+        return new RuntimeSnapshot(Math.max(revision, nextRuntimeRevision), next.values());
+    }
+
     private static String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }

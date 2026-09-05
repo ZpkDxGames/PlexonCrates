@@ -135,8 +135,9 @@ public final class CrateRegistry {
             if (!file.getParent().equals(root)) throw new IllegalArgumentException("Canonical crate path is invalid: " + id);
             YamlConfiguration yaml = decode(definition.payload());
             Crate crate = parse(file, yaml);
-            if (!crate.id().equals(id) || crate.state() != CrateState.PUBLISHED) {
-                throw new IllegalArgumentException("Canonical definition is not a published crate: " + id);
+            CrateState lifecycle = state(definition.lifecycle());
+            if (!crate.id().equals(id) || crate.state() != lifecycle || lifecycle == CrateState.DRAFT) {
+                throw new IllegalArgumentException("Canonical definition lifecycle does not match its payload: " + id);
             }
             loaded.put(id, crate);
             paths.put(id, file);
@@ -261,7 +262,16 @@ public final class CrateRegistry {
         YamlConfiguration yaml = decode(frozenDraftPayload);
         String payloadId = normalize(yaml.getString("id", id));
         if (!id.equals(payloadId)) throw new IllegalArgumentException("Draft snapshot targets a different crate ID");
-        yaml.set("state", CrateState.PUBLISHED.name());
+        String rawState = yaml.getString("state", CrateState.DRAFT.name());
+        CrateState candidateState;
+        try {
+            candidateState = CrateState.valueOf(rawState.toUpperCase(Locale.ROOT));
+        } catch (RuntimeException error) {
+            throw new IllegalArgumentException("Draft snapshot has an invalid lifecycle state: " + rawState, error);
+        }
+        // A never-published draft becomes active on its first publication. Explicit
+        // DISABLED/ARCHIVED choices remain intact and remove the crate from runtime.
+        if (candidateState == CrateState.DRAFT) yaml.set("state", CrateState.PUBLISHED.name());
         touch(yaml, editor);
         Crate published = parse(file, yaml);
         byte[] payload = yaml.saveToString().getBytes(StandardCharsets.UTF_8);
@@ -272,8 +282,8 @@ public final class CrateRegistry {
         String id = normalize(crateId);
         YamlConfiguration yaml = decode(payload);
         Crate parsed = parse(files.getOrDefault(id, directory.resolve(id + ".yml")), yaml);
-        if (!parsed.id().equals(id) || parsed.state() != CrateState.PUBLISHED) {
-            throw new IllegalArgumentException("Stored runtime definition is not the requested published crate");
+        if (!parsed.id().equals(id) || parsed.state() == CrateState.DRAFT) {
+            throw new IllegalArgumentException("Stored definition is not a releasable crate");
         }
         return parsed;
     }
@@ -1283,6 +1293,13 @@ public final class CrateRegistry {
     private static <T extends Enum<T>> T enumValue(Class<T> type, String raw, Path file, String path) {
         try { return Enum.valueOf(type, raw.toUpperCase(Locale.ROOT)); }
         catch (RuntimeException error) { throw path(file, "invalid " + path + ": " + raw, error); }
+    }
+
+    private static CrateState state(String lifecycle) {
+        try { return CrateState.valueOf(lifecycle.toUpperCase(Locale.ROOT)); }
+        catch (RuntimeException error) {
+            throw new IllegalArgumentException("Invalid canonical lifecycle: " + lifecycle, error);
+        }
     }
 
     private static Set<String> lower(List<String> values) {

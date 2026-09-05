@@ -73,7 +73,8 @@ public final class DefinitionPublisher {
             throw asException(error);
         }
         var entries = new ArrayList<RuntimeSnapshot.Entry>();
-        for (DatabaseService.StoredDefinition definition : stored.definitions()) {
+        for (DatabaseService.StoredDefinition definition : stored.definitions().stream()
+                .filter(value -> value.lifecycle().equalsIgnoreCase(CrateState.PUBLISHED.name())).toList()) {
             Crate crate = crates.parsePublished(definition.crateId(), definition.payload());
             entries.add(new RuntimeSnapshot.Entry(definition.publishedRevision(), crate, definition.payload()));
         }
@@ -100,8 +101,10 @@ public final class DefinitionPublisher {
         requirePrimaryThread();
         CrateRegistry.PreparedPublication publication = crates.preparePublished(
                 frozen.crateId(), frozen.payload(), actorName);
-        List<String> issues = crates.publishingIssues(publication.crate(), keys);
-        if (!issues.isEmpty()) throw new IllegalStateException(String.join(" ", issues));
+        if (publication.crate().state() == CrateState.PUBLISHED) {
+            List<String> issues = crates.publishingIssues(publication.crate(), keys);
+            if (!issues.isEmpty()) throw new IllegalStateException(String.join(" ", issues));
+        }
         CrateDraftPublishEvent event = new CrateDraftPublishEvent(frozen.actorId(), actorName,
                 frozen.draftId(), frozen.revision(), frozen.baseRevision(), publication.crate());
         Bukkit.getPluginManager().callEvent(event);
@@ -118,8 +121,13 @@ public final class DefinitionPublisher {
     private Publication activate(Prepared prepared, DatabaseService.PublishResult saved) {
         requirePrimaryThread();
         Crate published = prepared.publication().crate();
-        runtime.install(saved.runtimeRevision(), saved.definition().publishedRevision(), published,
-                prepared.publication().payload());
+        if (published.state() == CrateState.PUBLISHED) {
+            runtime.install(saved.runtimeRevision(), saved.definition().publishedRevision(), published,
+                    prepared.publication().payload());
+        } else {
+            runtime.remove(saved.runtimeRevision(), saved.definition().publishedRevision(), published.id());
+        }
+        plugin.recordDefinitionRevision(published.id(), saved.definition().publishedRevision());
         drafts.published(published.id());
         boolean yamlMirrorUpdated = true;
         try {
@@ -141,8 +149,8 @@ public final class DefinitionPublisher {
 
     private static DatabaseService.DefinitionBundle bundle(
             Crate crate, byte[] payload, KeyService keys) {
-        if (crate.state() != CrateState.PUBLISHED) {
-            throw new IllegalArgumentException("Only a published candidate can be encoded");
+        if (crate.state() == CrateState.DRAFT) {
+            throw new IllegalArgumentException("A draft candidate cannot be encoded");
         }
         ItemSnapshotCodec snapshots = new ItemSnapshotCodec();
         ItemSnapshotCodec.Snapshot icon = snapshots.capture(crate.iconCopy());
@@ -192,7 +200,7 @@ public final class DefinitionPublisher {
             definitionKeys.add(key(definition, keys, snapshots));
         }
         Instant now = Instant.now();
-        return new DatabaseService.DefinitionBundle(crate.id(), "PUBLISHED", crate.displayOrder(),
+        return new DatabaseService.DefinitionBundle(crate.id(), crate.state().name(), crate.displayOrder(),
                 Text.serialize(crate.displayName()), crate.description().stream().map(Text::serialize)
                         .collect(java.util.stream.Collectors.joining("\n")),
                 icon.bytes(), payload, rewards, definitionKeys, crate.acceptedKeyIds(), crate.keyCost(), now, now);

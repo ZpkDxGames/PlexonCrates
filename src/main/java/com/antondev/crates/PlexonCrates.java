@@ -32,8 +32,11 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -67,6 +70,7 @@ public class PlexonCrates extends JavaPlugin {
     private OpeningLog openingLog;
     private OpeningService openings;
     private WandService wand;
+    private final Map<String, Long> definitionRevisions = new ConcurrentHashMap<>();
 
     @Override
     public void onEnable() {
@@ -82,6 +86,9 @@ public class PlexonCrates extends JavaPlugin {
             menusConfig = MenuConfig.load(file("menus.yml"));
             definitionRepository = new DefinitionRepository(database);
             DatabaseService.PublishedSnapshot canonical = definitionRepository.loadPublished().join();
+            definitionRevisions.clear();
+            canonical.definitions().forEach(definition ->
+                    definitionRevisions.put(definition.crateId().toLowerCase(Locale.ROOT), definition.publishedRevision()));
             List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts = definitionRepository.loadDrafts().join();
             if (canonical.definitions().isEmpty()) {
                 CrateRegistry.Snapshot crateSnapshot = CrateRegistry.load(getDataFolder().toPath().resolve("crates"));
@@ -95,6 +102,9 @@ public class PlexonCrates extends JavaPlugin {
             keys = new KeyService(this, database, file(settings.fallbackFile()).toPath(), keySnapshot,
                     database.loadKeyTemplateCache());
             runtime = new RuntimeRegistry(DefinitionPublisher.bootstrap(definitionRepository, crates, keys));
+            if (canonical.definitions().isEmpty()) {
+                runtime.all().forEach(crate -> recordDefinitionRevision(crate.id(), runtime.crateRevision(crate.id())));
+            }
             if (canonical.definitions().isEmpty() && !durableDrafts.isEmpty()) {
                 crates.apply(CrateRegistry.withDurableDrafts(getDataFolder().toPath().resolve("crates"),
                         crates.snapshot(), durableDrafts));
@@ -204,6 +214,12 @@ public class PlexonCrates extends JavaPlugin {
                 }
                 menus.closeAll();
                 displays.refresh();
+                if (!canonical.definitions().isEmpty()) {
+                    definitionRevisions.clear();
+                    canonical.definitions().forEach(definition ->
+                            definitionRevisions.put(definition.crateId().toLowerCase(Locale.ROOT),
+                                    definition.publishedRevision()));
+                }
             } catch (Exception error) {
                 settings = previousSettings;
                 messages = previousMessages;
@@ -383,4 +399,21 @@ public class PlexonCrates extends JavaPlugin {
     public AdminMenuService adminMenus() { return adminMenus; }
     public OpeningService openings() { return openings; }
     public WandService wand() { return wand; }
+
+    /** Returns the durable definition revision, including inactive archived/disabled crates. */
+    public long definitionRevision(String crateId) {
+        String id = crateId == null ? "" : crateId.trim().toLowerCase(Locale.ROOT);
+        Long revision = definitionRevisions.get(id);
+        if (revision != null) return revision;
+        return runtime == null ? 0L : runtime.crateRevision(id);
+    }
+
+    public void recordDefinitionRevision(String crateId, long revision) {
+        if (crateId == null || revision < 0) return;
+        definitionRevisions.put(crateId.trim().toLowerCase(Locale.ROOT), revision);
+    }
+
+    public void forgetDefinitionRevision(String crateId) {
+        if (crateId != null) definitionRevisions.remove(crateId.trim().toLowerCase(Locale.ROOT));
+    }
 }

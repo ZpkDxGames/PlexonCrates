@@ -135,7 +135,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (crate == null) return;
         UUID actor = actorId(sender);
         byte[] payload = draftSeed(crate);
-        long baseRevision = plugin.runtime().crateRevision(crate.id());
+        long baseRevision = plugin.definitionRevision(crate.id());
         plugin.draftSessions().openCrate(actor, sender.getName(), crate.id(), baseRevision, payload)
                 .thenCompose(view -> plugin.definitionPublisher().publish(actor, sender.getName(), crate.id()))
                 .whenComplete((publication, error) -> runSync(() -> {
@@ -332,7 +332,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
     private void registerDraft(CommandSender sender, Crate crate) throws Exception {
         byte[] payload = draftSeed(crate);
         plugin.draftSessions().openCrate(actorId(sender), sender.getName(), crate.id(),
-                        plugin.runtime().crateRevision(crate.id()), payload)
+                        plugin.definitionRevision(crate.id()), payload)
                 .whenComplete((view, error) -> {
                     if (error != null) runSync(() -> plugin.configError(sender, asException(error)));
                 });
@@ -346,7 +346,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         java.util.concurrent.CompletableFuture<DraftSessionService.View> ready = plugin.draftSessions()
                 .view(actorId, crate.id()).map(java.util.concurrent.CompletableFuture::completedFuture)
                 .orElseGet(() -> plugin.draftSessions().openCrate(actorId, sender.getName(), crate.id(),
-                        plugin.runtime().crateRevision(crate.id()), initial));
+                        plugin.definitionRevision(crate.id()), initial));
         ready.whenComplete((view, loadError) -> runSync(() -> {
             if (loadError != null) {
                 plugin.configError(sender, asException(loadError));

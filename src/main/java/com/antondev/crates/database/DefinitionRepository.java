@@ -3,6 +3,7 @@ package com.antondev.crates.database;
 import com.antondev.crates.domain.draft.DefinitionDraft;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /** Canonical SQLite boundary for published definition graphs. */
@@ -28,6 +29,10 @@ public final class DefinitionRepository {
 
     public CompletableFuture<DatabaseService.PublishResult> publish(DatabaseService.PublishRequest request) {
         return database.publishDefinitionDraft(request);
+    }
+
+    public CompletableFuture<DatabaseService.DeleteResult> delete(String crateId, UUID actorId, String actorName) {
+        return database.deleteDefinition(crateId, actorId, actorName);
     }
 
     public CompletableFuture<DatabaseService.DefinitionCounts> counts(String crateId) {

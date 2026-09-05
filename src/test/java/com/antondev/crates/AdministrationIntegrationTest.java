@@ -340,6 +340,44 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void disablingAndReenablingPublishesTheLifecycleWithoutLeakingIntoRuntime() throws Exception {
+        var editor = server.addPlayer("LifecycleEditor");
+        editor.setOp(true);
+        var before = plugin.runtime().find("basic").orElseThrow();
+        long initialRevision = plugin.definitionRevision("basic");
+
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setState("basic", com.antondev.crates.domain.crate.CrateState.DISABLED, editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "STATE", "Disabled crate");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var disabled = plugin.definitionPublisher().publish(editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertEquals(com.antondev.crates.domain.crate.CrateState.DISABLED, disabled.join().crate().state());
+        assertTrue(plugin.runtime().find("basic").isEmpty());
+        assertEquals(initialRevision + 1, plugin.definitionRevision("basic"));
+        assertEquals("DISABLED", plugin.definitionRepository().loadPublished().join().definitions().stream()
+                .filter(definition -> definition.crateId().equals("basic")).findFirst().orElseThrow().lifecycle());
+
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setState("basic", com.antondev.crates.domain.crate.CrateState.PUBLISHED, editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "STATE", "Re-enabled crate");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var reenabled = plugin.definitionPublisher().publish(editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        assertEquals(com.antondev.crates.domain.crate.CrateState.PUBLISHED, reenabled.join().crate().state());
+        assertEquals(before.displayName(), plugin.runtime().find("basic").orElseThrow().displayName());
+        assertEquals(initialRevision + 2, plugin.definitionRevision("basic"));
+    }
+
+    @Test
     void malformedYamlMirrorCannotOverrideTheCanonicalPublishedRuntime() throws Exception {
         var player = server.addPlayer("ReloadEditor");
         player.setOp(true);

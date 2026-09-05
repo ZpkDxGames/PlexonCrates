@@ -147,6 +147,49 @@ class DatabaseServiceTest {
     }
 
     @Test
+    void lifecyclePublicationRetainsDisabledDefinitionsButExcludesThemFromActiveSelection() throws Exception {
+        UUID editor = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-04T12:00:00Z");
+        var disabled = new DatabaseService.DefinitionBundle("disabled", "DISABLED", 10, "Disabled",
+                "Temporarily unavailable", bytes("icon"), bytes("disabled"), List.of(), List.of(), List.of(), 0, now, now);
+
+        try (DatabaseService database = database()) {
+            var draft = database.createOrResumeDefinitionDraft("CRATE", "disabled", editor, "Editor", 0,
+                    bytes("draft")).join();
+            var result = database.publishDefinitionDraft(new DatabaseService.PublishRequest(draft.draftId(),
+                    draft.revision(), draft.leaseToken(), editor, "Editor", draft.payload(), disabled, now)).join();
+
+            assertEquals("DISABLED", result.definition().lifecycle());
+            assertEquals(1, result.runtimeRevision());
+            var snapshot = database.loadPublishedDefinitions().join();
+            assertEquals(1, snapshot.definitions().size());
+            assertEquals("DISABLED", snapshot.definitions().getFirst().lifecycle());
+            assertEquals(0, database.loadDefinitionDrafts().join().size());
+        }
+    }
+
+    @Test
+    void archivedCanonicalDefinitionCanBeDeletedTransactionally() throws Exception {
+        UUID editor = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-04T12:00:00Z");
+        var archived = new DatabaseService.DefinitionBundle("archived", "ARCHIVED", 10, "Archived",
+                "Retained for history", bytes("icon"), bytes("archived"), List.of(), List.of(), List.of(), 0, now, now);
+
+        try (DatabaseService database = database()) {
+            var draft = database.createOrResumeDefinitionDraft("CRATE", "archived", editor, "Editor", 0,
+                    bytes("draft")).join();
+            database.publishDefinitionDraft(new DatabaseService.PublishRequest(draft.draftId(), draft.revision(),
+                    draft.leaseToken(), editor, "Editor", draft.payload(), archived, now)).join();
+
+            var deleted = database.deleteDefinition("archived", editor, "Editor").join();
+            assertTrue(deleted.removed());
+            assertEquals(1, deleted.definitionRevision());
+            assertEquals(2, deleted.runtimeRevision());
+            assertTrue(database.loadPublishedDefinitions().join().definitions().isEmpty());
+        }
+    }
+
+    @Test
     void journalCompletionAtomicallyPersistsHistoryStatisticsLimitsAndPity() throws Exception {
         UUID player = UUID.randomUUID();
         UUID transaction = UUID.randomUUID();

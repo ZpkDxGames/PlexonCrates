@@ -286,8 +286,7 @@ public final class OpeningService {
         DatabaseService.JournalRecord journal = new DatabaseService.JournalRecord(transactionId,
                 player.getUniqueId(), player.getName(), crate.id(), payment.keyId(), payment.total(),
                 requested, source.name(), String.join(",", plan.rewardIds()), plan.createdAt());
-        plugin.database().prepareJournal(journal)
-                .thenCompose(ignored -> plugin.database().updateJournal(transactionId, "PREPARED", payment.detail()))
+        plugin.database().prepareJournal(journal, payment.detail())
                 .whenComplete((ignored, error) -> {
                     if (!plugin.isEnabled()) return;
                     Bukkit.getScheduler().runTask(plugin, () -> {

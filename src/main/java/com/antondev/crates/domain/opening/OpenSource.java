@@ -4,5 +4,6 @@ public enum OpenSource {
     BLOCK,
     GUI,
     COMMAND,
-    ADMIN_FORCE
+    ADMIN_FORCE,
+    PORTABLE
 }

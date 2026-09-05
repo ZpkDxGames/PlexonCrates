@@ -13,7 +13,7 @@ commands:
     aliases: [crate, plexoncrates]
   cratesadmin:
     description: Configure PlexonCrates in game.
-    usage: /pcrates [create|edit|clone|import|export|publish|delete|keys|wand|link|unlink|givekey|virtualgrant|rerolls|open|validate|reload|backup|status|diagnose]
+    usage: /pcrates [create|edit|clone|import|export|publish|delete|keys|wand|link|unlink|givekey|virtualgrant|rerolls|portable|open|validate|reload|backup|status|diagnose]
     aliases: [pcrates, pca]
 permissions:
   plexoncrates.use:

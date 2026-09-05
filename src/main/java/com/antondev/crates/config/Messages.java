@@ -25,7 +25,7 @@ public final class Messages {
             "draft-loading", "draft-publishing", "draft-read-only", "draft-save-failed", "draft-save-retried",
             "draft-takeover-complete", "draft-undo-complete", "draft-published",
             "draft-publish-failed", "draft-published-mirror-warning", "key-replacement-drafted",
-            "key-replacement-awaiting-publish");
+            "key-replacement-awaiting-publish", "gui-stale");
     private final YamlConfiguration yaml;
     private final String prefix;
 
@@ -89,6 +89,7 @@ public final class Messages {
         fallback(yaml, "draft-published-mirror-warning", "<yellow>The SQLite publication is active, but its optional YAML mirror could not be updated. Check the server log.</yellow>");
         fallback(yaml, "key-replacement-drafted", "<green>Saved replacement-key drafts for <white><count></white> crate(s).</green> <yellow>Publish those crates before deleting the active key.</yellow>");
         fallback(yaml, "key-replacement-awaiting-publish", "<yellow>This key is still used by a published crate. Publish its pending replacement draft before deleting the key.</yellow>");
+        fallback(yaml, "gui-stale", "<yellow>This menu is out of date. Reopen it before trying that action again.</yellow>");
     }
 
     private static void fallback(YamlConfiguration yaml, String key, String value) {

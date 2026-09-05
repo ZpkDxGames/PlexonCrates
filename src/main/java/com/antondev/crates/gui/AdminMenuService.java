@@ -135,6 +135,7 @@ public final class AdminMenuService {
     public void openTakeoverConfirmation(Player player, String crateId, String returnScreen, int returnPage) {
         MenuConfig menus = plugin.menusConfig();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.CONFIRM_TAKEOVER, crateId, returnScreen, returnPage, true);
+        holder.bindDraft(ensureDraft(player, crateId));
         Inventory inventory = create(holder, menus.size("confirm-takeover"),
                 menus.title("confirm-takeover", Text.value("crate_id", crateId)));
         fill(inventory);
@@ -201,6 +202,7 @@ public final class AdminMenuService {
         List<Integer> slots = menus.slots("key-select.key-slots");
         int page = page(requestedPage, entries.size(), slots.size());
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.KEY_SELECT, crate.id(), "", page, true);
+        holder.bindDraft(ensureDraft(player, crate.id()));
         Inventory inventory = create(holder, menus.size("key-select"), menus.title("key-select", Text.component("crate", crate.displayName())));
         fill(inventory);
         int start = page * slots.size();
@@ -221,6 +223,7 @@ public final class AdminMenuService {
         if (draft == null) { openDashboard(player); return; }
         MenuConfig menus = plugin.menusConfig();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.REWARD_BUILDER, draft.crateId(), draft.id(), 0, true);
+        holder.bindDraft(ensureDraft(player, draft.crateId()));
         Inventory inventory = create(holder, menus.size("reward-builder"),
                 menus.title("reward-builder", Text.value("reward_id", draft.id())));
         fill(inventory);
@@ -386,6 +389,7 @@ public final class AdminMenuService {
     public void handleClick(InventoryClickEvent event, MenuHolder holder) {
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (!accept(player, holder)) return;
         if (holder.kind() == MenuHolder.Kind.KEY_TEMPLATE && allowed(player, "plexoncrates.admin.keys")
                 && captureKeyClick(event, player)) return;
         if (holder.kind() == MenuHolder.Kind.REWARD_BUILDER && allowed(player, "plexoncrates.admin.rewards")
@@ -409,6 +413,7 @@ public final class AdminMenuService {
     public void handleDrag(InventoryDragEvent event, MenuHolder holder) {
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (!accept(player, holder)) return;
         if (!allowed(player, permission(holder.kind(), "capture"))) return;
         ItemStack item = event.getOldCursor();
         if (item == null || item.getType().isAir()) return;
@@ -1052,6 +1057,7 @@ public final class AdminMenuService {
     private void openCrateConfirmation(Player player, String crateId, String action) {
         MenuConfig menus = plugin.menusConfig();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.CONFIRM_CRATE_DELETE, crateId, action, 0, true);
+        holder.bindDraft(ensureDraft(player, crateId));
         Inventory inventory = create(holder, menus.size("confirm-crate-delete"),
                 menus.title("confirm-crate-delete", Text.value("action", action)));
         fill(inventory);
@@ -1343,6 +1349,7 @@ public final class AdminMenuService {
 
     private void installDraftControls(Player player, Inventory inventory, MenuHolder holder,
                                       DraftSessionService.View draft) {
+        holder.advanceDraft(draft);
         MenuConfig menus = plugin.menusConfig();
         var tags = new net.kyori.adventure.text.minimessage.tag.resolver.TagResolver[]{
                 Text.value("draft_state", draftState(draft.state())),
@@ -1484,6 +1491,18 @@ public final class AdminMenuService {
             inventory.setItem(slot, display);
         }
         player.openInventory(inventory);
+        if (inventory.getHolder() instanceof MenuHolder holder
+                && player.getOpenInventory().getTopInventory() == inventory) {
+            plugin.guiSessions().activate(player.getUniqueId(), holder);
+        }
+    }
+
+    private boolean accept(Player player, MenuHolder holder) {
+        GuiSessionService.Validation validation = plugin.guiSessions()
+                .validate(player, holder, plugin.draftSessions());
+        if (validation == GuiSessionService.Validation.CURRENT) return true;
+        plugin.messages().send(player, "gui-stale");
+        return false;
     }
 
     private boolean isEditorItem(ItemStack item) {

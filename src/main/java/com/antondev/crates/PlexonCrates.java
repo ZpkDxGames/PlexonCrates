@@ -8,6 +8,7 @@ import com.antondev.crates.config.MenuConfig;
 import com.antondev.crates.config.Messages;
 import com.antondev.crates.config.PluginSettings;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.gui.GuiSessionService;
 import com.antondev.crates.gui.MenuService;
 import com.antondev.crates.gui.EditSessionService;
 import com.antondev.crates.gui.AdminMenuService;
@@ -58,6 +59,7 @@ public class PlexonCrates extends JavaPlugin {
     private DraftSessionService draftSessions;
     private DefinitionPublisher definitionPublisher;
     private DisplayService displays;
+    private GuiSessionService guiSessions;
     private MenuService menus;
     private EditSessionService editSessions;
     private AdminMenuService adminMenus;
@@ -93,6 +95,7 @@ public class PlexonCrates extends JavaPlugin {
             draftSessions = new DraftSessionService(database, this::draftStateChanged);
             definitionPublisher = new DefinitionPublisher(this, definitionRepository, crates, keys, runtime,
                     draftSessions);
+            guiSessions = new GuiSessionService();
             editSessions = new EditSessionService(this);
             adminMenus = new AdminMenuService(this);
             menus = new MenuService(this);
@@ -136,6 +139,7 @@ public class PlexonCrates extends JavaPlugin {
             }
             draftSessions.clear();
         }
+        if (guiSessions != null) guiSessions.clear();
         getServer().getServicesManager().unregisterAll(this);
         if (displays != null) displays.stop();
         if (openings != null) openings.clear();
@@ -351,6 +355,7 @@ public class PlexonCrates extends JavaPlugin {
     public DraftSessionService draftSessions() { return draftSessions; }
     public DefinitionPublisher definitionPublisher() { return definitionPublisher; }
     public DisplayService displays() { return displays; }
+    public GuiSessionService guiSessions() { return guiSessions; }
     public MenuService menus() { return menus; }
     public EditSessionService editSessions() { return editSessions; }
     public AdminMenuService adminMenus() { return adminMenus; }

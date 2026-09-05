@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 import com.antondev.crates.domain.reward.RewardPresentation;
+import com.antondev.crates.gui.GuiSessionService;
 import com.antondev.crates.gui.MenuHolder;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -191,6 +193,76 @@ class AdministrationIntegrationTest {
         assertTrue(updated.presentation().firework());
         assertEquals(original.id(), updatedCrate.orderedRewards().getLast().id());
         assertEquals(original.itemCopies().size(), updated.itemCopies().size());
+    }
+
+    @Test
+    void supersededInventorySessionCannotRouteItsServerSideActions() {
+        var player = server.addPlayer("SessionEditor");
+        player.setOp(true);
+
+        plugin.adminMenus().openDashboard(player);
+        MenuHolder stale = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+        plugin.adminMenus().openDashboard(player);
+        MenuHolder current = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+
+        assertNotEquals(stale.sessionId(), current.sessionId());
+        assertEquals(current.sessionId(), plugin.guiSessions().activeSession(player.getUniqueId()).orElseThrow());
+        assertEquals(GuiSessionService.Validation.SUPERSEDED_SESSION,
+                plugin.guiSessions().validate(player, stale, plugin.draftSessions()));
+
+        int crates = plugin.menusConfig().slot("admin.crates");
+        InventoryClickEvent delayed = new InventoryClickEvent(player.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, crates, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        plugin.adminMenus().handleClick(delayed, stale);
+
+        assertTrue(delayed.isCancelled());
+        assertSame(current, player.getOpenInventory().getTopInventory().getHolder());
+    }
+
+    @Test
+    void matchingLeaseCanAdvanceButTakeoverLeavesThePreviousViewStale() throws Exception {
+        var first = server.addPlayer("LeaseOwner");
+        var second = server.addPlayer("LeaseTaker");
+        first.setOp(true);
+        second.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+
+        plugin.adminMenus().openCrateEditor(first, crate);
+        awaitDraft(first, crate.id());
+        MenuHolder firstHolder = (MenuHolder) first.getOpenInventory().getTopInventory().getHolder();
+        long before = firstHolder.revision();
+        plugin.crates().setDescription(crate.id(), List.of(Component.text("Revision advance")), first.getName());
+        plugin.adminMenus().saveDraftRevision(first, crate.id(), "IDENTITY", "Changed description");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var saved = plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow();
+        assertTrue(saved.revision() > before);
+        assertEquals(saved.revision(), firstHolder.revision());
+        assertEquals(GuiSessionService.Validation.CURRENT,
+                plugin.guiSessions().validate(first, firstHolder, plugin.draftSessions()));
+
+        plugin.adminMenus().openCrateEditor(second, plugin.crates().find(crate.id()).orElseThrow());
+        awaitDraft(second, crate.id());
+        second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("editor.takeover"));
+        second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("confirm-takeover.confirm"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var displaced = plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow();
+        assertFalse(displaced.writable());
+        assertNotEquals(displaced.leaseToken(), firstHolder.leaseToken());
+        assertEquals(GuiSessionService.Validation.STALE_DRAFT,
+                plugin.guiSessions().validate(first, firstHolder, plugin.draftSessions()));
+
+        int back = plugin.menusConfig().slot("editor.back");
+        InventoryClickEvent staleBack = new InventoryClickEvent(first.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, back, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        plugin.adminMenus().handleClick(staleBack, firstHolder);
+        assertTrue(staleBack.isCancelled());
+        assertSame(firstHolder, first.getOpenInventory().getTopInventory().getHolder());
     }
 
     @Test

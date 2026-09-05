@@ -28,6 +28,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
@@ -64,7 +65,7 @@ public final class MenuService implements Listener {
         }
         inventory.setItem(menus.slot("browser.info"), menus.item("browser.info"));
         inventory.setItem(menus.slot("browser.close"), menus.item("browser.close"));
-        player.openInventory(inventory);
+        open(player, inventory);
     }
 
     public void openPreview(Player player, Crate crate, int requestedPage, boolean adminOrigin) {
@@ -75,6 +76,7 @@ public final class MenuService implements Listener {
         int page = Math.max(0, Math.min(requestedPage, pages - 1));
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.PREVIEW, crate.id(), "", page, adminOrigin,
                 adminOrigin ? 0 : plugin.runtime().crateRevision(crate.id()));
+        if (adminOrigin) holder.bindDraft(plugin.adminMenus().ensureDraft(player, crate.id()));
         Inventory inventory = create(holder, menus.size("preview"), menus.title("preview", Text.component("crate", crate.displayName())));
         fill(inventory);
         long now = System.currentTimeMillis();
@@ -114,7 +116,7 @@ public final class MenuService implements Listener {
         inventory.setItem(menus.slot("preview.back"), menus.item("preview.back"));
         if (page > 0) inventory.setItem(menus.slot("preview.previous"), menus.item("preview.previous"));
         if (page + 1 < pages) inventory.setItem(menus.slot("preview.next"), menus.item("preview.next"));
-        player.openInventory(inventory);
+        open(player, inventory);
     }
 
     public void openAdmin(Player player) {
@@ -144,6 +146,7 @@ public final class MenuService implements Listener {
         int pages = Math.max(1, (rewards.size() + slots.size() - 1) / slots.size());
         int page = Math.max(0, Math.min(requestedPage, pages - 1));
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.REWARDS, crate.id(), "", page, true);
+        holder.bindDraft(draft);
         Inventory inventory = create(holder, menus.size("reward-pool"),
                 menus.title("reward-pool", Text.component("crate", crate.displayName())));
         fill(inventory);
@@ -170,7 +173,7 @@ public final class MenuService implements Listener {
         inventory.setItem(menus.slot("reward-pool.next"), control("reward-pool.next"));
         inventory.setItem(menus.slot("reward-pool.balance"), control("reward-pool.balance"));
         inventory.setItem(menus.slot("reward-pool.done"), control("reward-pool.done"));
-        player.openInventory(inventory);
+        open(player, inventory);
     }
 
     public void refreshDraftState(Player player, String crateId) {
@@ -182,7 +185,7 @@ public final class MenuService implements Listener {
         } else if (holder.kind() == MenuHolder.Kind.REWARDS) {
             Crate crate = plugin.crates().find(crateId).orElse(null);
             DraftSessionService.View draft = plugin.draftSessions().view(player.getUniqueId(), crateId).orElse(null);
-            if (crate != null && draft != null) updateRewardPoolStatus(holder.getInventory(), crate, draft);
+            if (crate != null && draft != null) updateRewardPoolStatus(holder, crate, draft);
         }
     }
 
@@ -197,7 +200,7 @@ public final class MenuService implements Listener {
         List<CrateReward> visuals = crate.orderedRewards().stream().filter(reward -> reward.eligible(player)).toList();
         if (visuals.isEmpty()) visuals = List.of(selected);
         for (int slot : rail) inventory.setItem(slot, randomDisplay(visuals));
-        player.openInventory(inventory);
+        open(player, inventory);
 
         List<CrateReward> finalVisuals = visuals;
         int steps = Math.max(1, plugin.settings().animationDuration() / plugin.settings().animationPeriod());
@@ -234,7 +237,7 @@ public final class MenuService implements Listener {
         inventory.setItem(menus.slot("opening.marker-top-slot"), menus.item("opening.marker"));
         inventory.setItem(menus.slot("opening.marker-bottom-slot"), menus.item("opening.marker"));
         inventory.setItem(menus.slot("opening.center-slot"), new ItemStack(org.bukkit.Material.GRAY_STAINED_GLASS_PANE));
-        player.openInventory(inventory);
+        open(player, inventory);
         player.playSound(player.getLocation(), plugin.settings().openingSound(),
                 plugin.settings().soundVolume(), Math.max(0.5f, plugin.settings().soundPitch() - 0.25f));
         long delay = Math.max(10L, Math.min(plugin.settings().animationDuration(), 40));
@@ -268,7 +271,7 @@ public final class MenuService implements Listener {
             inventory.setItem(slots.get(index++), display);
         }
         inventory.setItem(menus.slot("summary.close"), menus.item("summary.close"));
-        player.openInventory(inventory);
+        open(player, inventory);
     }
 
     public void closeAll() {
@@ -282,6 +285,9 @@ public final class MenuService implements Listener {
     @EventHandler
     public void click(InventoryClickEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;
+        event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (!accept(player, holder)) return;
         if (holder.kind() == MenuHolder.Kind.REWARDS) {
             rewardPoolClick(event, holder);
             return;
@@ -290,8 +296,6 @@ public final class MenuService implements Listener {
             plugin.adminMenus().handleClick(event, holder);
             return;
         }
-        event.setCancelled(true);
-        if (!(event.getWhoClicked() instanceof Player player)) return;
         if (event.getClickedInventory() != event.getView().getTopInventory()) return;
         int slot = event.getRawSlot();
         MenuConfig menus = plugin.menusConfig();
@@ -326,14 +330,23 @@ public final class MenuService implements Listener {
     @EventHandler
     public void drag(InventoryDragEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;
+        event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player) || !accept(player, holder)) return;
         if (holder.kind() == MenuHolder.Kind.REWARDS) rewardPoolDrag(event, holder);
         else if (isAdministrative(holder.kind())) plugin.adminMenus().handleDrag(event, holder);
-        else event.setCancelled(true);
+    }
+
+    @EventHandler
+    public void close(InventoryCloseEvent event) {
+        if (event.getInventory().getHolder() instanceof MenuHolder holder) {
+            plugin.guiSessions().close(event.getPlayer().getUniqueId(), holder.sessionId());
+        }
     }
 
     @EventHandler
     public void quit(PlayerQuitEvent event) {
         rewardSearch.remove(event.getPlayer().getUniqueId());
+        plugin.guiSessions().clear(event.getPlayer().getUniqueId());
     }
 
     private void browserClick(Player player, MenuHolder holder, int slot, boolean rightClick) {
@@ -602,12 +615,13 @@ public final class MenuService implements Listener {
     private void openConfirmDelete(Player player, Crate crate, CrateReward reward, int returnPage) {
         MenuConfig menus = plugin.menusConfig();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.CONFIRM_DELETE, crate.id(), reward.id(), returnPage, true);
+        plugin.draftSessions().view(player.getUniqueId(), crate.id()).ifPresent(holder::bindDraft);
         Inventory inventory = create(holder, menus.size("confirm-delete"), menus.title("confirm-delete"));
         fill(inventory);
         inventory.setItem(13, reward.displayCopy());
         inventory.setItem(menus.slot("confirm-delete.confirm"), menus.item("confirm-delete.confirm"));
         inventory.setItem(menus.slot("confirm-delete.cancel"), menus.item("confirm-delete.cancel"));
-        player.openInventory(inventory);
+        open(player, inventory);
     }
 
     private void confirmClick(Player player, MenuHolder holder, int slot) {
@@ -638,6 +652,22 @@ public final class MenuService implements Listener {
         return inventory;
     }
 
+    private void open(Player player, Inventory inventory) {
+        player.openInventory(inventory);
+        if (inventory.getHolder() instanceof MenuHolder holder
+                && player.getOpenInventory().getTopInventory() == inventory) {
+            plugin.guiSessions().activate(player.getUniqueId(), holder);
+        }
+    }
+
+    private boolean accept(Player player, MenuHolder holder) {
+        GuiSessionService.Validation validation = plugin.guiSessions()
+                .validate(player, holder, plugin.draftSessions());
+        if (validation == GuiSessionService.Validation.CURRENT) return true;
+        plugin.messages().send(player, "gui-stale");
+        return false;
+    }
+
     private void fill(Inventory inventory) {
         ItemStack filler = plugin.menusConfig().item("filler");
         for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
@@ -651,7 +681,9 @@ public final class MenuService implements Listener {
         return item;
     }
 
-    private void updateRewardPoolStatus(Inventory inventory, Crate crate, DraftSessionService.View draft) {
+    private void updateRewardPoolStatus(MenuHolder holder, Crate crate, DraftSessionService.View draft) {
+        holder.advanceDraft(draft);
+        Inventory inventory = holder.getInventory();
         int totalBasisPoints = crate.rewards().values().stream().filter(CrateReward::enabled)
                 .mapToInt(CrateReward::chanceBasisPoints).sum();
         Component health = totalBasisPoints == ChanceAllocator.TOTAL_BASIS_POINTS

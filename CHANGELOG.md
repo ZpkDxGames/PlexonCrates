@@ -24,6 +24,7 @@ All notable PlexonCrates changes are documented here.
 - Connected GUI and compatibility-command mutations to the schema-3 draft repository instead of the legacy last-writer-wins snapshot path.
 - Added asynchronous draft loading, visible saving/saved/failure/read-only states, ordered per-draft saves, stale mutation guards, retry, forward undo, and bounded shutdown flushing.
 - Added a single-writer lease across administrators, an explicit read-only view for additional editors, and permission-gated confirmed takeover that immediately invalidates the previous lease.
+- Added server-owned GUI session UUIDs plus draft UUID/revision/lease stamps, rejecting superseded inventories and pre-takeover actions before they reach the router.
 - Made crate deletion discard its durable draft transactionally so recreating an ID cannot resume stale editor data.
 
 ### Published runtime isolation

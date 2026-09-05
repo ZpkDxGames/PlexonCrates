@@ -416,6 +416,59 @@ public final class DatabaseService implements AutoCloseable {
 
     public record DefinitionCounts(int rewards, int items, int actions, int keyLinks) {}
 
+    /** Durable per-player opening progress used by milestone calculators. */
+    public record MilestoneState(
+            UUID playerId, String crateId, long openings, long lastCycle,
+            long revision, byte[] earnedPayload, Instant updatedAt) {
+        public MilestoneState {
+            playerId = java.util.Objects.requireNonNull(playerId, "playerId");
+            crateId = requiredText(crateId, "crateId");
+            earnedPayload = boundedPayload(earnedPayload, "milestone earned payload");
+            updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+            if (openings < 0 || lastCycle < 0 || revision < 0) {
+                throw new IllegalArgumentException("Milestone state counters cannot be negative");
+            }
+        }
+
+        @Override public byte[] earnedPayload() { return earnedPayload.clone(); }
+    }
+
+    /** Durable single-use portable-crate issuance state. */
+    public record PortableIssue(
+            UUID issueId, String crateId, String revisionPolicy, long pinnedRevision,
+            UUID issuedTo, UUID issuedBy, int signatureVersion, String state,
+            String reservationToken, Instant issuedAt, Instant updatedAt) {
+        public PortableIssue {
+            issueId = java.util.Objects.requireNonNull(issueId, "issueId");
+            crateId = requiredText(crateId, "crateId");
+            revisionPolicy = requiredText(revisionPolicy, "revisionPolicy")
+                    .toUpperCase(java.util.Locale.ROOT);
+            if (!List.of("LATEST_PUBLISHED", "PINNED_REVISION").contains(revisionPolicy)) {
+                throw new IllegalArgumentException("Unsupported portable revision policy: " + revisionPolicy);
+            }
+            if ((revisionPolicy.equals("PINNED_REVISION") && pinnedRevision < 1)
+                    || (revisionPolicy.equals("LATEST_PUBLISHED") && pinnedRevision != 0)) {
+                throw new IllegalArgumentException("Invalid portable pinned revision");
+            }
+            if (signatureVersion < 1) throw new IllegalArgumentException("Portable signature version must be positive");
+            state = requiredText(state, "state").toUpperCase(java.util.Locale.ROOT);
+            if (!List.of("UNUSED", "RESERVED", "CONSUMED", "SUSPENDED", "REVIEW").contains(state)) {
+                throw new IllegalArgumentException("Invalid portable issuance state: " + state);
+            }
+            reservationToken = optionalText(reservationToken);
+            issuedAt = java.util.Objects.requireNonNull(issuedAt, "issuedAt");
+            updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+        }
+    }
+
+    public record PortableIssueCounts(int unused, int reserved, int consumed, int suspended, int review) {
+        public PortableIssueCounts {
+            if (unused < 0 || reserved < 0 || consumed < 0 || suspended < 0 || review < 0) {
+                throw new IllegalArgumentException("Portable issuance counts cannot be negative");
+            }
+        }
+    }
+
     private final Logger logger;
     private final String jdbcUrl;
     private final ThreadPoolExecutor writer;
@@ -1394,6 +1447,175 @@ public final class DatabaseService implements AutoCloseable {
                 statement.setLong(1, System.currentTimeMillis());
                 return statement.executeUpdate();
             }
+        });
+    }
+
+    public CompletableFuture<MilestoneState> loadMilestoneState(UUID playerId, String crateId) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        String id = requiredText(crateId, "crateId");
+        return submitQuery("load milestone state", connection -> loadMilestoneState(connection, owner, id));
+    }
+
+    /**
+     * Persists cumulative milestone progress with a compare-free single-writer
+     * transaction. The caller supplies the earned-key payload produced by
+     * {@link MilestoneService}; it is replaced atomically with the counter.
+     */
+    public CompletableFuture<MilestoneState> advanceMilestoneState(
+            UUID playerId, String crateId, int openingCount, long lastCycle,
+            byte[] earnedPayload, Instant updatedAt) {
+        UUID owner = java.util.Objects.requireNonNull(playerId, "playerId");
+        String id = requiredText(crateId, "crateId");
+        if (openingCount < 0 || lastCycle < 0) {
+            throw new IllegalArgumentException("Milestone progress increment cannot be negative");
+        }
+        byte[] earned = boundedPayload(earnedPayload, "milestone earned payload");
+        Instant changed = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
+        return submitTransactionQuery("advance milestone state", connection -> {
+            MilestoneState current = loadMilestoneState(connection, owner, id);
+            long openings = Math.addExact(current.openings(), openingCount);
+            long revision = Math.addExact(current.revision(), 1);
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO milestone_state(player_uuid, crate_id, openings, last_cycle,
+                        earned_payload, revision, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(player_uuid, crate_id) DO UPDATE SET openings=excluded.openings,
+                        last_cycle=excluded.last_cycle, earned_payload=excluded.earned_payload,
+                        revision=excluded.revision, updated_at=excluded.updated_at
+                    """)) {
+                statement.setString(1, owner.toString());
+                statement.setString(2, id);
+                statement.setLong(3, openings);
+                statement.setLong(4, lastCycle);
+                statement.setBytes(5, earned);
+                statement.setLong(6, revision);
+                statement.setLong(7, changed.toEpochMilli());
+                statement.executeUpdate();
+            }
+            return new MilestoneState(owner, id, openings, lastCycle, revision, earned, changed);
+        });
+    }
+
+    public CompletableFuture<PortableIssue> createPortableIssue(PortableIssue issue) {
+        PortableIssue value = java.util.Objects.requireNonNull(issue, "issue");
+        return submitTransactionQuery("create portable crate issue", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO portable_crate_issue(issue_id, crate_id, revision_policy, pinned_revision,
+                        issued_to, issued_by, signature_version, state, reservation_token, issued_at, updated_at)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(issue_id) DO NOTHING
+                    """)) {
+                statement.setString(1, value.issueId().toString());
+                statement.setString(2, value.crateId());
+                statement.setString(3, value.revisionPolicy());
+                if (value.pinnedRevision() == 0) statement.setNull(4, java.sql.Types.INTEGER);
+                else statement.setLong(4, value.pinnedRevision());
+                nullableUuid(statement, 5, value.issuedTo());
+                nullableUuid(statement, 6, value.issuedBy());
+                statement.setInt(7, value.signatureVersion());
+                statement.setString(8, value.state());
+                nullableText(statement, 9, value.reservationToken());
+                statement.setLong(10, value.issuedAt().toEpochMilli());
+                statement.setLong(11, value.updatedAt().toEpochMilli());
+                statement.executeUpdate();
+            }
+            PortableIssue existing = loadPortableIssue(connection, value.issueId()).orElseThrow();
+            ensurePortableIssueMatch(existing, value);
+            return existing;
+        });
+    }
+
+    public CompletableFuture<Optional<PortableIssue>> loadPortableIssue(UUID issueId) {
+        UUID id = java.util.Objects.requireNonNull(issueId, "issueId");
+        return submitQuery("load portable crate issue", connection -> loadPortableIssue(connection, id));
+    }
+
+    /** Reserves an unused issuance; repeating the same token is idempotent. */
+    public CompletableFuture<Optional<PortableIssue>> reservePortableIssue(UUID issueId, String reservationToken) {
+        UUID id = java.util.Objects.requireNonNull(issueId, "issueId");
+        String token = requiredText(reservationToken, "reservationToken");
+        return submitTransactionQuery("reserve portable crate issue", connection -> {
+            PortableIssue current = loadPortableIssue(connection, id).orElse(null);
+            if (current == null) return Optional.empty();
+            if (current.state().equals("RESERVED") && token.equals(current.reservationToken())) {
+                return Optional.of(current);
+            }
+            if (!current.state().equals("UNUSED")) return Optional.empty();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE portable_crate_issue SET state='RESERVED', reservation_token=?, updated_at=?
+                    WHERE issue_id=? AND state='UNUSED'
+                    """)) {
+                statement.setString(1, token);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.setString(3, id.toString());
+                if (statement.executeUpdate() != 1) return Optional.empty();
+            }
+            return loadPortableIssue(connection, id);
+        });
+    }
+
+    public CompletableFuture<Boolean> releasePortableIssue(UUID issueId, String reservationToken, String reason) {
+        UUID id = java.util.Objects.requireNonNull(issueId, "issueId");
+        String token = requiredText(reservationToken, "reservationToken");
+        String detail = reason == null ? "" : reason;
+        return submitTransactionQuery("release portable crate issue", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE portable_crate_issue SET state='UNUSED', reservation_token=NULL, updated_at=?
+                    WHERE issue_id=? AND state='RESERVED' AND reservation_token=?
+                    """)) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setString(2, id.toString());
+                statement.setString(3, token);
+                return statement.executeUpdate() == 1;
+            }
+        });
+    }
+
+    /** Marks a reserved issuance consumed exactly once. */
+    public CompletableFuture<Optional<PortableIssue>> consumePortableIssue(UUID issueId, String reservationToken) {
+        UUID id = java.util.Objects.requireNonNull(issueId, "issueId");
+        String token = requiredText(reservationToken, "reservationToken");
+        return submitTransactionQuery("consume portable crate issue", connection -> {
+            PortableIssue current = loadPortableIssue(connection, id).orElse(null);
+            if (current == null) return Optional.empty();
+            if (current.state().equals("CONSUMED")) return Optional.of(current);
+            if (!current.state().equals("RESERVED") || !token.equals(current.reservationToken())) return Optional.empty();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE portable_crate_issue SET state='CONSUMED', reservation_token=NULL, updated_at=?
+                    WHERE issue_id=? AND state='RESERVED' AND reservation_token=?
+                    """)) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setString(2, id.toString());
+                statement.setString(3, token);
+                if (statement.executeUpdate() != 1) return Optional.empty();
+            }
+            return loadPortableIssue(connection, id);
+        });
+    }
+
+    public CompletableFuture<PortableIssueCounts> portableIssueCounts() {
+        return submitQuery("count portable crate issues", connection -> {
+            int unused = 0;
+            int reserved = 0;
+            int consumed = 0;
+            int suspended = 0;
+            int review = 0;
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT state, COUNT(*) FROM portable_crate_issue GROUP BY state");
+                 ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    int count = rows.getInt(2);
+                    switch (rows.getString(1)) {
+                        case "UNUSED" -> unused = count;
+                        case "RESERVED" -> reserved = count;
+                        case "CONSUMED" -> consumed = count;
+                        case "SUSPENDED" -> suspended = count;
+                        case "REVIEW" -> review = count;
+                        default -> logger.warning("Ignoring unknown portable issuance state: " + rows.getString(1));
+                    }
+                }
+            }
+            return new PortableIssueCounts(unused, reserved, consumed, suspended, review);
         });
     }
 
@@ -2632,6 +2854,60 @@ public final class DatabaseService implements AutoCloseable {
     private static void nullableText(PreparedStatement statement, int index, String value) throws SQLException {
         if (value == null || value.isBlank()) statement.setNull(index, java.sql.Types.VARCHAR);
         else statement.setString(index, value.trim());
+    }
+
+    private static byte[] boundedPayload(byte[] input, String name) {
+        byte[] payload = java.util.Objects.requireNonNull(input, name).clone();
+        if (payload.length > 16_000_000) {
+            throw new IllegalArgumentException(name + " exceeds 16,000,000 bytes");
+        }
+        return payload;
+    }
+
+    private static MilestoneState loadMilestoneState(
+            Connection connection, UUID playerId, String crateId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT player_uuid, crate_id, openings, last_cycle, revision, earned_payload, updated_at
+                FROM milestone_state WHERE player_uuid=? AND crate_id=?
+                """)) {
+            statement.setString(1, playerId.toString());
+            statement.setString(2, crateId);
+            try (ResultSet rows = statement.executeQuery()) {
+                if (rows.next()) {
+                    return new MilestoneState(UUID.fromString(rows.getString(1)), rows.getString(2),
+                            rows.getLong(3), rows.getLong(4), rows.getLong(5), rows.getBytes(6),
+                            Instant.ofEpochMilli(rows.getLong(7)));
+                }
+            }
+        }
+        return new MilestoneState(playerId, crateId, 0, 0, 0, new byte[0], Instant.EPOCH);
+    }
+
+    private static Optional<PortableIssue> loadPortableIssue(
+            Connection connection, UUID issueId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT issue_id, crate_id, revision_policy, pinned_revision, issued_to, issued_by,
+                       signature_version, state, reservation_token, issued_at, updated_at
+                FROM portable_crate_issue WHERE issue_id=?
+                """)) {
+            statement.setString(1, issueId.toString());
+            try (ResultSet rows = statement.executeQuery()) {
+                if (!rows.next()) return Optional.empty();
+                long pinned = rows.getLong(4);
+                if (rows.wasNull()) pinned = 0;
+                return Optional.of(new PortableIssue(UUID.fromString(rows.getString(1)), rows.getString(2),
+                        rows.getString(3), pinned, nullableUuid(rows.getString(5)),
+                        nullableUuid(rows.getString(6)), rows.getInt(7), rows.getString(8),
+                        rows.getString(9), Instant.ofEpochMilli(rows.getLong(10)),
+                        Instant.ofEpochMilli(rows.getLong(11))));
+            }
+        }
+    }
+
+    private static void ensurePortableIssueMatch(PortableIssue existing, PortableIssue requested) {
+        if (!existing.equals(requested)) {
+            throw new IllegalStateException("Portable issue ID was already used for different metadata");
+        }
     }
 
     private static Optional<ClaimEntry> loadClaim(Connection connection, UUID claimId) throws SQLException {

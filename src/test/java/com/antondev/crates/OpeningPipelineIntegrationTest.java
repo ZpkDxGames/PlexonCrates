@@ -500,11 +500,15 @@ class OpeningPipelineIntegrationTest {
     }
 
     private void clickTop(org.bukkit.entity.Player player, int slot) {
-        var click = new org.bukkit.event.inventory.InventoryClickEvent(player.getOpenInventory(),
-                org.bukkit.event.inventory.InventoryType.SlotType.CONTAINER, slot,
-                org.bukkit.event.inventory.ClickType.LEFT,
-                org.bukkit.event.inventory.InventoryAction.PICKUP_ALL);
+        var click = org.mockito.Mockito.mock(org.bukkit.event.inventory.InventoryClickEvent.class);
+        org.mockito.Mockito.when(click.getView()).thenReturn(player.getOpenInventory());
+        org.mockito.Mockito.when(click.getWhoClicked()).thenReturn(player);
+        org.mockito.Mockito.when(click.getClickedInventory())
+                .thenReturn(player.getOpenInventory().getTopInventory());
+        org.mockito.Mockito.when(click.getRawSlot()).thenReturn(slot);
+        org.mockito.Mockito.when(click.isLeftClick()).thenReturn(true);
         plugin.menus().click(click);
+        org.mockito.Mockito.verify(click).setCancelled(true);
     }
 
     private void awaitOpeningCommit() {

@@ -383,6 +383,67 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void disabledOptionalModulesHideControlsButPreservePublishedDefinitions() throws Exception {
+        var editor = server.addPlayer("FeatureGatePublisher");
+        editor.setOp(true);
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setAlternativeReward("basic", "coal_cache", "iron_supplies",
+                java.util.Set.of(com.antondev.crates.service.AlternativeRewardResolver.Reason.PLAYER_LIMIT),
+                editor.getName());
+        plugin.crates().setRerollPolicy("basic",
+                com.antondev.crates.service.RerollService.Policy.recommended(), editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "FEATURES",
+                "Configured optional feature definitions");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var configFile = new java.io.File(plugin.getDataFolder(), "config.yml");
+        var config = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(configFile);
+        config.set("features.claim-inbox", false);
+        config.set("features.mass-opening", false);
+        config.set("features.milestones", false);
+        config.set("features.rerolls", false);
+        config.set("features.alternative-rewards", false);
+        config.save(configFile);
+        assertTrue(plugin.reloadFor(editor));
+
+        var publication = plugin.definitionPublisher().publish(
+                editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var published = publication.join().crate();
+        assertTrue(published.rerolls().enabled());
+        assertEquals("iron_supplies", published.rewards().get("coal_cache").alternativeRewardId());
+        assertTrue(new String(plugin.database().loadRerollPolicy("basic").join().orElseThrow().payload(),
+                java.nio.charset.StandardCharsets.UTF_8).contains("enabled=true"));
+
+        plugin.menus().openBrowser(editor);
+        assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("browser.claims")).getType());
+        plugin.menus().openPreview(editor, published, 0, false);
+        ItemStack open = editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("preview.open"));
+        String openLore = open.getItemMeta().lore().stream().map(Text::serialize)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertFalse(openLore.contains("Shift-click to choose"));
+        ItemStack firstReward = editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slots("preview.reward-slots").getFirst());
+        String rewardLore = firstReward.getItemMeta().lore().stream().map(Text::serialize)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertFalse(rewardLore.contains("Alternative:"));
+
+        plugin.adminMenus().openCrateEditor(editor, plugin.crates().find("basic").orElseThrow());
+        assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("editor.rerolls")).getType());
+        var source = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache");
+        plugin.editSessions().beginReward(editor, "basic", source, 0);
+        plugin.adminMenus().openRewardBuilder(editor);
+        assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("reward-builder.alternative")).getType());
+    }
+
+    @Test
     void disablingAndReenablingPublishesTheLifecycleWithoutLeakingIntoRuntime() throws Exception {
         var editor = server.addPlayer("LifecycleEditor");
         editor.setOp(true);

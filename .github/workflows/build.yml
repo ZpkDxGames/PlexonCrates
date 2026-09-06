@@ -22,6 +22,35 @@ jobs:
           cache: maven
       - name: Verify
         run: mvn --batch-mode --no-transfer-progress clean verify
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlexonCrates-test-reports-${{ github.sha }}
+          path: target/surefire-reports/
+          if-no-files-found: error
+      - name: Require every discovered test to run
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          skipped = []
+          for path in sorted(glob.glob("target/surefire-reports/TEST-*.xml")):
+              for case in ET.parse(path).getroot().iter("testcase"):
+                  marker = case.find("skipped")
+                  if marker is not None:
+                      skipped.append((case.get("classname"), case.get("name"), marker.get("message", "")))
+
+          if skipped:
+              print(f"Skipped tests are not allowed: {len(skipped)}")
+              for class_name, name, message in skipped:
+                  print(f"- {class_name}.{name}: {message}")
+              sys.exit(1)
+          print("All discovered tests ran; skipped=0")
+          PY
       - name: Upload verified JAR
         uses: actions/upload-artifact@v4
         with:

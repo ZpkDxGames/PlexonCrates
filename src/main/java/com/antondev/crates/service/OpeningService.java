@@ -469,14 +469,15 @@ public final class OpeningService {
         });
     }
 
-    private static int paymentCapacity(Crate crate, int physical, int virtual) {
-        return switch (crate.paymentPolicy()) {
+    private static int paymentCapacity(Crate crate, int physical, long virtual) {
+        long capacity = switch (crate.paymentPolicy()) {
             case PHYSICAL_ONLY -> physical;
             case VIRTUAL_ONLY -> virtual;
             case PHYSICAL_FIRST, VIRTUAL_FIRST, PLAYER_CHOICE -> crate.mixedPayment()
-                    ? (int) Math.min(Integer.MAX_VALUE, (long) physical + virtual)
+                    ? virtual > Long.MAX_VALUE - physical ? Long.MAX_VALUE : physical + virtual
                     : Math.max(physical, virtual);
         };
+        return (int) Math.min(Integer.MAX_VALUE, capacity);
     }
 
     public boolean isOpening(UUID playerId) { return locks.contains(playerId); }

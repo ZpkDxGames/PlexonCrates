@@ -404,6 +404,89 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void milestoneEditorCreatesConfiguresAndDeletesWithoutTechnicalIdInput() throws Exception {
+        var editor = server.addPlayer("MilestoneEditor");
+        editor.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+        plugin.adminMenus().openCrateEditor(editor, crate);
+        awaitDraft(editor, crate.id());
+        int before = crate.milestones().size();
+
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("editor.milestones"));
+        assertEquals(MenuHolder.Kind.MILESTONES,
+                ((MenuHolder) editor.getOpenInventory().getTopInventory().getHolder()).kind());
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-list.create"));
+        MenuHolder selector = (MenuHolder) editor.getOpenInventory().getTopInventory().getHolder();
+        assertEquals(MenuHolder.Kind.MILESTONE_REWARD_SELECT, selector.kind());
+        int rewardSlot = plugin.menusConfig().slots("milestone-reward-select.reward-slots").stream()
+                .filter(slot -> selector.action(slot) != null).findFirst().orElseThrow();
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT, rewardSlot);
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        MenuHolder detail = (MenuHolder) editor.getOpenInventory().getTopInventory().getHolder();
+        assertEquals(MenuHolder.Kind.MILESTONE_DETAIL, detail.kind());
+        assertTrue(detail.rewardId().matches("milestone_[0-9a-f]{8}"));
+        var created = plugin.crates().find(crate.id()).orElseThrow().milestones()
+                .get(detail.rewardId());
+        assertEquals(before + 1, plugin.crates().find(crate.id()).orElseThrow().milestones().size());
+        assertEquals(com.antondev.crates.service.MilestoneService.RepeatPolicy.ONCE,
+                created.definition().repeatPolicy());
+        assertTrue(created.previewVisible());
+
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-detail.repeat"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var repeating = plugin.crates().find(crate.id()).orElseThrow().milestones().get(detail.rewardId());
+        assertEquals(com.antondev.crates.service.MilestoneService.RepeatPolicy.REPEATING,
+                repeating.definition().repeatPolicy());
+        assertEquals(repeating.threshold(), repeating.definition().cycleLength());
+
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-detail.delivery"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-detail.preview"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var configured = plugin.crates().find(crate.id()).orElseThrow().milestones().get(detail.rewardId());
+        assertEquals(com.antondev.crates.service.MilestoneService.DeliveryPolicy.AUTO_DELIVER,
+                configured.deliveryPolicy());
+        assertFalse(configured.previewVisible());
+
+        ItemStack source = exactReward(Material.RESPAWN_ANCHOR, 3);
+        byte[] beforeCapture = source.serializeAsBytes();
+        editor.setItemOnCursor(source);
+        int displaySlot = plugin.menusConfig().slot("milestone-detail.display");
+        InventoryClickEvent capture = new InventoryClickEvent(editor.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, displaySlot, ClickType.LEFT,
+                InventoryAction.SWAP_WITH_CURSOR);
+        plugin.adminMenus().handleClick(capture,
+                (MenuHolder) editor.getOpenInventory().getTopInventory().getHolder());
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertArrayEquals(beforeCapture, source.serializeAsBytes());
+        assertEquals(Material.RESPAWN_ANCHOR, plugin.crates().find(crate.id()).orElseThrow()
+                .milestones().get(detail.rewardId()).displayItem().getType());
+
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-detail.delete"));
+        assertEquals(MenuHolder.Kind.CONFIRM_MILESTONE_DELETE,
+                ((MenuHolder) editor.getOpenInventory().getTopInventory().getHolder()).kind());
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("confirm-milestone-delete.confirm"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertEquals(before, plugin.crates().find(crate.id()).orElseThrow().milestones().size());
+        assertEquals(MenuHolder.Kind.MILESTONES,
+                ((MenuHolder) editor.getOpenInventory().getTopInventory().getHolder()).kind());
+    }
+
+    @Test
     void disabledOptionalModulesHideControlsButPreservePublishedDefinitions() throws Exception {
         var editor = server.addPlayer("FeatureGatePublisher");
         editor.setOp(true);
@@ -457,6 +540,8 @@ class AdministrationIntegrationTest {
         plugin.adminMenus().openCrateEditor(editor, plugin.crates().find("basic").orElseThrow());
         assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
                 .getItem(plugin.menusConfig().slot("editor.rerolls")).getType());
+        assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("editor.milestones")).getType());
         var source = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache");
         plugin.editSessions().beginReward(editor, "basic", source, 0);
         plugin.adminMenus().openRewardBuilder(editor);

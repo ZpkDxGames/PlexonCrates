@@ -24,6 +24,7 @@ public final class MenuConfig {
         installSelectiveFallbacks(yaml);
         installMassOpeningFallbacks(yaml);
         installRerollFallbacks(yaml);
+        installMilestoneFallbacks(yaml);
         validateMenu("browser", List.of("info", "close"));
         validateMenu("preview", List.of("open", "previous", "back", "next"));
         validateMenu("mass-open", List.of("guide", "one", "five", "ten", "custom", "maximum", "back"));
@@ -32,7 +33,7 @@ public final class MenuConfig {
         validateMenu("reroll", List.of("guide", "accept", "candidate", "reroll", "countdown"));
         validateMenu("admin", List.of("crates", "keys", "locations", "rewards", "statistics", "system", "close"));
         validateMenu("editor", List.of("preview", "rename", "key", "rewards", "description", "order",
-                "create-reward", "wand", "opening", "display", "access", "rerolls", "disable",
+                "create-reward", "wand", "opening", "display", "access", "rerolls", "milestones", "disable",
                 "draft-status", "publish", "archive", "undo", "clone", "back", "takeover", "delete"));
         validateMenu("confirm-delete", List.of("confirm", "cancel"));
         validateMenu("summary", List.of("close"));
@@ -46,6 +47,11 @@ public final class MenuConfig {
         validateMenu("reward-builder", List.of("name", "chance", "command", "experience", "money", "rarity",
                 "clear", "permissions", "limits", "alternative", "messages", "availability", "effects",
                 "enabled", "order", "confirm", "cancel", "input-placeholder"));
+        validateMenu("milestone-list", List.of("create", "previous", "back", "next"));
+        validateMenu("milestone-detail", List.of("display", "threshold", "repeat", "cycle", "delivery",
+                "reward", "preview", "delete", "back"));
+        validateMenu("milestone-reward-select", List.of("previous", "back", "next"));
+        validateMenu("confirm-milestone-delete", List.of("confirm", "cancel"));
         validateMenu("locations", List.of("wand", "previous", "back", "next"));
         validateMenu("statistics", List.of("summary", "back"));
         validateMenu("system", List.of("validate", "reload", "backup", "diagnose", "back"));
@@ -217,6 +223,65 @@ public final class MenuConfig {
                     "<gray>Maximum:</gray> <white><reroll_max></white>",
                     "<gray>Cost:</gray> <white><reroll_cost></white>",
                     "<dark_gray>Left toggle • Right configure</dark_gray>"));
+        }
+    }
+
+    private static void installMilestoneFallbacks(YamlConfiguration yaml) {
+        if (!yaml.contains("editor.milestones")) {
+            installItem(yaml, "editor.milestones", 39, "TARGET", "<gold>Milestones</gold>", List.of(
+                    "<gray>Configure cumulative opening rewards.</gray>",
+                    "<dark_gray>Definitions remain safe when the module is disabled.</dark_gray>"));
+        }
+        if (!yaml.contains("milestone-list")) {
+            yaml.set("milestone-list.title", "<crate> <dark_gray>›</dark_gray> <gold>Milestones</gold> <dark_gray>•</dark_gray> <gray>Page <page></gray>");
+            yaml.set("milestone-list.size", 54);
+            yaml.set("milestone-list.entry-slots", List.of(
+                    10, 11, 12, 13, 14, 15, 16,
+                    19, 20, 21, 22, 23, 24, 25,
+                    28, 29, 30, 31, 32, 33, 34));
+            installItem(yaml, "milestone-list.create", 45, "LIME_CONCRETE", "<green>Create Milestone</green>",
+                    List.of("<gray>Choose an existing exact reward, then refine its threshold.</gray>"));
+            installItem(yaml, "milestone-list.previous", 47, "ARROW", "<gray>Previous</gray>", List.of());
+            installItem(yaml, "milestone-list.back", 49, "OAK_DOOR", "<gray>Back to Crate Studio</gray>", List.of());
+            installItem(yaml, "milestone-list.next", 51, "ARROW", "<gray>Next</gray>", List.of());
+        }
+        if (!yaml.contains("milestone-detail")) {
+            yaml.set("milestone-detail.title", "<crate> <dark_gray>›</dark_gray> <gold><milestone></gold>");
+            yaml.set("milestone-detail.size", 27);
+            installItem(yaml, "milestone-detail.display", 4, "TARGET", "<gold>Milestone Display</gold>",
+                    List.of("<gray>Cursor-click or shift-click an exact replacement item.</gray>"));
+            installItem(yaml, "milestone-detail.threshold", 10, "CLOCK", "<yellow>Opening Threshold</yellow>",
+                    List.of("<gray>Current:</gray> <white><threshold></white>", "<green>Click to enter one whole number.</green>"));
+            installItem(yaml, "milestone-detail.repeat", 11, "REPEATER", "<aqua>Repeat Policy</aqua>",
+                    List.of("<gray>Current:</gray> <white><repeat></white>", "<green>Click to toggle.</green>"));
+            installItem(yaml, "milestone-detail.cycle", 12, "COMPASS", "<aqua>Cycle Length</aqua>",
+                    List.of("<gray>Current:</gray> <white><cycle></white>", "<green>Click to edit when repeating.</green>"));
+            installItem(yaml, "milestone-detail.delivery", 14, "CHEST", "<yellow>Delivery Policy</yellow>",
+                    List.of("<gray>Current:</gray> <white><delivery></white>", "<green>Click to toggle.</green>"));
+            installItem(yaml, "milestone-detail.reward", 15, "NETHER_STAR", "<light_purple>Exact Reward</light_purple>",
+                    List.of("<gray>Current:</gray> <white><reward></white>", "<green>Click to choose another reward.</green>"));
+            installItem(yaml, "milestone-detail.preview", 16, "SPYGLASS", "<green>Player Preview</green>",
+                    List.of("<gray>Visible:</gray> <white><visible></white>", "<green>Click to toggle.</green>"));
+            installItem(yaml, "milestone-detail.delete", 20, "RED_CONCRETE", "<red>Delete Milestone</red>",
+                    List.of("<dark_red>Requires confirmation.</dark_red>"));
+            installItem(yaml, "milestone-detail.back", 22, "OAK_DOOR", "<gray>Back to Milestones</gray>", List.of());
+        }
+        if (!yaml.contains("milestone-reward-select")) {
+            yaml.set("milestone-reward-select.title", "<crate> <dark_gray>›</dark_gray> <light_purple>Milestone Reward</light_purple> <dark_gray>•</dark_gray> <gray>Page <page></gray>");
+            yaml.set("milestone-reward-select.size", 54);
+            yaml.set("milestone-reward-select.reward-slots", List.of(
+                    10, 11, 12, 13, 14, 15, 16,
+                    19, 20, 21, 22, 23, 24, 25,
+                    28, 29, 30, 31, 32, 33, 34));
+            installItem(yaml, "milestone-reward-select.previous", 47, "ARROW", "<gray>Previous</gray>", List.of());
+            installItem(yaml, "milestone-reward-select.back", 49, "OAK_DOOR", "<gray>Back</gray>", List.of());
+            installItem(yaml, "milestone-reward-select.next", 51, "ARROW", "<gray>Next</gray>", List.of());
+        }
+        if (!yaml.contains("confirm-milestone-delete")) {
+            yaml.set("confirm-milestone-delete.title", "<red>Delete milestone <milestone>?</red>");
+            yaml.set("confirm-milestone-delete.size", 27);
+            installItem(yaml, "confirm-milestone-delete.confirm", 11, "LIME_CONCRETE", "<green>Confirm Delete</green>", List.of());
+            installItem(yaml, "confirm-milestone-delete.cancel", 15, "RED_CONCRETE", "<red>Keep Milestone</red>", List.of());
         }
     }
 

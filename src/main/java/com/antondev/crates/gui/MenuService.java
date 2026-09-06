@@ -1511,6 +1511,7 @@ public final class MenuService implements Listener {
     private static boolean isAdministrative(MenuHolder.Kind kind) {
         return switch (kind) {
             case ADMIN, EDITOR, CRATE_LIST, KEY_LIST, KEY_TEMPLATE, KEY_SELECT, REWARD_BUILDER,
+                    MILESTONES, MILESTONE_DETAIL, MILESTONE_REWARD_SELECT, CONFIRM_MILESTONE_DELETE,
                     LOCATIONS, STATISTICS, SYSTEM, GLOBAL_REWARDS, WAND_SELECT,
                     CONFIRM_UNLINK, CONFIRM_CRATE_DELETE, CONFIRM_KEY_DELETE, CONFIRM_TAKEOVER -> true;
             default -> false;

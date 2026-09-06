@@ -38,6 +38,12 @@ permissions:
   plexoncrates.claim:
     description: Deliver durable exact-item Claim Inbox entries.
     default: true
+  plexoncrates.milestones:
+    description: View durable milestone progress for published crates.
+    default: true
+  plexoncrates.rerolls:
+    description: View the current reroll-token balance.
+    default: true
   plexoncrates.admin:
     description: All PlexonCrates administration features.
     default: op
@@ -46,6 +52,7 @@ permissions:
       plexoncrates.admin.crates: true
       plexoncrates.admin.keys: true
       plexoncrates.admin.rewards: true
+      plexoncrates.admin.milestones: true
       plexoncrates.admin.locations: true
       plexoncrates.admin.give: true
       plexoncrates.admin.rerolls: true
@@ -66,6 +73,9 @@ permissions:
     default: op
   plexoncrates.admin.rewards:
     description: Create and edit crate rewards.
+    default: op
+  plexoncrates.admin.milestones:
+    description: Create and edit cumulative exact-item milestone rewards.
     default: op
   plexoncrates.admin.locations:
     description: Use the Link Wand and manage physical crate locations.

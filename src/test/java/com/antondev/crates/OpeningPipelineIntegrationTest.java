@@ -282,15 +282,13 @@ class OpeningPipelineIntegrationTest {
         assertEquals(1, plugin.database().loadRerollBalance(player.getUniqueId()).join().balance());
         assertTrue(plugin.database().history(player.getUniqueId(), 10, 0).isEmpty());
 
-        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
-                plugin.menusConfig().slot("reroll.reroll"));
+        clickTop(player, plugin.menusConfig().slot("reroll.reroll"));
         awaitRerollDecision(player);
         var after = plugin.openings().rerollView(player).orElseThrow();
         assertFalse(original.equals(after.candidate().id()));
         assertEquals(0, plugin.database().loadRerollBalance(player.getUniqueId()).join().balance());
 
-        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
-                plugin.menusConfig().slot("reroll.accept"));
+        clickTop(player, plugin.menusConfig().slot("reroll.accept"));
         awaitVirtualOpeningCommit();
 
         assertEquals(0, plugin.keys().count(player, "basic"));
@@ -330,16 +328,14 @@ class OpeningPipelineIntegrationTest {
         assertTrue(plugin.openings().open(player, crate, 1, false));
         awaitRerollDecision(player);
         String retained = plugin.openings().rerollView(player).orElseThrow().candidate().id();
-        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
-                plugin.menusConfig().slot("reroll.reroll"));
+        clickTop(player, plugin.menusConfig().slot("reroll.reroll"));
         awaitRerollDecision(player);
 
         var decision = plugin.openings().rerollView(player).orElseThrow();
         assertEquals(retained, decision.candidate().id());
         assertFalse(decision.processing());
         assertEquals(0, plugin.database().loadRerollBalance(player.getUniqueId()).join().balance());
-        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
-                plugin.menusConfig().slot("reroll.accept"));
+        clickTop(player, plugin.menusConfig().slot("reroll.accept"));
         awaitVirtualOpeningCommit();
 
         var history = plugin.database().history(player.getUniqueId(), 10, 0);
@@ -405,12 +401,10 @@ class OpeningPipelineIntegrationTest {
         assertTrue(plugin.openings().open(player, crate, 2, false));
         awaitRerollDecision(player);
         String originalFinal = plugin.openings().rerollView(player).orElseThrow().candidate().id();
-        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
-                plugin.menusConfig().slot("reroll.reroll"));
+        clickTop(player, plugin.menusConfig().slot("reroll.reroll"));
         awaitRerollDecision(player);
         assertFalse(originalFinal.equals(plugin.openings().rerollView(player).orElseThrow().candidate().id()));
-        player.simulateInventoryClick(player.getOpenInventory(), org.bukkit.event.inventory.ClickType.LEFT,
-                plugin.menusConfig().slot("reroll.accept"));
+        clickTop(player, plugin.menusConfig().slot("reroll.accept"));
         awaitVirtualOpeningCommit();
 
         var history = plugin.database().history(player.getUniqueId(), 10, 0);
@@ -503,6 +497,14 @@ class OpeningPipelineIntegrationTest {
                 && confirmation.kind() == com.antondev.crates.gui.MenuHolder.Kind.SELECTIVE_CONFIRM
                 && confirmation.rewardId().equals(rewardId));
         return rewardSlot;
+    }
+
+    private void clickTop(org.bukkit.entity.Player player, int slot) {
+        var click = new org.bukkit.event.inventory.InventoryClickEvent(player.getOpenInventory(),
+                org.bukkit.event.inventory.InventoryType.SlotType.CONTAINER, slot,
+                org.bukkit.event.inventory.ClickType.LEFT,
+                org.bukkit.event.inventory.InventoryAction.PICKUP_ALL);
+        plugin.menus().click(click);
     }
 
     private void awaitOpeningCommit() {

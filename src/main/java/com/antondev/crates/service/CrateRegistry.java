@@ -318,21 +318,35 @@ public final class CrateRegistry {
     }
 
     public Crate createDraft(String rawId, String editor) throws Exception {
+        return createDraft(rawId, editor, null);
+    }
+
+    /** Creates the normal GUI draft without asking an administrator for a technical identifier. */
+    public Crate createQuickDraft(String editor) throws Exception {
+        String id;
+        do {
+            id = "crate_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        } while (crates.containsKey(id));
+        return createDraft(id, editor, "New Crate");
+    }
+
+    private Crate createDraft(String rawId, String editor, String requestedDisplayName) throws Exception {
         String id = normalize(rawId);
         if (!validId(id)) throw new IllegalArgumentException("Invalid crate ID");
         if (crates.containsKey(id)) throw new IllegalArgumentException("Crate already exists");
         Path file = directory.resolve(id + ".yml").normalize();
         if (!file.getParent().equals(directory.normalize())) throw new IllegalArgumentException("Invalid crate path");
+        String defaultName = requestedDisplayName == null ? pretty(id) + " Crate" : requestedDisplayName;
         Instant now = Instant.now();
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("config-version", 3);
         yaml.set("id", id);
         yaml.set("state", "DRAFT");
         yaml.set("display-order", nextDisplayOrder());
-        yaml.set("display-name", "<white><bold>" + pretty(id) + " Crate</bold></white>");
+        yaml.set("display-name", "<white><bold>" + defaultName + "</bold></white>");
         yaml.set("description", List.of("<gray>A new crate draft.</gray>"));
         yaml.set("icon.material", "CHEST");
-        yaml.set("icon.name", "<white><bold>" + pretty(id) + " Crate</bold></white>");
+        yaml.set("icon.name", "<white><bold>" + defaultName + "</bold></white>");
         yaml.set("icon.lore", List.of("<yellow>Draft — finish setup before publishing.</yellow>"));
         yaml.set("access.permission", "");
         yaml.set("access.worlds", List.of());
@@ -348,7 +362,7 @@ public final class CrateRegistry {
         yaml.set("opening.animation", "ROULETTE");
         yaml.set("opening.broadcast", "");
         yaml.set("hologram.enabled", true);
-        yaml.set("hologram.lines", List.of("<white><bold>" + pretty(id).toUpperCase(Locale.ROOT) + " CRATE</bold></white>",
+        yaml.set("hologram.lines", List.of("<white><bold>" + defaultName.toUpperCase(Locale.ROOT) + "</bold></white>",
                 "<gray>Left-click to preview</gray>", "<white>Right-click with its key</white>"));
         yaml.set("pity.enabled", false);
         yaml.set("pity.threshold", 0);

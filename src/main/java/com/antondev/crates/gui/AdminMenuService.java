@@ -546,11 +546,11 @@ public final class AdminMenuService {
 
     private void createFor(MenuHolder.Kind kind, Player player) {
         if (kind == MenuHolder.Kind.CRATE_LIST) {
-            plugin.editSessions().request(player, Text.parse("<gold>Enter the new crate ID:</gold>"), (target, value) -> {
-                if (!CrateRegistry.validId(value) || !value.equals(value.toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Use lowercase letters, numbers, _ or -");
-                Crate crate = plugin.crates().createDraft(value, target.getName());
-                openCrateEditor(target, crate);
-            });
+            try {
+                openCrateEditor(player, plugin.crates().createQuickDraft(player.getName()));
+            } catch (Exception error) {
+                plugin.configError(player, error);
+            }
         } else if (kind == MenuHolder.Kind.KEY_LIST) {
             plugin.editSessions().request(player, Text.parse("<aqua>Enter the new custom key ID:</aqua>"), (target, value) -> {
                 if (!CrateRegistry.validId(value) || !value.equals(value.toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Use a unique lowercase ID");

@@ -221,6 +221,27 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void quickCreateGeneratesStableIdAndOpensTheDraftWithoutTextInput() {
+        var player = server.addPlayer("QuickCreator");
+        player.setOp(true);
+        int before = plugin.crates().all().size();
+        plugin.adminMenus().openCrates(player, 0);
+
+        player.simulateInventoryClick(player.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("crate-list.create"));
+
+        MenuHolder holder = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+        assertEquals(MenuHolder.Kind.EDITOR, holder.kind());
+        assertTrue(holder.crateId().matches("crate_[0-9a-f]{8}"));
+        var created = plugin.crates().find(holder.crateId()).orElseThrow();
+        assertEquals(com.antondev.crates.domain.crate.CrateState.DRAFT, created.state());
+        assertTrue(Text.serialize(created.displayName()).contains("New Crate"));
+        assertEquals(before + 1, plugin.crates().all().size());
+        awaitDraft(player, holder.crateId());
+        assertTrue(plugin.draftSessions().view(player.getUniqueId(), holder.crateId()).orElseThrow().writable());
+    }
+
+    @Test
     void matchingLeaseCanAdvanceButTakeoverLeavesThePreviousViewStale() throws Exception {
         var first = server.addPlayer("LeaseOwner");
         var second = server.addPlayer("LeaseTaker");

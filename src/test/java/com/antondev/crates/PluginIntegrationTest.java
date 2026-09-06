@@ -267,7 +267,7 @@ class PluginIntegrationTest {
     }
 
     @Test
-    void previewOffersExplicitMassAmountsAndConsumesOnlyTheConfirmedBatch() {
+    void previewOffersExplicitMassAmountsAndConsumesOnlyTheConfirmedBatch() throws Exception {
         var player = server.addPlayer("MassChooser");
         player.setOp(false);
         World world = server.getWorld("Survival_World");

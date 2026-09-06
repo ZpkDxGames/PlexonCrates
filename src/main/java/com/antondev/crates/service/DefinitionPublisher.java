@@ -10,10 +10,12 @@ import com.antondev.crates.domain.key.KeyDefinition;
 import com.antondev.crates.domain.key.KeySource;
 import com.antondev.crates.item.ItemSnapshotCodec;
 import com.antondev.crates.model.Crate;
+import com.antondev.crates.model.CrateMilestone;
 import com.antondev.crates.model.CrateReward;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -102,13 +104,6 @@ public final class DefinitionPublisher {
         CrateRegistry.PreparedPublication publication = crates.preparePublished(
                 frozen.crateId(), frozen.payload(), actorName);
         if (publication.crate().state() == CrateState.PUBLISHED) {
-            if (!plugin.settings().alternativeRewardsEnabled()
-                    && publication.crate().rewards().values().stream().anyMatch(CrateReward::hasAlternative)) {
-                throw new IllegalStateException("Alternative rewards are disabled globally; remove their mappings or enable the feature before publishing");
-            }
-            if (!plugin.settings().rerollsEnabled() && publication.crate().rerolls().enabled()) {
-                throw new IllegalStateException("Rerolls are disabled globally; disable this crate's reroll policy or enable the feature before publishing");
-            }
             List<String> issues = crates.publishingIssues(publication.crate(), keys);
             if (!issues.isEmpty()) throw new IllegalStateException(String.join(" ", issues));
         }
@@ -211,7 +206,28 @@ public final class DefinitionPublisher {
                 Text.serialize(crate.displayName()), crate.description().stream().map(Text::serialize)
                         .collect(java.util.stream.Collectors.joining("\n")),
                 icon.bytes(), payload, rewards, definitionKeys, crate.acceptedKeyIds(), crate.keyCost(),
-                rerollSettings(crate.rerolls()), now, now);
+                milestoneSettings(crate, snapshots), rerollSettings(crate.rerolls()), now, now);
+    }
+
+    private static List<DatabaseService.DefinitionMilestoneData> milestoneSettings(
+            Crate crate, ItemSnapshotCodec snapshots) {
+        var definitions = new ArrayList<DatabaseService.DefinitionMilestoneData>();
+        for (CrateMilestone milestone : crate.orderedMilestones()) {
+            ItemSnapshotCodec.Snapshot display = snapshots.capture(milestone.displayItem());
+            YamlConfiguration payload = new YamlConfiguration();
+            payload.set("display-name", Text.serialize(milestone.displayName()));
+            payload.set("display-item-base64", Base64.getEncoder().encodeToString(display.bytes()));
+            payload.set("display-item-material", display.material());
+            payload.set("display-item-sha256", display.sha256());
+            payload.set("reward-id", milestone.reward().id());
+            payload.set("delivery-policy", milestone.deliveryPolicy().name());
+            payload.set("preview-visible", milestone.previewVisible());
+            definitions.add(new DatabaseService.DefinitionMilestoneData(milestone.id(),
+                    milestone.threshold(), milestone.definition().repeatPolicy().name(),
+                    milestone.definition().cycleLength(), milestone.definition().position(),
+                    payload.saveToString().getBytes(StandardCharsets.UTF_8)));
+        }
+        return List.copyOf(definitions);
     }
 
     private static byte[] rerollSettings(RerollService.Policy policy) {

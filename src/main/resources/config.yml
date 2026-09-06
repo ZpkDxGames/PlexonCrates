@@ -1,6 +1,6 @@
 # PlexonCrates 3.0.0 | Created by Tonim (ZpkDxGames)
 # Paper 26.2 / Java 25. All text uses MiniMessage, never legacy & colors.
-config-version: 2
+config-version: 3
 
 database:
   # Mutable links, statistics, limits, pity, history, journals, drafts, and audit data.

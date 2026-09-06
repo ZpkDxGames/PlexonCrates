@@ -209,6 +209,28 @@ public final class DatabaseService implements AutoCloseable {
         @Override public byte[] settingsPayload() { return settingsPayload.clone(); }
     }
 
+    /** One immutable milestone row belonging to a published crate revision. */
+    public record DefinitionMilestoneData(
+            String milestoneId, int threshold, String repeatPolicy, int cycleLength,
+            int position, byte[] definitionPayload) {
+        public DefinitionMilestoneData {
+            milestoneId = requiredText(milestoneId, "milestoneId").toLowerCase(java.util.Locale.ROOT);
+            repeatPolicy = requiredText(repeatPolicy, "repeatPolicy").toUpperCase(java.util.Locale.ROOT);
+            definitionPayload = copyBytes(definitionPayload, "milestone definition payload");
+            if (!milestoneId.matches("[a-z0-9][a-z0-9_-]{0,63}")) {
+                throw new IllegalArgumentException("Invalid milestone ID");
+            }
+            if (threshold < 1 || position < 0 || cycleLength < 0
+                    || !java.util.Set.of("ONCE", "REPEATING").contains(repeatPolicy)
+                    || repeatPolicy.equals("ONCE") && cycleLength != 0
+                    || repeatPolicy.equals("REPEATING") && cycleLength < 1) {
+                throw new IllegalArgumentException("Invalid normalized milestone metadata");
+            }
+        }
+
+        @Override public byte[] definitionPayload() { return definitionPayload.clone(); }
+    }
+
     /**
      * Canonical key metadata read from SQLite.  This is deliberately separate
      * from {@link DefinitionKeyData}: publication DTOs describe the incoming
@@ -255,7 +277,7 @@ public final class DatabaseService implements AutoCloseable {
             String crateId, String lifecycle, int displayOrder, String displayName, String description,
             byte[] iconBytes, byte[] settingsPayload, List<DefinitionRewardData> rewards,
             List<DefinitionKeyData> keys, List<String> acceptedKeyIds, int keyCost,
-            byte[] rerollPolicyPayload,
+            List<DefinitionMilestoneData> milestones, byte[] rerollPolicyPayload,
             Instant createdAt, Instant updatedAt) {
         public DefinitionBundle {
             crateId = requiredText(crateId, "crateId");
@@ -268,11 +290,23 @@ public final class DatabaseService implements AutoCloseable {
             rewards = List.copyOf(rewards);
             keys = List.copyOf(keys);
             acceptedKeyIds = List.copyOf(acceptedKeyIds);
+            milestones = List.copyOf(milestones);
             createdAt = java.util.Objects.requireNonNull(createdAt, "createdAt");
             updatedAt = java.util.Objects.requireNonNull(updatedAt, "updatedAt");
             if (displayOrder < 0 || keyCost < 0 || keyCost > 64) {
                 throw new IllegalArgumentException("Invalid normalized crate metadata");
             }
+        }
+
+        /** Compatibility constructor for definition bundles created before normalized milestone storage. */
+        public DefinitionBundle(String crateId, String lifecycle, int displayOrder, String displayName,
+                                String description, byte[] iconBytes, byte[] settingsPayload,
+                                List<DefinitionRewardData> rewards, List<DefinitionKeyData> keys,
+                                List<String> acceptedKeyIds, int keyCost, byte[] rerollPolicyPayload,
+                                Instant createdAt, Instant updatedAt) {
+            this(crateId, lifecycle, displayOrder, displayName, description, iconBytes, settingsPayload,
+                    rewards, keys, acceptedKeyIds, keyCost, List.of(), rerollPolicyPayload,
+                    createdAt, updatedAt);
         }
 
         /** Compatibility constructor for definition bundles created before normalized reroll policy storage. */
@@ -282,7 +316,7 @@ public final class DatabaseService implements AutoCloseable {
                                 List<String> acceptedKeyIds, int keyCost, Instant createdAt,
                                 Instant updatedAt) {
             this(crateId, lifecycle, displayOrder, displayName, description, iconBytes, settingsPayload,
-                    rewards, keys, acceptedKeyIds, keyCost,
+                    rewards, keys, acceptedKeyIds, keyCost, List.of(),
                     "enabled=false\nmaximum=0\ncost-type=TOKEN\ncost=0\npermission=\n"
                             .concat("exclude-previous=true\ntimeout-seconds=15\ntimeout-policy=ACCEPT_CURRENT\n")
                             .concat("mass-allowed=false\n").getBytes(java.nio.charset.StandardCharsets.UTF_8),
@@ -312,6 +346,19 @@ public final class DatabaseService implements AutoCloseable {
             crateId = requiredText(crateId, "crateId");
             payload = copyBytes(payload, "reroll policy payload");
             if (revision < 0) throw new IllegalArgumentException("Reroll policy revision cannot be negative");
+        }
+
+        @Override public byte[] payload() { return payload.clone(); }
+    }
+
+    public record StoredMilestoneDefinition(
+            String crateId, String milestoneId, int threshold, String repeatPolicy,
+            int cycleLength, int position, byte[] payload) {
+        public StoredMilestoneDefinition {
+            crateId = requiredText(crateId, "crateId");
+            milestoneId = requiredText(milestoneId, "milestoneId");
+            repeatPolicy = requiredText(repeatPolicy, "repeatPolicy");
+            payload = copyBytes(payload, "milestone payload");
         }
 
         @Override public byte[] payload() { return payload.clone(); }
@@ -2487,6 +2534,30 @@ public final class DatabaseService implements AutoCloseable {
         });
     }
 
+    /** Reads the ordered normalized milestone graph for one canonical crate. */
+    public CompletableFuture<List<StoredMilestoneDefinition>> loadMilestoneDefinitions(String crateId) {
+        String id = requiredText(crateId, "crateId").toLowerCase(java.util.Locale.ROOT);
+        return submitQuery("load milestone definitions", connection -> {
+            var definitions = new ArrayList<StoredMilestoneDefinition>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT crate_id, milestone_id, threshold, repeat_policy, cycle_length,
+                        position, definition_payload
+                    FROM milestone_definition WHERE crate_id = ?
+                    ORDER BY position, milestone_id
+                    """)) {
+                statement.setString(1, id);
+                try (ResultSet rows = statement.executeQuery()) {
+                    while (rows.next()) {
+                        definitions.add(new StoredMilestoneDefinition(rows.getString(1), rows.getString(2),
+                                rows.getInt(3), rows.getString(4), rows.getInt(5), rows.getInt(6),
+                                rows.getBytes(7)));
+                    }
+                }
+            }
+            return List.copyOf(definitions);
+        });
+    }
+
     /**
      * Compares the durable draft lease/revision and base publication revision,
      * then replaces the complete normalized crate graph in one transaction.
@@ -2849,6 +2920,26 @@ public final class DatabaseService implements AutoCloseable {
         }
         for (DefinitionRewardData reward : bundle.rewards()) {
             insertDefinitionReward(connection, bundle.crateId(), reward);
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM milestone_definition WHERE crate_id = ?")) {
+            statement.setString(1, bundle.crateId());
+            statement.executeUpdate();
+        }
+        for (DefinitionMilestoneData milestone : bundle.milestones()) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO milestone_definition(crate_id, milestone_id, threshold, repeat_policy,
+                        cycle_length, position, definition_payload) VALUES(?, ?, ?, ?, ?, ?, ?)
+                    """)) {
+                statement.setString(1, bundle.crateId());
+                statement.setString(2, milestone.milestoneId());
+                statement.setInt(3, milestone.threshold());
+                statement.setString(4, milestone.repeatPolicy());
+                statement.setInt(5, milestone.cycleLength());
+                statement.setInt(6, milestone.position());
+                statement.setBytes(7, milestone.definitionPayload());
+                statement.executeUpdate();
+            }
         }
         try (PreparedStatement statement = connection.prepareStatement(
                 "DELETE FROM crate_key_link WHERE crate_id = ?")) {

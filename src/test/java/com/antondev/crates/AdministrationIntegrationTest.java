@@ -341,6 +341,48 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void publicationPersistsOrderedMilestoneDefinitionsWithExactDisplayMetadata() throws Exception {
+        var editor = server.addPlayer("MilestonePublisher");
+        editor.setOp(true);
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setMilestone("basic", "first_preview", 3,
+                com.antondev.crates.service.MilestoneService.RepeatPolicy.ONCE, 0,
+                com.antondev.crates.service.MilestoneService.DeliveryPolicy.CLAIM,
+                "coal_cache", Component.text("First Preview"), new ItemStack(Material.CHEST),
+                true, editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "MILESTONE",
+                "Added first preview milestone");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var future = plugin.definitionPublisher().publish(editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        future.join();
+
+        var definitions = plugin.database().loadMilestoneDefinitions("basic").join();
+        assertEquals(1, definitions.size());
+        var definition = definitions.getFirst();
+        assertEquals("first_preview", definition.milestoneId());
+        assertEquals(3, definition.threshold());
+        assertEquals("ONCE", definition.repeatPolicy());
+        assertTrue(new String(definition.payload(), java.nio.charset.StandardCharsets.UTF_8)
+                .contains("reward-id: coal_cache"));
+        assertTrue(new String(definition.payload(), java.nio.charset.StandardCharsets.UTF_8)
+                .contains("preview-visible: true"));
+
+        var published = plugin.runtime().find("basic").orElseThrow();
+        plugin.menus().openPreview(editor, published, 0, false);
+        ItemStack open = editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("preview.open"));
+        String lore = open.getItemMeta().lore().stream().map(Text::serialize)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertTrue(lore.contains("Milestone progress"));
+        assertTrue(lore.contains("0 / 3"));
+    }
+
+    @Test
     void disablingAndReenablingPublishesTheLifecycleWithoutLeakingIntoRuntime() throws Exception {
         var editor = server.addPlayer("LifecycleEditor");
         editor.setOp(true);

@@ -8,12 +8,15 @@ import com.antondev.crates.domain.key.KeyPaymentPolicy;
 import com.antondev.crates.domain.opening.OpenSource;
 import com.antondev.crates.domain.opening.OpeningMode;
 import com.antondev.crates.item.ItemSnapshotCodec;
+import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.model.Crate;
+import com.antondev.crates.model.CrateMilestone;
 import com.antondev.crates.model.CrateReward;
 import com.antondev.crates.service.ChanceAllocator;
 import com.antondev.crates.service.CrateRegistry;
 import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.KeyPaymentPlanner;
+import com.antondev.crates.service.MilestoneProgressService;
 import com.antondev.crates.service.RewardSelector;
 import com.antondev.crates.service.RewardStateService;
 import java.util.ArrayList;
@@ -51,6 +54,7 @@ public final class MenuService implements Listener {
     private final ItemSnapshotCodec itemSnapshots = new ItemSnapshotCodec();
     private final NamespacedKey editorItem;
     private final Map<UUID, String> rewardSearch = new ConcurrentHashMap<>();
+    private final Map<UUID, MassContext> massContexts = new ConcurrentHashMap<>();
 
     public MenuService(PlexonCrates plugin) {
         this.plugin = plugin;
@@ -75,7 +79,7 @@ public final class MenuService implements Listener {
         }
         inventory.setItem(menus.slot("browser.info"), menus.item("browser.info"));
         inventory.setItem(menus.slot("browser.close"), menus.item("browser.close"));
-        if (menus.contains("browser.claims")) {
+        if (plugin.settings().claimInboxEnabled() && menus.contains("browser.claims")) {
             ItemStack claims = menus.item("browser.claims", Text.value("count", plugin.claims().pendingCount(player.getUniqueId()).getNow(0)));
             inventory.setItem(menus.slot("browser.claims"), claims);
         }
@@ -84,11 +88,19 @@ public final class MenuService implements Listener {
 
     /** Opens the durable exact-item Claim Inbox without blocking the primary thread. */
     public void openClaims(Player player, int requestedPage) {
+        if (!plugin.settings().claimInboxEnabled()) {
+            plugin.messages().send(player, "disabled");
+            return;
+        }
         int page = Math.max(1, requestedPage);
         plugin.claims().list(player.getUniqueId(), page).whenComplete((entries, error) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!player.isOnline()) return;
+                if (!plugin.settings().claimInboxEnabled()) {
+                    plugin.messages().send(player, "disabled");
+                    return;
+                }
                 if (error != null || entries == null) {
                     plugin.messages().send(player, "database-error");
                     return;
@@ -117,6 +129,76 @@ public final class MenuService implements Listener {
 
     public void openPreview(Player player, Crate crate, int requestedPage, boolean adminOrigin) {
         renderPreview(player, crate, requestedPage, adminOrigin, null);
+    }
+
+    /** Opens a non-consuming amount chooser for one published mass-opening request. */
+    public void openMassOpening(Player player, Crate crate, OpenSource source,
+                                BlockPosition location, int returnPage) {
+        if (!plugin.settings().massOpeningEnabled() || !crate.bulkEnabled()) {
+            plugin.messages().send(player, "disabled");
+            return;
+        }
+        long revision = plugin.runtime().crateRevision(crate.id());
+        plugin.openings().maximumAvailableAmount(player, crate).whenComplete((maximum, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                Crate current = plugin.runtime().find(crate.id()).orElse(null);
+                if (error != null) {
+                    plugin.messages().send(player, "database-error");
+                    return;
+                }
+                if (current == null || revision != plugin.runtime().crateRevision(crate.id())) {
+                    plugin.messages().send(player, "opening-state-changed");
+                    return;
+                }
+                renderMassOpening(player, current, source, location, returnPage,
+                        Math.max(0, maximum == null ? 0 : maximum));
+            });
+        });
+    }
+
+    private void renderMassOpening(Player player, Crate crate, OpenSource source,
+                                   BlockPosition location, int returnPage, int maximum) {
+        MenuConfig menus = plugin.menusConfig();
+        MenuHolder holder = new MenuHolder(MenuHolder.Kind.MASS_OPEN, crate.id(), "",
+                Math.max(0, returnPage), false, plugin.runtime().crateRevision(crate.id()));
+        Inventory inventory = create(holder, menus.size("mass-open"),
+                menus.title("mass-open", Text.component("crate", crate.displayName())));
+        fill(inventory);
+        inventory.setItem(menus.slot("mass-open.guide"), menus.item("mass-open.guide",
+                Text.value("maximum", maximum), Text.value("key_cost", crate.keyCost())));
+        massChoice(inventory, holder, menus, "one", 1, maximum, crate.keyCost());
+        massChoice(inventory, holder, menus, "five", 5, maximum, crate.keyCost());
+        massChoice(inventory, holder, menus, "ten", 10, maximum, crate.keyCost());
+        if (maximum > 0) {
+            int customSlot = menus.slot("mass-open.custom");
+            inventory.setItem(customSlot, menus.item("mass-open.custom", Text.value("maximum", maximum)));
+            holder.bind(customSlot, "custom-mass", Integer.toString(maximum));
+        }
+        int maximumSlot = menus.slot("mass-open.maximum");
+        ItemStack maximumItem = menus.item("mass-open.maximum", Text.value("amount", maximum),
+                Text.value("cost", (long) maximum * crate.keyCost()));
+        if (maximum < 1) {
+            maximumItem.setType(org.bukkit.Material.BARRIER);
+            appendLore(maximumItem, List.of(Text.parse("<red>No complete opening is currently payable.</red>")));
+        } else {
+            holder.bind(maximumSlot, "open-mass", Integer.toString(maximum));
+        }
+        inventory.setItem(maximumSlot, maximumItem);
+        inventory.setItem(menus.slot("mass-open.back"), menus.item("mass-open.back"));
+        massContexts.put(holder.sessionId(), new MassContext(player.getUniqueId(), source, location,
+                Math.max(0, returnPage), maximum));
+        open(player, inventory);
+    }
+
+    private static void massChoice(Inventory inventory, MenuHolder holder, MenuConfig menus,
+                                   String key, int amount, int maximum, int keyCost) {
+        if (amount > maximum) return;
+        int slot = menus.slot("mass-open." + key);
+        inventory.setItem(slot, menus.item("mass-open." + key,
+                Text.value("cost", (long) amount * keyCost)));
+        holder.bind(slot, "open-mass", Integer.toString(amount));
     }
 
     /** Opens a non-consuming confirmation preview for one verified portable issuance. */
@@ -190,7 +272,7 @@ public final class MenuService implements Listener {
             } else if (!canWin) {
                 lore.add(Text.parse("<red>This source and its allowed alternative are unavailable.</red>"));
             }
-            if (reward.hasAlternative()) {
+            if (plugin.settings().alternativeRewardsEnabled() && reward.hasAlternative()) {
                 lore.add(Text.parse("<gold>Alternative:</gold> <white>" + reward.alternativeRewardId()
                         + "</white> <gray>for " + reward.alternativeReasons().stream().map(Enum::name).sorted()
                         .collect(java.util.stream.Collectors.joining(", ")) + "</gray>"));
@@ -228,6 +310,11 @@ public final class MenuService implements Listener {
                     Text.parse("<green>Click to confirm and open one.</green>"))));
         } else {
             appendPhysicalPaymentSummary(open, player, crate);
+            if (!adminOrigin && crate.openingMode() != OpeningMode.SELECTIVE
+                    && plugin.settings().massOpeningEnabled() && crate.bulkEnabled()) {
+                appendLore(open, List.of(Component.empty(),
+                        Text.parse("<aqua>Shift-click to choose 1, 5, 10, Custom, or Maximum Available.</aqua>")));
+            }
         }
         if (selective) {
             open.setType(org.bukkit.Material.COMPASS);
@@ -240,6 +327,7 @@ public final class MenuService implements Listener {
                         Text.parse("<gray>Browsing and closing consume nothing.</gray>")));
             });
         }
+        appendMilestonePreview(open, player, crate);
         inventory.setItem(menus.slot("preview.open"), open);
         if (crate.pity().enabled()) {
             int remaining = plugin.rewardStates().pityRemaining(player.getUniqueId(), crate);
@@ -255,6 +343,33 @@ public final class MenuService implements Listener {
                 && crate.paymentPolicy() != com.antondev.crates.domain.key.KeyPaymentPolicy.PHYSICAL_ONLY) {
             appendVirtualPaymentSummary(player, crate, holder, inventory);
         }
+    }
+
+    private void appendMilestonePreview(ItemStack control, Player player, Crate crate) {
+        if (!plugin.settings().milestonesEnabled()) return;
+        List<CrateMilestone> visible = crate.orderedMilestones().stream()
+                .filter(CrateMilestone::previewVisible).toList();
+        if (visible.isEmpty()) return;
+        var progress = plugin.milestoneProgress().progress(player.getUniqueId(), crate.id());
+        List<CrateMilestone> next = plugin.milestoneProgress().next(player.getUniqueId(), crate,
+                milestone -> milestone.previewVisible() && milestone.reward().eligible(player), 2);
+        var lore = new ArrayList<Component>();
+        lore.add(Component.empty());
+        lore.add(Text.parse("<gold><bold>Milestone progress</bold></gold>"));
+        lore.add(Text.parse("<gray>Successful openings:</gray> <white>" + progress.openings()
+                + "</white> <dark_gray>•</dark_gray> <gray>Earned:</gray> <white>"
+                + progress.earnedKeys().size() + "</white>"));
+        if (next.isEmpty()) {
+            lore.add(Text.parse("<green>Every visible milestone is currently earned.</green>"));
+        } else {
+            for (CrateMilestone milestone : next) {
+                long required = MilestoneProgressService.requiredOpenings(progress, milestone.definition());
+                lore.add(Text.parse("<gray>Next:</gray> ").append(milestone.displayName())
+                        .append(Text.parse(" <dark_gray>•</dark_gray> <white>" + progress.openings()
+                                + " / " + required + "</white>")));
+            }
+        }
+        appendLore(control, lore);
     }
 
     private void openSelectiveConfirmation(Player player, Crate crate, CrateReward reward,
@@ -531,6 +646,7 @@ public final class MenuService implements Listener {
                     && player.getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder holder
                     && holder.kind() != MenuHolder.Kind.OPENING) player.closeInventory();
         }
+        massContexts.clear();
     }
 
     @EventHandler
@@ -570,6 +686,11 @@ public final class MenuService implements Listener {
                 }
                 if (slot == menus.slot("preview.open")) {
                     if (crate.openingMode() == OpeningMode.SELECTIVE) return;
+                    if (!holder.adminOrigin() && event.isShiftClick()
+                            && plugin.settings().massOpeningEnabled() && crate.bulkEnabled()) {
+                        openMassOpening(player, crate, OpenSource.GUI, null, holder.page());
+                        return;
+                    }
                     KeyPaymentPlanner.Preference preference = event.isRightClick()
                             ? KeyPaymentPlanner.Preference.VIRTUAL : KeyPaymentPlanner.Preference.PHYSICAL;
                     plugin.openings().open(player, crate, 1,
@@ -580,6 +701,7 @@ public final class MenuService implements Listener {
                 } else if (slot == menus.slot("preview.previous")) openPreview(player, crate, holder.page() - 1, holder.adminOrigin());
                 else if (slot == menus.slot("preview.next")) openPreview(player, crate, holder.page() + 1, holder.adminOrigin());
             }
+            case MASS_OPEN -> massOpenClick(player, holder, slot, event.isRightClick());
             case PORTABLE_PREVIEW -> portablePreviewClick(player, holder, slot);
             case SELECTIVE_CONFIRM -> selectiveConfirmClick(player, holder, slot, event.isRightClick());
             case ADMIN -> adminClick(player, slot);
@@ -597,6 +719,60 @@ public final class MenuService implements Listener {
             }
             default -> { }
         }
+    }
+
+    private void massOpenClick(Player player, MenuHolder holder, int slot, boolean rightClick) {
+        MassContext context = massContexts.get(holder.sessionId());
+        Crate crate = plugin.runtime().find(holder.crateId()).orElse(null);
+        if (context == null || !context.playerId().equals(player.getUniqueId()) || crate == null
+                || holder.revision() != plugin.runtime().crateRevision(holder.crateId())
+                || !plugin.settings().massOpeningEnabled() || !crate.bulkEnabled()) {
+            massContexts.remove(holder.sessionId());
+            player.closeInventory();
+            plugin.messages().send(player, "opening-state-changed");
+            return;
+        }
+        MenuConfig menus = plugin.menusConfig();
+        if (slot == menus.slot("mass-open.back")) {
+            massContexts.remove(holder.sessionId());
+            openPreview(player, crate, context.returnPage(), false);
+            return;
+        }
+        MenuHolder.Action action = holder.action(slot);
+        if (action == null) return;
+        KeyPaymentPlanner.Preference preference = rightClick
+                ? KeyPaymentPlanner.Preference.VIRTUAL : KeyPaymentPlanner.Preference.PHYSICAL;
+        if (action.id().equals("custom-mass")) {
+            massContexts.remove(holder.sessionId());
+            plugin.editSessions().request(player, Text.parse(
+                    "<aqua>Enter a whole opening amount from <white>1</white> to <white>"
+                            + context.maximum() + "</white>:</aqua>"), (target, value) -> {
+                int amount = Integer.parseInt(value.trim());
+                if (amount < 1 || amount > context.maximum()) {
+                    throw new IllegalArgumentException("Amount must be between 1 and " + context.maximum());
+                }
+                Crate current = plugin.runtime().find(holder.crateId()).orElseThrow(
+                        () -> new IllegalStateException("Crate is no longer published"));
+                if (holder.revision() != plugin.runtime().crateRevision(holder.crateId())
+                        || !plugin.settings().massOpeningEnabled() || !current.bulkEnabled()) {
+                    throw new IllegalStateException("The crate changed; reopen its preview");
+                }
+                plugin.openings().open(target, current, amount, context.source(), context.location(), preference);
+            });
+            return;
+        }
+        if (!action.id().equals("open-mass")) return;
+        int amount;
+        try {
+            amount = Integer.parseInt(action.value());
+        } catch (NumberFormatException invalid) {
+            plugin.messages().send(player, "opening-state-changed");
+            return;
+        }
+        if (amount < 1 || amount > context.maximum()) return;
+        massContexts.remove(holder.sessionId());
+        player.closeInventory();
+        plugin.openings().open(player, crate, amount, context.source(), context.location(), preference);
     }
 
     private void portablePreviewClick(Player player, MenuHolder holder, int slot) {
@@ -765,6 +941,7 @@ public final class MenuService implements Listener {
         if (closed == null && event.getView() != null) closed = event.getView().getTopInventory();
         if (closed != null && closed.getHolder() instanceof MenuHolder holder) {
             plugin.guiSessions().close(event.getPlayer().getUniqueId(), holder.sessionId());
+            massContexts.remove(holder.sessionId());
             if (holder.kind() == MenuHolder.Kind.REROLL && event.getPlayer() instanceof Player player) {
                 plugin.openings().acceptReroll(player, "CLOSE");
             }
@@ -775,6 +952,7 @@ public final class MenuService implements Listener {
     public void quit(PlayerQuitEvent event) {
         plugin.openings().acceptReroll(event.getPlayer(), "DISCONNECT");
         rewardSearch.remove(event.getPlayer().getUniqueId());
+        massContexts.values().removeIf(context -> context.playerId().equals(event.getPlayer().getUniqueId()));
         plugin.guiSessions().clear(event.getPlayer().getUniqueId());
     }
 
@@ -789,6 +967,11 @@ public final class MenuService implements Listener {
     }
 
     private void claimsClick(Player player, MenuHolder holder, int slot) {
+        if (!plugin.settings().claimInboxEnabled()) {
+            player.closeInventory();
+            plugin.messages().send(player, "disabled");
+            return;
+        }
         MenuConfig menus = plugin.menusConfig();
         if (slot == menus.slot("claims.close")) {
             player.closeInventory();
@@ -847,7 +1030,8 @@ public final class MenuService implements Listener {
             player.closeInventory();
             return;
         }
-        if (menus.contains("browser.claims") && slot == menus.slot("browser.claims")) {
+        if (plugin.settings().claimInboxEnabled() && menus.contains("browser.claims")
+                && slot == menus.slot("browser.claims")) {
             openClaims(player, 1);
             return;
         }
@@ -1334,4 +1518,6 @@ public final class MenuService implements Listener {
     }
 
     private record SummaryEntry(CrateReward reward, int count) {}
+    private record MassContext(UUID playerId, OpenSource source, BlockPosition location,
+                               int returnPage, int maximum) {}
 }

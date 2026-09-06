@@ -421,12 +421,62 @@ public final class OpeningService {
     }
 
     public int bulkAmount(Player player, Crate crate) {
-        if (player.hasPermission("plexoncrates.bypass.key")) return 1;
         int maximum = Math.min(plugin.settings().maximumBulk(), crate.bulkMaximum());
-        if (!plugin.settings().massOpeningEnabled() || !crate.bulkEnabled() || crate.keyCost() <= 0) return 1;
+        if (!plugin.settings().massOpeningEnabled() || !crate.bulkEnabled()) return 1;
+        if (crate.keyCost() > 0 && player.hasPermission("plexoncrates.bypass.key")) return 1;
+        if (crate.keyCost() <= 0) return maximum;
         int available = 0;
         for (String keyId : crate.acceptedKeyIds()) available = Math.max(available, plugin.keys().count(player, keyId));
         return Math.max(1, Math.min(maximum, available / crate.keyCost()));
+    }
+
+    /**
+     * Computes the largest currently payable batch without touching keys or
+     * balances. Physical inventory is snapshotted on the primary thread and
+     * optional virtual balances are loaded on the bounded database worker.
+     */
+    public CompletableFuture<Integer> maximumAvailableAmount(Player player, Crate crate) {
+        if (!Bukkit.isPrimaryThread()) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("Mass-opening capacity must begin on the primary thread"));
+        }
+        int maximum = Math.min(plugin.settings().maximumBulk(), crate.bulkMaximum());
+        if (!plugin.settings().massOpeningEnabled() || !crate.bulkEnabled()) {
+            return CompletableFuture.completedFuture(Math.min(1, maximum));
+        }
+        if (crate.keyCost() > 0 && player.hasPermission("plexoncrates.bypass.key")) {
+            return CompletableFuture.completedFuture(Math.min(1, maximum));
+        }
+        if (crate.keyCost() <= 0) return CompletableFuture.completedFuture(maximum);
+
+        boolean virtual = plugin.settings().virtualKeyWalletEnabled()
+                && crate.paymentPolicy() != KeyPaymentPolicy.PHYSICAL_ONLY;
+        var capacities = new ArrayList<CompletableFuture<Integer>>();
+        for (String keyId : crate.acceptedKeyIds()) {
+            int physical = plugin.keys().count(player, keyId);
+            if (!virtual) {
+                capacities.add(CompletableFuture.completedFuture(paymentCapacity(crate, physical, 0)));
+                continue;
+            }
+            capacities.add(plugin.database().loadVirtualKeyBalance(player.getUniqueId(), keyId)
+                    .thenApply(balance -> paymentCapacity(crate, physical, balance.balance())));
+        }
+        if (capacities.isEmpty()) return CompletableFuture.completedFuture(0);
+        CompletableFuture<?>[] all = capacities.toArray(CompletableFuture[]::new);
+        return CompletableFuture.allOf(all).thenApply(ignored -> {
+            int available = capacities.stream().mapToInt(CompletableFuture::join).max().orElse(0);
+            return Math.min(maximum, available / crate.keyCost());
+        });
+    }
+
+    private static int paymentCapacity(Crate crate, int physical, int virtual) {
+        return switch (crate.paymentPolicy()) {
+            case PHYSICAL_ONLY -> physical;
+            case VIRTUAL_ONLY -> virtual;
+            case PHYSICAL_FIRST, VIRTUAL_FIRST, PLAYER_CHOICE -> crate.mixedPayment()
+                    ? (int) Math.min(Integer.MAX_VALUE, (long) physical + virtual)
+                    : Math.max(physical, virtual);
+        };
     }
 
     public boolean isOpening(UUID playerId) { return locks.contains(playerId); }

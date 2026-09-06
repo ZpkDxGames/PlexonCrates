@@ -267,6 +267,46 @@ class PluginIntegrationTest {
     }
 
     @Test
+    void previewOffersExplicitMassAmountsAndConsumesOnlyTheConfirmedBatch() {
+        var player = server.addPlayer("MassChooser");
+        player.setOp(false);
+        World world = server.getWorld("Survival_World");
+        assertTrue(world != null);
+        player.teleport(world.getSpawnLocation());
+        var crate = plugin.runtime().find("basic").orElseThrow();
+        plugin.keys().give(player, "basic", 12);
+
+        plugin.menus().openPreview(player, crate, 0, false);
+        player.simulateInventoryClick(player.getOpenInventory(),
+                org.bukkit.event.inventory.ClickType.SHIFT_LEFT,
+                plugin.menusConfig().slot("preview.open"));
+        server.getScheduler().performTicks(2);
+
+        assertTrue(player.getOpenInventory().getTopInventory().getHolder()
+                instanceof com.antondev.crates.gui.MenuHolder holder
+                && holder.kind() == com.antondev.crates.gui.MenuHolder.Kind.MASS_OPEN);
+        var inventory = player.getOpenInventory().getTopInventory();
+        assertTrue(inventory.getItem(plugin.menusConfig().slot("mass-open.one")) != null);
+        assertTrue(inventory.getItem(plugin.menusConfig().slot("mass-open.five")) != null);
+        assertTrue(inventory.getItem(plugin.menusConfig().slot("mass-open.ten")) != null);
+        assertTrue(inventory.getItem(plugin.menusConfig().slot("mass-open.custom")) != null);
+        assertTrue(plainLore(inventory.getItem(plugin.menusConfig().slot("mass-open.maximum")))
+                .contains("Exact key cost: 12"));
+        assertEquals(12, plugin.keys().count(player, "basic"));
+
+        player.simulateInventoryClick(player.getOpenInventory(),
+                org.bukkit.event.inventory.ClickType.LEFT,
+                plugin.menusConfig().slot("mass-open.five"));
+        awaitOpeningCommit();
+
+        assertEquals(7, plugin.keys().count(player, "basic"));
+        assertEquals(5, plugin.statistics().player(player.getUniqueId(), crate.id()));
+        var history = plugin.database().history(player.getUniqueId(), 10, 0);
+        assertEquals(1, history.size());
+        assertEquals(5, history.getFirst().openingCount());
+    }
+
+    @Test
     void crateExportImportsAsAValidatedDraftWithoutChangingTheSource() throws Exception {
         var exportDirectory = plugin.getDataFolder().toPath().resolve("exports");
         var exported = plugin.crates().exportDefinition("basic", exportDirectory);

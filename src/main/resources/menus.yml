@@ -99,6 +99,50 @@ preview:
     name: <gray>Next page</gray>
     lore: []
 
+mass-open:
+  title: <crate> <dark_gray>•</dark_gray> <gray>Choose amount</gray>
+  size: 27
+  guide:
+    slot: 4
+    material: BOOK
+    name: <aqua>Mass opening</aqua>
+    lore:
+    - '<gray>Maximum available now:</gray> <white><maximum></white>'
+    - '<gray>Cost per opening:</gray> <white><key_cost></white>'
+    - <dark_gray>Left-click uses physical; right-click prefers virtual.</dark_gray>
+  one:
+    slot: 10
+    material: LIME_CONCRETE
+    name: <green>Open 1</green>
+    lore: ['<gray>Exact key cost:</gray> <white><cost></white>']
+  five:
+    slot: 11
+    material: LIME_CONCRETE
+    name: <green>Open 5</green>
+    lore: ['<gray>Exact key cost:</gray> <white><cost></white>']
+  ten:
+    slot: 12
+    material: LIME_CONCRETE
+    name: <green>Open 10</green>
+    lore: ['<gray>Exact key cost:</gray> <white><cost></white>']
+  custom:
+    slot: 14
+    material: WRITABLE_BOOK
+    name: <yellow>Custom amount</yellow>
+    lore: ['<gray>Enter a whole amount from 1 to <maximum>.</gray>']
+  maximum:
+    slot: 16
+    material: CHEST
+    name: '<gold>Maximum Available: <amount></gold>'
+    lore:
+    - '<gray>Exact key cost:</gray> <white><cost></white>'
+    - <gray>Capacity is revalidated before anything is consumed.</gray>
+  back:
+    slot: 22
+    material: OAK_DOOR
+    name: <gray>Back to rewards</gray>
+    lore: [<gray>Closing this screen consumes nothing.</gray>]
+
 selective-confirm:
   title: <crate> <dark_gray>•</dark_gray> <gray>Confirm reward</gray>
   size: 27

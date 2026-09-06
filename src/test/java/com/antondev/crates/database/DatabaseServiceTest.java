@@ -117,9 +117,12 @@ class DatabaseServiceTest {
         var action = new DatabaseService.DefinitionActionData(0, "COMMAND", bytes("say published"));
         var reward = new DatabaseService.DefinitionRewardData("winner", 0, true, "Winner", "common",
                 10_000, false, bytes("settings"), List.of(), List.of(action));
+        var milestone = new DatabaseService.DefinitionMilestoneData("first_open", 1, "ONCE", 0,
+                0, bytes("reward-id=winner\npreview-visible=true\n"));
         var definition = new DatabaseService.DefinitionBundle("atomic", "PUBLISHED", 10, "Atomic",
                 "Atomic publication", bytes("icon"), bytes("published"), List.of(reward), List.of(),
-                List.of(), 0, bytes("enabled=true\nmaximum=1\ncost-type=TOKEN\ncost=1\n"), now, now);
+                List.of(), 0, List.of(milestone),
+                bytes("enabled=true\nmaximum=1\ncost-type=TOKEN\ncost=1\n"), now, now);
 
         try (DatabaseService database = database()) {
             var draft = database.createOrResumeDefinitionDraft("CRATE", "atomic", editor, "Editor", 0,
@@ -139,6 +142,12 @@ class DatabaseServiceTest {
             var rerolls = database.loadRerollPolicy("atomic").join().orElseThrow();
             assertEquals(1, rerolls.revision());
             assertEquals("enabled=true\nmaximum=1\ncost-type=TOKEN\ncost=1\n", text(rerolls.payload()));
+            var milestones = database.loadMilestoneDefinitions("atomic").join();
+            assertEquals(1, milestones.size());
+            assertEquals("first_open", milestones.getFirst().milestoneId());
+            assertEquals(1, milestones.getFirst().threshold());
+            assertEquals("ONCE", milestones.getFirst().repeatPolicy());
+            assertEquals("reward-id=winner\npreview-visible=true\n", text(milestones.getFirst().payload()));
 
             var stale = database.createOrResumeDefinitionDraft("CRATE", "atomic", editor, "Editor", 0,
                     bytes("stale")).join();

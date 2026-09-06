@@ -117,16 +117,19 @@ public final class AdminMenuService {
         var tags = new net.kyori.adventure.text.minimessage.tag.resolver.TagResolver[]{
             Text.value("order", crate.displayOrder()), Text.value("animation", crate.animation()),
                 Text.value("opening_mode", crate.openingMode()),
-                Text.value("cooldown", crate.cooldownSeconds()), Text.value("bulk", crate.bulkEnabled()),
+                Text.value("cooldown", crate.cooldownSeconds()),
+                Text.value("bulk", plugin.settings().massOpeningEnabled()
+                        ? crate.bulkEnabled() : "globally disabled"),
                 Text.value("bulk_max", crate.bulkMaximum()),
-                Text.value("reroll_state", !plugin.settings().rerollsEnabled() ? "globally disabled"
-                        : crate.rerolls().enabled() ? "enabled" : "disabled"),
+                Text.value("reroll_state", crate.rerolls().enabled() ? "enabled" : "disabled"),
                 Text.value("reroll_max", crate.rerolls().maximum()),
                 Text.value("reroll_cost", rerollCost(crate.rerolls())),
                 Text.value("permission", crate.permission().isBlank() ? "none" : crate.permission())};
-        for (String action : List.of("preview", "rename", "key", "rewards", "description", "order",
-                "create-reward", "wand", "opening", "display", "access", "rerolls", "disable",
-                "publish", "archive", "clone", "back", "delete")) {
+        var actions = new ArrayList<>(List.of("preview", "rename", "key", "rewards", "description", "order",
+                "create-reward", "wand", "opening", "display", "access", "disable",
+                "publish", "archive", "clone", "back", "delete"));
+        if (plugin.settings().rerollsEnabled()) actions.add("rerolls");
+        for (String action : actions) {
             int slot = menus.slot("editor." + action);
             inventory.setItem(slot, menus.item("editor." + action, tags));
             holder.bind(slot, action, crate.id());
@@ -257,11 +260,13 @@ public final class AdminMenuService {
                 Text.value("required", draft.requiredPermission().isBlank() ? "none" : draft.requiredPermission()),
                 Text.value("blocked", draft.blockedPermission().isBlank() ? "none" : draft.blockedPermission()));
         put(inventory, holder, "reward-builder", "limits", "limits");
-        put(inventory, holder, "reward-builder", "alternative", "alternative",
-                Text.value("alternative", draft.alternativeRewardId() == null ? "none" : draft.alternativeRewardId()),
-                Text.value("reasons", draft.alternativeReasons().isEmpty() ? "none"
-                        : draft.alternativeReasons().stream().map(Enum::name).sorted()
-                        .collect(java.util.stream.Collectors.joining(", "))));
+        if (plugin.settings().alternativeRewardsEnabled()) {
+            put(inventory, holder, "reward-builder", "alternative", "alternative",
+                    Text.value("alternative", draft.alternativeRewardId() == null ? "none" : draft.alternativeRewardId()),
+                    Text.value("reasons", draft.alternativeReasons().isEmpty() ? "none"
+                            : draft.alternativeReasons().stream().map(Enum::name).sorted()
+                            .collect(java.util.stream.Collectors.joining(", "))));
+        }
         put(inventory, holder, "reward-builder", "messages", "messages");
         put(inventory, holder, "reward-builder", "availability", "availability",
                 Text.value("starts", draft.availableFrom() == null ? "always" : draft.availableFrom()),
@@ -603,6 +608,10 @@ public final class AdminMenuService {
             return;
         }
         if (event.isShiftClick() && event.isLeftClick()) {
+            if (!plugin.settings().massOpeningEnabled()) {
+                plugin.messages().send(player, "disabled");
+                return;
+            }
             plugin.crates().setOpening(crateId, crate.cooldownSeconds(), !crate.bulkEnabled(), crate.bulkMaximum(),
                     crate.animation(), player.getName());
             saveDraftRevision(player, crateId, "OPENING", "Toggled bulk opening");

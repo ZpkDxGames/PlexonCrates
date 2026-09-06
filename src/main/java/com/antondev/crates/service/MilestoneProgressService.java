@@ -124,6 +124,23 @@ public final class MilestoneProgressService {
         return List.copyOf(result);
     }
 
+    /** Absolute successful-opening count required for the next cycle of a definition. */
+    public static long requiredOpenings(MilestoneService.Progress progress,
+                                        MilestoneService.Definition definition) {
+        Objects.requireNonNull(progress, "progress");
+        Objects.requireNonNull(definition, "definition");
+        if (definition.repeatPolicy() == MilestoneService.RepeatPolicy.ONCE
+                || progress.openings() < definition.threshold()) return definition.threshold();
+        long cycle = Math.floorDiv(progress.openings() - definition.threshold(),
+                definition.cycleLength()) + 1;
+        try {
+            return Math.addExact(definition.threshold(), Math.multiplyExact(cycle,
+                    (long) definition.cycleLength()));
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
     public static byte[] encodeEarned(Set<String> earned) {
         if (earned == null || earned.isEmpty()) return new byte[0];
         return earned.stream().sorted().collect(java.util.stream.Collectors.joining("\n"))

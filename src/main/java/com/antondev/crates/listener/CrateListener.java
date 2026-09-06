@@ -71,10 +71,13 @@ public final class CrateListener implements Listener {
                     plugin.menus().openPreview(event.getPlayer(), crate, 0, false);
                     return;
                 }
-                int amount = event.getPlayer().isSneaking() && plugin.settings().sneakBulk()
-                        ? plugin.openings().bulkAmount(event.getPlayer(), crate) : 1;
-                plugin.openings().open(event.getPlayer(), crate, Math.max(1, amount), OpenSource.BLOCK,
-                        BlockPosition.of(event.getClickedBlock()));
+                BlockPosition position = BlockPosition.of(event.getClickedBlock());
+                if (event.getPlayer().isSneaking() && plugin.settings().sneakBulk()
+                        && plugin.settings().massOpeningEnabled() && crate.bulkEnabled()) {
+                    plugin.menus().openMassOpening(event.getPlayer(), crate, OpenSource.BLOCK, position, 0);
+                    return;
+                }
+                plugin.openings().open(event.getPlayer(), crate, 1, OpenSource.BLOCK, position);
             }
             default -> { }
         }

@@ -22,9 +22,11 @@ public final class MenuConfig {
         installDraftFallbacks(yaml);
         installClaimFallbacks(yaml);
         installSelectiveFallbacks(yaml);
+        installMassOpeningFallbacks(yaml);
         installRerollFallbacks(yaml);
         validateMenu("browser", List.of("info", "close"));
         validateMenu("preview", List.of("open", "previous", "back", "next"));
+        validateMenu("mass-open", List.of("guide", "one", "five", "ten", "custom", "maximum", "back"));
         validateMenu("selective-confirm", List.of("guide", "confirm", "reward", "cancel"));
         validateMenu("opening", List.of("marker"));
         validateMenu("reroll", List.of("guide", "accept", "candidate", "reroll", "countdown"));
@@ -166,6 +168,29 @@ public final class MenuConfig {
         installItem(yaml, "selective-confirm.reward", 13, "CHEST", "<yellow>Chosen reward</yellow>", List.of());
         installItem(yaml, "selective-confirm.cancel", 15, "RED_CONCRETE", "<red>Back to choices</red>",
                 List.of("<gray>No key or state is consumed.</gray>"));
+    }
+
+    private static void installMassOpeningFallbacks(YamlConfiguration yaml) {
+        if (yaml.contains("mass-open")) return;
+        yaml.set("mass-open.title", "<crate> <dark_gray>•</dark_gray> <gray>Choose amount</gray>");
+        yaml.set("mass-open.size", 27);
+        installItem(yaml, "mass-open.guide", 4, "BOOK", "<aqua>Mass opening</aqua>", List.of(
+                "<gray>Maximum available now:</gray> <white><maximum></white>",
+                "<gray>Cost per opening:</gray> <white><key_cost></white>",
+                "<dark_gray>Left-click uses physical; right-click prefers virtual.</dark_gray>"));
+        installItem(yaml, "mass-open.one", 10, "LIME_CONCRETE", "<green>Open 1</green>", List.of(
+                "<gray>Exact key cost:</gray> <white><cost></white>"));
+        installItem(yaml, "mass-open.five", 11, "LIME_CONCRETE", "<green>Open 5</green>", List.of(
+                "<gray>Exact key cost:</gray> <white><cost></white>"));
+        installItem(yaml, "mass-open.ten", 12, "LIME_CONCRETE", "<green>Open 10</green>", List.of(
+                "<gray>Exact key cost:</gray> <white><cost></white>"));
+        installItem(yaml, "mass-open.custom", 14, "WRITABLE_BOOK", "<yellow>Custom amount</yellow>", List.of(
+                "<gray>Enter a whole amount from 1 to <maximum>.</gray>"));
+        installItem(yaml, "mass-open.maximum", 16, "CHEST", "<gold>Maximum Available: <amount></gold>", List.of(
+                "<gray>Exact key cost:</gray> <white><cost></white>",
+                "<gray>Capacity is revalidated before anything is consumed.</gray>"));
+        installItem(yaml, "mass-open.back", 22, "OAK_DOOR", "<gray>Back to rewards</gray>", List.of(
+                "<gray>Closing this screen consumes nothing.</gray>"));
     }
 
     private static void installRerollFallbacks(YamlConfiguration yaml) {

@@ -75,7 +75,10 @@ public record PluginSettings(
 
     public static PluginSettings load(File file) {
         YamlConfiguration c = YamlConfiguration.loadConfiguration(file);
-        if (c.getInt("config-version") != 2) throw new IllegalArgumentException("Unsupported config.yml config-version; expected 2");
+        int configVersion = c.getInt("config-version");
+        if (configVersion != 2 && configVersion != 3) {
+            throw new IllegalArgumentException("Unsupported config.yml config-version; expected 2 or 3");
+        }
         String databaseFile = required(c, "database.file");
         if (!databaseFile.matches("[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\\.db") || databaseFile.contains("..")) {
             throw new IllegalArgumentException("database.file must be a safe relative data/*.db path");

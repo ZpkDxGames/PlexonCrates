@@ -48,10 +48,10 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
             player.sendMessage(Text.parse("<white>/crates preview <crate></white> <dark_gray>—</dark_gray> <gray>Preview rewards.</gray>"));
             player.sendMessage(Text.parse("<white>/crates open <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Open using physical PlexonKeys keys.</gray>"));
             player.sendMessage(Text.parse("<white>/crates history [page]</white> <dark_gray>—</dark_gray> <gray>Review recent wins.</gray>"));
-            player.sendMessage(Text.parse("<white>/crates claim [page|id]</white> <dark_gray>—</dark_gray> <gray>Deliver exact pending claims.</gray>"));
+            if (plugin.settings().claimInboxEnabled()) player.sendMessage(Text.parse("<white>/crates claim [page|id]</white> <dark_gray>—</dark_gray> <gray>Deliver exact pending claims.</gray>"));
             player.sendMessage(Text.parse("<white>/crates keys</white> <dark_gray>—</dark_gray> <gray>View physical and optional virtual-key balances.</gray>"));
-            player.sendMessage(Text.parse("<white>/crates milestones <crate></white> <dark_gray>—</dark_gray> <gray>View durable opening progress.</gray>"));
-            player.sendMessage(Text.parse("<white>/crates rerolls</white> <dark_gray>—</dark_gray> <gray>View reroll-token balance.</gray>"));
+            if (plugin.settings().milestonesEnabled()) player.sendMessage(Text.parse("<white>/crates milestones <crate></white> <dark_gray>—</dark_gray> <gray>View durable opening progress.</gray>"));
+            if (plugin.settings().rerollsEnabled()) player.sendMessage(Text.parse("<white>/crates rerolls</white> <dark_gray>—</dark_gray> <gray>View reroll-token balance.</gray>"));
             return true;
         }
         if (action.equals("history")) {
@@ -62,6 +62,7 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
         }
         if (action.equals("claim")) {
             if (!allowed(player, "plexoncrates.claim")) return denied(player);
+            if (!plugin.settings().claimInboxEnabled()) return disabled(player);
             if (args.length < 2) {
                 claims(player, 1);
                 return true;
@@ -181,7 +182,8 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
             player.sendMessage(Text.parse("<gray>Use <white>/crates milestones <crate></white> to view one crate's progress.</gray>"));
             return;
         }
-        if (plugin.runtime().find(crateId).isEmpty()) {
+        Crate crate = plugin.runtime().find(crateId).orElse(null);
+        if (crate == null) {
             invalidCrate(player);
             return;
         }
@@ -193,13 +195,31 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
                     plugin.messages().send(player, "database-error");
                     return;
                 }
-                int earned = milestoneCount(state.earnedPayload());
+                var progress = plugin.milestoneProgress().progress(player.getUniqueId(), crate.id());
+                int earned = progress.earnedKeys().size();
                 player.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Milestones</bold></gradient> <dark_gray>•</dark_gray> <gray>"
                         + crateId + "</gray>"));
                 player.sendMessage(Text.parse("<gray>Openings:</gray> <white>" + state.openings()
                         + "</white> <dark_gray>•</dark_gray> <gray>Earned:</gray> <white>" + earned
                         + "</white>"));
-                player.sendMessage(Text.parse("<gray>Progress is updated only after a successful opening finalizes.</gray>"));
+                var next = plugin.milestoneProgress().next(player.getUniqueId(), crate,
+                        milestone -> milestone.previewVisible() && milestone.reward().eligible(player), 2);
+                if (next.isEmpty()) {
+                    player.sendMessage(Text.parse(crate.orderedMilestones().stream()
+                            .noneMatch(com.antondev.crates.model.CrateMilestone::previewVisible)
+                            ? "<gray>This crate has no player-visible milestones.</gray>"
+                            : "<green>Every visible milestone is currently earned.</green>"));
+                } else {
+                    for (var milestone : next) {
+                        long required = com.antondev.crates.service.MilestoneProgressService
+                                .requiredOpenings(progress, milestone.definition());
+                        player.sendMessage(Text.parse("<dark_gray>•</dark_gray> ")
+                                .append(milestone.displayName())
+                                .append(Text.parse(" <gray>—</gray> <white>" + progress.openings()
+                                        + " / " + required + "</white>")));
+                    }
+                }
+                player.sendMessage(Text.parse("<gray>Only successfully finalized openings advance this progress.</gray>"));
             });
         });
     }
@@ -218,13 +238,6 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
                         + "</white> <dark_gray>•</dark_gray> <gray>Reroll offers always retain an Accept action.</gray>"));
             });
         });
-    }
-
-    private static int milestoneCount(byte[] payload) {
-        if (payload == null || payload.length == 0) return 0;
-        int count = 0;
-        for (byte value : payload) if (value == '\n') count++;
-        return count + 1;
     }
 
     private void keys(Player player) {
@@ -311,7 +324,10 @@ public final class CratesCommand implements CommandExecutor, TabCompleter {
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                                  @NotNull String alias, @NotNull String[] args) {
         if (args.length == 1) {
-            var values = new ArrayList<>(List.of("preview", "open", "history", "claim", "keys", "milestones", "rerolls", "help"));
+            var values = new ArrayList<>(List.of("preview", "open", "history", "keys", "help"));
+            if (plugin.settings().claimInboxEnabled()) values.add("claim");
+            if (plugin.settings().milestonesEnabled()) values.add("milestones");
+            if (plugin.settings().rerollsEnabled()) values.add("rerolls");
             values.addAll(plugin.runtime().ordered().stream().map(Crate::id).toList());
             return filter(values, args[0]);
         }

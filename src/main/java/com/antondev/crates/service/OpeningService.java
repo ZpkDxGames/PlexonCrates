@@ -461,7 +461,7 @@ public final class OpeningService {
                 && costSourceAvailable(player, opening.crate(), decision.policy);
         long seconds = Math.max(0, java.time.Duration.between(now, decision.offer.expiresAt()).toSeconds() + 1);
         return Optional.of(new RerollView(decision.transactionId, opening.crate(),
-                opening.selected().getFirst(), decision.offer.remaining(decision.policy),
+                opening.selected().getLast(), decision.offer.remaining(decision.policy),
                 rerollCostDescription(decision.policy), seconds, canReroll, decision.processing, state));
     }
 
@@ -479,11 +479,13 @@ public final class OpeningService {
                 ? new LinkedHashSet<>(decision.offer.shownCandidates()) : Set.of(decision.offer.candidate());
         boolean bypassLimits = opening.plan().source() == OpenSource.ADMIN_FORCE
                 || player.hasPermission("plexoncrates.bypass.limit");
-        RewardStateService.Plan replacement = plugin.rewardStates().planRerollResolved(
-                player.getUniqueId(), opening.crate(), opening.plan().source(), eligibility,
-                plugin.settings().alternativeRewardsEnabled(), bypassLimits, now, excluded);
-        if (replacement.rewards().size() != 1) return false;
-        String replacementId = replacement.rewards().getFirst().id();
+        int candidateIndex = opening.rewardPlan().rewards().size() - 1;
+        RewardStateService.Plan replacement = plugin.rewardStates().planRerollAtResolved(
+                player.getUniqueId(), opening.crate(), opening.plan().source(), opening.rewardPlan(),
+                candidateIndex, eligibility, plugin.settings().alternativeRewardsEnabled(),
+                bypassLimits, now, excluded);
+        if (replacement.rewards().size() != opening.rewardPlan().rewards().size()) return false;
+        String replacementId = replacement.rewards().get(candidateIndex).id();
         List<String> eligibleIds = eligibleRerollIds(player, opening, now);
         RerollService.Offer<String> nextOffer = RerollService.replace(decision.policy, decision.offer,
                 eligibleIds, replacementId, Instant.ofEpochMilli(now)).orElse(null);
@@ -561,9 +563,9 @@ public final class OpeningService {
                 || !player.hasPermission("plexoncrates.rerolls")
                 || current.openingMode() != OpeningMode.RANDOM
                 || opening.plan().source() == OpenSource.ADMIN_FORCE
-                || opening.plan().openingCount() != 1) return false;
+                || opening.plan().openingCount() > 1 && !policy.massAllowed()) return false;
         List<String> eligible = eligibleRerollIds(player, opening, opening.stateAt());
-        String candidate = opening.selected().getFirst().id();
+        String candidate = opening.selected().getLast().id();
         if (!eligible.contains(candidate) || eligible.stream().distinct().count() < 2) return false;
         RerollService.Offer<String> offer = RerollService.start(policy, candidate, eligible,
                 Instant.ofEpochMilli(opening.stateAt()));
@@ -680,7 +682,7 @@ public final class OpeningService {
         String detail = transactionDetail(opening) + ";attempt=" + attempt
                 + ",status=COST_CONSUMED,type=" + decision.policy.costType()
                 + ",amount=" + decision.policy.cost()
-                + ",candidate=" + replacement.rewards().getFirst().id();
+                + ",candidate=" + replacement.rewards().getLast().id();
         plugin.database().updateJournal(decision.transactionId, "REROLL_COST_CONSUMED", detail)
                 .whenComplete((ignored, error) -> {
                     if (!plugin.isEnabled()) return;
@@ -697,7 +699,7 @@ public final class OpeningService {
                             }
                             return;
                         }
-                        String candidate = replacement.rewards().getFirst().id();
+                        String candidate = replacement.rewards().getLast().id();
                         PendingOpening updated = opening.withRewardPlan(replacement, selectedAt,
                                 "attempt=" + attempt + ",status=REROLLED,type="
                                         + decision.policy.costType() + ",amount=" + decision.policy.cost()
@@ -707,7 +709,7 @@ public final class OpeningService {
                         decision.offer = nextOffer;
                         decision.processing = false;
                         Bukkit.getPluginManager().callEvent(new CrateRewardSelectEvent(
-                                player, updated.plan(), updated.plan().deliveries().getFirst()));
+                                player, updated.plan(), updated.plan().deliveries().getLast()));
                         plugin.database().updateJournal(decision.transactionId, "AWAITING_DECISION",
                                 transactionDetail(updated));
                         scheduleRerollTimeout(player.getUniqueId(), decision);
@@ -787,9 +789,10 @@ public final class OpeningService {
     private List<String> eligibleRerollIds(Player player, PendingOpening opening, long now) {
         boolean bypassLimits = opening.plan().source() == OpenSource.ADMIN_FORCE
                 || player.hasPermission("plexoncrates.bypass.limit");
-        return plugin.rewardStates().rerollOutcomes(player.getUniqueId(), opening.crate(),
-                opening.plan().source(), baseIneligibility(player, now),
-                plugin.settings().alternativeRewardsEnabled(), bypassLimits, now).stream()
+        return plugin.rewardStates().rerollOutcomesAt(player.getUniqueId(), opening.crate(),
+                opening.plan().source(), opening.rewardPlan(), opening.rewardPlan().rewards().size() - 1,
+                baseIneligibility(player, now), plugin.settings().alternativeRewardsEnabled(),
+                bypassLimits, now).stream()
                 .map(outcome -> outcome.actual().id()).distinct().toList();
     }
 

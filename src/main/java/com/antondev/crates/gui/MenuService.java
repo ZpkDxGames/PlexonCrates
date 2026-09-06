@@ -761,7 +761,9 @@ public final class MenuService implements Listener {
 
     @EventHandler
     public void close(InventoryCloseEvent event) {
-        if (event.getInventory().getHolder() instanceof MenuHolder holder) {
+        Inventory closed = event.getInventory();
+        if (closed == null && event.getView() != null) closed = event.getView().getTopInventory();
+        if (closed != null && closed.getHolder() instanceof MenuHolder holder) {
             plugin.guiSessions().close(event.getPlayer().getUniqueId(), holder.sessionId());
             if (holder.kind() == MenuHolder.Kind.REROLL && event.getPlayer() instanceof Player player) {
                 plugin.openings().acceptReroll(player, "CLOSE");

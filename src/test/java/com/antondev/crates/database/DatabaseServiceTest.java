@@ -119,7 +119,7 @@ class DatabaseServiceTest {
                 10_000, false, bytes("settings"), List.of(), List.of(action));
         var definition = new DatabaseService.DefinitionBundle("atomic", "PUBLISHED", 10, "Atomic",
                 "Atomic publication", bytes("icon"), bytes("published"), List.of(reward), List.of(),
-                List.of(), 0, now, now);
+                List.of(), 0, bytes("enabled=true\nmaximum=1\ncost-type=TOKEN\ncost=1\n"), now, now);
 
         try (DatabaseService database = database()) {
             var draft = database.createOrResumeDefinitionDraft("CRATE", "atomic", editor, "Editor", 0,
@@ -136,6 +136,9 @@ class DatabaseServiceTest {
             assertArrayEquals(bytes("published"), snapshot.definitions().getFirst().payload());
             assertEquals(new DatabaseService.DefinitionCounts(1, 0, 1, 0),
                     database.definitionCounts("atomic").join());
+            var rerolls = database.loadRerollPolicy("atomic").join().orElseThrow();
+            assertEquals(1, rerolls.revision());
+            assertEquals("enabled=true\nmaximum=1\ncost-type=TOKEN\ncost=1\n", text(rerolls.payload()));
 
             var stale = database.createOrResumeDefinitionDraft("CRATE", "atomic", editor, "Editor", 0,
                     bytes("stale")).join();

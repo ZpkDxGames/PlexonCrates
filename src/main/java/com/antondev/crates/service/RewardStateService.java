@@ -239,6 +239,64 @@ public final class RewardStateService {
         return new Plan(List.of(outcome.actual()), false, List.of(outcome));
     }
 
+    /**
+     * Computes the pool at one candidate position after replaying the frozen
+     * prefix. This lets an explicitly enabled mass opening reroll its final
+     * candidate without discarding or duplicating any other delivery.
+     */
+    public List<Outcome> rerollOutcomesAt(
+            UUID playerId, Crate crate, OpenSource source, Plan frozen, int index,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now) {
+        if (frozen == null || index < 0 || index >= frozen.outcomes().size()) return List.of();
+        Map<PlayerRewardKey, PlayerCounter> workingPlayers = new LinkedHashMap<>(players);
+        Map<GlobalRewardKey, GlobalCounter> workingGlobal = new LinkedHashMap<>(global);
+        int misses = pity.getOrDefault(new PlayerCrateKey(playerId, crate.id()), 0);
+        boolean countPity = countsPity(crate.pity(), source);
+        for (int currentIndex = 0; currentIndex < index; currentIndex++) {
+            Outcome expected = frozen.outcomes().get(currentIndex);
+            CrateReward currentSource = crate.rewards().get(expected.source().id());
+            if (currentSource == null) return List.of();
+            Optional<Outcome> resolved = resolveAgainst(playerId, crate, currentSource, baseIneligibility,
+                    alternativesEnabled, bypassLimits, now, workingPlayers, workingGlobal);
+            if (resolved.isEmpty() || !sameResolution(expected, resolved.get())) return List.of();
+            if (countPity && due(crate.pity(), misses) && !pityReward(crate.pity(), currentSource)) {
+                return List.of();
+            }
+            increment(playerId, crate.id(), resolved.get().actual(), now, workingPlayers, workingGlobal);
+            if (countPity) misses = pityReward(crate.pity(), currentSource) ? 0 : increment(misses);
+        }
+        List<Outcome> available = availableResolved(playerId, crate, baseIneligibility,
+                alternativesEnabled, bypassLimits, now, workingPlayers, workingGlobal);
+        if (countPity && due(crate.pity(), misses)) {
+            available = available.stream()
+                    .filter(outcome -> pityReward(crate.pity(), outcome.source())).toList();
+        }
+        return List.copyOf(available);
+    }
+
+    /** Selects and installs one weighted candidate into a frozen batch position. */
+    public Plan planRerollAtResolved(
+            UUID playerId, Crate crate, OpenSource source, Plan frozen, int index,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now,
+            Set<String> excludedActualRewardIds) {
+        Set<String> excluded = excludedActualRewardIds == null ? Set.of() : Set.copyOf(excludedActualRewardIds);
+        List<Outcome> available = rerollOutcomesAt(playerId, crate, source, frozen, index,
+                baseIneligibility, alternativesEnabled, bypassLimits, now).stream()
+                .filter(outcome -> !excluded.contains(outcome.actual().id())).toList();
+        if (available.isEmpty()) return new Plan(List.of(), false);
+        Optional<CrateReward> selected = RewardSelector.selectAt(
+                available.stream().map(Outcome::source).toList(), normalizedRoll());
+        if (selected.isEmpty()) return new Plan(List.of(), false);
+        Outcome replacement = available.stream()
+                .filter(candidate -> candidate.source().id().equals(selected.get().id()))
+                .findFirst().orElseThrow();
+        var outcomes = new ArrayList<>(frozen.outcomes());
+        outcomes.set(index, replacement);
+        return new Plan(outcomes.stream().map(Outcome::actual).toList(), frozen.pityTriggered(), outcomes);
+    }
+
     /** Compatibility revalidation for a direct frozen selection. */
     public boolean canApply(UUID playerId, Crate crate, List<CrateReward> selected, OpenSource source,
                             Predicate<CrateReward> baseEligibility, boolean bypassLimits, long now) {

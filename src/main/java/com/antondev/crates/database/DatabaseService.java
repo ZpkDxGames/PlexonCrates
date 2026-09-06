@@ -307,6 +307,16 @@ public final class DatabaseService implements AutoCloseable {
         @Override public byte[] payload() { return payload.clone(); }
     }
 
+    public record StoredRerollPolicy(String crateId, byte[] payload, long revision) {
+        public StoredRerollPolicy {
+            crateId = requiredText(crateId, "crateId");
+            payload = copyBytes(payload, "reroll policy payload");
+            if (revision < 0) throw new IllegalArgumentException("Reroll policy revision cannot be negative");
+        }
+
+        @Override public byte[] payload() { return payload.clone(); }
+    }
+
     public record PublishedSnapshot(long runtimeRevision, List<StoredDefinition> definitions) {
         public PublishedSnapshot {
             if (runtimeRevision < 0) throw new IllegalArgumentException("Runtime revision cannot be negative");
@@ -2460,6 +2470,21 @@ public final class DatabaseService implements AutoCloseable {
 
     public CompletableFuture<PublishedSnapshot> loadPublishedDefinitions() {
         return submitQuery("load published definitions", DatabaseService::publishedSnapshot);
+    }
+
+    public CompletableFuture<Optional<StoredRerollPolicy>> loadRerollPolicy(String crateId) {
+        String id = requiredText(crateId, "crateId").toLowerCase(java.util.Locale.ROOT);
+        return submitQuery("load reroll policy", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT crate_id, policy_payload, revision FROM reroll_policy WHERE crate_id = ?")) {
+                statement.setString(1, id);
+                try (ResultSet rows = statement.executeQuery()) {
+                    if (!rows.next()) return Optional.empty();
+                    return Optional.of(new StoredRerollPolicy(
+                            rows.getString(1), rows.getBytes(2), rows.getLong(3)));
+                }
+            }
+        });
     }
 
     /**

@@ -21,20 +21,32 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
-      - name: Provision PlexonCore 1.0.0 API
+      - name: Provision Plexon API dependencies
         shell: bash
         run: |
           set -euo pipefail
           core_jar="${RUNNER_TEMP}/PlexonCore-1.0.0.jar"
+          keys_jar="${RUNNER_TEMP}/PlexonKeys-1.2.0.jar"
           curl --fail --location --silent --show-error \
             --output "${core_jar}" \
             "https://github.com/ZpkDxGames/PlexonCore/releases/download/v1.0.0/PlexonCore-1.0.0.jar"
           echo "4abce6de93293e21b31cb874734430d5bdc77de17a4c3b98fd6a9006e1f13018  ${core_jar}" | sha256sum --check
+          curl --fail --location --silent --show-error \
+            --output "${keys_jar}" \
+            "https://github.com/ZpkDxGames/PlexonKeys/releases/download/v1.2.0/PlexonKeys-1.2.0.jar"
+          echo "c961c08749edc67a679af19adbb1e625032477a7a3f91553ef27ae737f544d05  ${keys_jar}" | sha256sum --check
           mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
             -Dfile="${core_jar}" \
             -DgroupId=com.zpkdxgames \
             -DartifactId=PlexonCore \
             -Dversion=1.0.0 \
+            -Dpackaging=jar \
+            -DgeneratePom=true
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile="${keys_jar}" \
+            -DgroupId=com.antondev \
+            -DartifactId=PlexonKeys \
+            -Dversion=1.2.0 \
             -Dpackaging=jar \
             -DgeneratePom=true
       - name: Verify
@@ -91,6 +103,10 @@ jobs:
             grep -qx 'org/sqlite/JDBC.class' target/jar-contents.txt
             if grep -q '^com/zpkdxgames/plexoncore/' target/jar-contents.txt; then
               echo "PlexonCore runtime classes must not be shaded into PlexonCrates" >&2
+              exit 1
+            fi
+            if grep -q '^com/antondev/keys/' target/jar-contents.txt; then
+              echo "PlexonKeys runtime classes must not be shaded into PlexonCrates" >&2
               exit 1
             fi
             jar_name=$(basename "${jar_path}")

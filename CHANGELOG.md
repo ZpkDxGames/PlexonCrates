@@ -6,7 +6,7 @@ All notable PlexonCrates changes are documented here.
 
 ### Foundation
 
-- Began the 3.0 runtime from the released `v2.0.0` baseline without removing its opening, key, migration, or exact-item safety tests.
+- Continued the existing unreleased `3.0-Update` implementation rather than restarting from the 2.0 release line.
 - Added the normalized schema-3 definition graph for crates, rewards, exact item BLOBs, typed actions, keys, profiles, milestones, ledgers, claims, portable issuances, versioned drafts, and migrations.
 - Added versioned durable drafts with ordered compare-and-update saves, writable leases, audited takeover, bounded revision history, stale-action rejection, and forward undo revisions.
 - Added the integer `ChanceAllocator` with exact basis-point totals, stable largest-remainder migration/normalization, predictable new-reward allocation, locked edits, balancing tools, and integer ticket boundaries.
@@ -50,9 +50,52 @@ All notable PlexonCrates changes are documented here.
 - Added reservation release on normal failure/shutdown/restart, single-use consume transitions, duplicate/replay rejection, deterministic tamper tests, and refusal to silently rotate a lost signing secret while issuances remain outstanding.
 - Extended `/pcrates diagnose` with signer health and unused/reserved/consumed/review issuance counts.
 
+### PlexonCore 1.x integration
+
+- Added an isolated `com.antondev.crates.integration.core` bridge with safe reflective loading so Core remains optional at runtime.
+- Added `CORE` and `STANDALONE` operation, supported Core API range `>=1.0 <2.0`, module ID `crates`, and diagnostic capabilities without moving crate persistence or gameplay ownership into Core.
+- Added Core lifecycle publication for `STARTING`, `READY`, `DEGRADED`, and startup `FAILED`, with clean module unregister on disable.
+- Added `PLEXON_CRATES` integration publication while leaving PlexonKeys provider-owned Core state untouched.
+- Extended `/pcrates diagnose` with Core plugin/API versions, supported range, mode, module state/detail, public API registration, runtime revision and crate-event availability.
+- Kept `/pcrates reload` on the existing atomic crate reload path; Core metadata refresh does not recreate SQLite, opening coordinators, listeners, displays, API services, or writer tasks.
+- Added real-Core-registry MockBukkit coverage for compatible `STARTING -> READY`, module identity/capabilities, `PLEXON_CRATES READY`, and incompatible-Core standalone fallback.
+
+### Public API and PlexonQuests 3.1 contract
+
+- Preserved `com.antondev.crates.api.PlexonCratesApi` and its Bukkit ServicesManager registration in both Core and standalone modes.
+- Preserved the existing public Bukkit event package rather than introducing Core-specific replacements.
+- Locked the exact `com.antondev.crates.api.event.CrateOpenEvent` reflection contract expected by PlexonQuests 3.1: `player()`, `plan()`, and `OpeningPlan` metadata `transactionId`, `crateId`, `keyId`, `openingCount`, `rewardIds`, and `source`.
+- Kept `CrateOpenEvent` as one post-success logical transaction event; `CratePreOpenEvent` remains the cancellable pre-open extension point.
+
+### PlexonKeys 1.2 integration
+
+- Audited the released PlexonKeys 1.2 source and adopted its stable Bukkit `PlexonKeysAPI` service as the preferred live physical-key template source.
+- Isolated direct PlexonKeys API linkage behind `PlexonKeysServiceAdapter`, loaded only when the provider is present, while retaining the previous settings-surface reflection adapter as compatibility fallback.
+- Preserved live-first resolution, last-known-good templates, exact configured fallback and fail-closed unresolved behavior.
+- Added service-first discovery tests with exact defensive ItemStack metadata and amount normalization.
+- Added PlexonKeys 1.2 as a `provided` compile dependency only; distribution checks reject any shaded `com/antondev/keys/**` runtime classes.
+
+### PhoenixCratesLite replacement framework
+
+- Added a clean-room, read-only `PhoenixMigrationService` boundary under `imports/phoenix/` with explicit `SCAN`, `PLAN`, `IMPORT_TO_DRAFTS`, `VALIDATE`, and `CUTOVER_REPORT` phases.
+- Added deterministic per-file SHA-256 hashing and a source fingerprint, path confinement, symbolic-link rejection and a bounded source-file size limit.
+- Added migration status vocabulary `EXACT`, `CONVERTED`, `MANUAL_REVIEW`, `UNSUPPORTED`, `SKIPPED`, and `CONFLICT`.
+- Kept schema-dependent import deliberately blocked until the actual current PlexonCraft Phoenix data folder or sanitized exact fixture is supplied and a reviewed adapter is implemented; undocumented Phoenix fields are not guessed.
+- Added Markdown migration reports outside the source boundary and tests proving scanner source immutability, deterministic hashes, report confinement and fail-closed import.
+- Documented draft-only future import, exact item/chance/key mapping requirements, staging parity checks, dual-engine prohibition and rollback/cutover rules.
+
+### Release engineering
+
+- Added PlexonCore 1.0.0 and PlexonKeys 1.2.0 as `provided` Maven dependencies while keeping SQLite JDBC bundled.
+- Updated CI to provision checksum-verified Core/Keys release JARs, reject skipped tests, verify one output JAR, require SQLite classes and reject shaded Core/Keys runtime classes.
+- Replaced push-to-`main` release publication with tag-only `v3.0.0-rc.*` prereleases and final `v3.0.0` publication.
+- Added `SHA256SUMS.txt` generation/verification and versioned RC/final release-note files.
+- Added `docs/PLEXONCORE.md`, `docs/API.md`, `docs/PHOENIX_MIGRATION.md`, `docs/CUTOVER.md`, and expanded `TESTING.md`/`MIGRATION.md` for the 3.0 Core/Phoenix acceptance gates.
+
 ### Documentation
 
 - Adopted the expanded 3.0 implementation specification, including the one-edition/unlimited-definition contract and the original PhoenixCrates-benchmarked GUI usability boundary.
+- Clarified that PhoenixCratesLite is migration data only, not implementation source material or a runtime dependency.
 
 ## 2.0.0 — 2026-09-02
 

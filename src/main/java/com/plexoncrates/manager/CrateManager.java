@@ -45,6 +45,8 @@ public final class CrateManager {
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private final Map<String, Crate> crates = new LinkedHashMap<>();
     private final Map<String, String> locationIndex = new LinkedHashMap<>();
+    private final Object persistenceMonitor = new Object();
+    private CompletableFuture<Void> saveTail = CompletableFuture.completedFuture(null);
 
     public CrateManager(PlexonCrates plugin, ExecutorService executor) {
         this.plugin = plugin;
@@ -67,6 +69,7 @@ public final class CrateManager {
                 }
             }
         }
+
         lock.writeLock().lock();
         try {
             crates.clear();
@@ -105,7 +108,9 @@ public final class CrateManager {
         }
         lock.readLock().lock();
         try {
-            if (id == null || !crates.containsKey(normalize(id))) id = locationIndex.get(CrateLocation.of(block).key());
+            if (id == null || !crates.containsKey(normalize(id))) {
+                id = locationIndex.get(CrateLocation.of(block).key());
+            }
             Crate crate = id == null ? null : crates.get(normalize(id));
             return crate == null ? Optional.empty() : Optional.of(crate.copy());
         } finally {
@@ -133,7 +138,9 @@ public final class CrateManager {
 
     public Crate createGenerated() {
         String id;
-        do id = "crate_" + Long.toString(System.currentTimeMillis(), 36); while (find(id).isPresent());
+        do {
+            id = "crate_" + Long.toString(System.currentTimeMillis(), 36);
+        } while (find(id).isPresent());
         return create(id);
     }
 
@@ -143,8 +150,9 @@ public final class CrateManager {
         try {
             Crate crate = requireMutable(crateId);
             String id = nextRewardId(crate);
-            Reward reward = new Reward(id, true, Math.max(1, weight), source.clone(),
-                    List.of(new RewardAction(RewardActionType.ITEM, "", null)));
+            ItemStack captured = source.clone();
+            List<RewardAction> actions = List.of(new RewardAction(RewardActionType.ITEM, "", null));
+            Reward reward = new Reward(id, true, Math.max(1, weight), captured, actions);
             crate.putReward(reward);
             saveAsync();
             return reward.copy();
@@ -245,10 +253,14 @@ public final class CrateManager {
         try {
             Crate crate = requireMutable(id);
             BlockState state = block.getState();
-            if (!(state instanceof TileState tile)) throw new IllegalArgumentException("Physical crate blocks must be TileState blocks");
+            if (!(state instanceof TileState tile)) {
+                throw new IllegalArgumentException("Physical crate blocks must be TileState blocks");
+            }
             CrateLocation location = CrateLocation.of(block);
             String occupied = locationIndex.get(location.key());
-            if (occupied != null && !occupied.equals(id)) throw new IllegalStateException("This block is already linked to " + occupied);
+            if (occupied != null && !occupied.equals(id)) {
+                throw new IllegalStateException("This block is already linked to " + occupied);
+            }
             crate.addLocation(location);
             locationIndex.put(location.key(), id);
             tile.getPersistentDataContainer().set(crateBlockKey, PersistentDataType.STRING, id);
@@ -266,7 +278,9 @@ public final class CrateManager {
             String id = locationIndex.remove(location.key());
             if (id == null) {
                 BlockState state = block.getState();
-                if (state instanceof TileState tile) id = tile.getPersistentDataContainer().get(crateBlockKey, PersistentDataType.STRING);
+                if (state instanceof TileState tile) {
+                    id = tile.getPersistentDataContainer().get(crateBlockKey, PersistentDataType.STRING);
+                }
             }
             if (id == null) return Optional.empty();
             Crate crate = crates.get(normalize(id));
@@ -285,26 +299,43 @@ public final class CrateManager {
 
     public boolean isRegisteredLocation(Block block) {
         lock.readLock().lock();
-        try { return locationIndex.containsKey(CrateLocation.of(block).key()); }
-        finally { lock.readLock().unlock(); }
+        try {
+            return locationIndex.containsKey(CrateLocation.of(block).key());
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
-    public NamespacedKey crateBlockKey() { return crateBlockKey; }
+    public NamespacedKey crateBlockKey() {
+        return crateBlockKey;
+    }
 
     public CompletableFuture<Void> saveAsync() {
         String serialized;
         lock.readLock().lock();
-        try { serialized = serialize(); }
-        finally { lock.readLock().unlock(); }
-        return CompletableFuture.runAsync(() -> {
-            try {
-                Files.createDirectories(file.toPath().getParent());
-                Files.writeString(file.toPath(), serialized, StandardCharsets.UTF_8);
-            } catch (Exception error) {
-                plugin.getLogger().log(Level.SEVERE, "Could not save crates.yml", error);
-                throw new RuntimeException(error);
-            }
-        }, executor);
+        try {
+            serialized = serialize();
+        } finally {
+            lock.readLock().unlock();
+        }
+        synchronized (persistenceMonitor) {
+            saveTail = saveTail.handle((ignored, previousError) -> null).thenRunAsync(() -> {
+                try {
+                    Files.createDirectories(file.toPath().getParent());
+                    Files.writeString(file.toPath(), serialized, StandardCharsets.UTF_8);
+                } catch (Exception error) {
+                    plugin.getLogger().log(Level.SEVERE, "Could not save crates.yml", error);
+                    throw new RuntimeException(error);
+                }
+            }, executor);
+            return saveTail;
+        }
+    }
+
+    public CompletableFuture<Void> pendingSaves() {
+        synchronized (persistenceMonitor) {
+            return saveTail;
+        }
     }
 
     private Crate parseCrate(String rawId, ConfigurationSection section) {
@@ -401,7 +432,9 @@ public final class CrateManager {
                 yaml.set(rewardPath + ".actions", actions);
             }
         }
-        return "# PlexonCrates 4.0 - managed crate definitions.\n# Use /crates admin for safe in-game editing. Exact items are persisted as base64 snapshots.\n\n" + yaml.saveToString();
+        return "# PlexonCrates 4.0 - managed crate definitions.\n"
+                + "# Use /crates admin for safe in-game editing. Exact items are persisted as base64 snapshots.\n\n"
+                + yaml.saveToString();
     }
 
     private Crate requireMutable(String crateId) {
@@ -412,10 +445,14 @@ public final class CrateManager {
 
     private void rebuildLocationIndex() {
         locationIndex.clear();
-        for (Crate crate : crates.values()) for (CrateLocation location : crate.locations()) {
-            String previous = locationIndex.putIfAbsent(location.key(), crate.id());
-            if (previous != null && !previous.equals(crate.id())) plugin.getLogger().warning(
-                    "Duplicate linked crate location " + location.key() + " claimed by " + previous + " and " + crate.id());
+        for (Crate crate : crates.values()) {
+            for (CrateLocation location : crate.locations()) {
+                String previous = locationIndex.putIfAbsent(location.key(), crate.id());
+                if (previous != null && !previous.equals(crate.id())) {
+                    plugin.getLogger().warning("Duplicate linked crate location " + location.key()
+                            + " claimed by " + previous + " and " + crate.id() + "; keeping " + previous);
+                }
+            }
         }
     }
 
@@ -425,7 +462,9 @@ public final class CrateManager {
         return "reward_" + index;
     }
 
-    private static String normalize(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }
+    private static String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
 
     private static String normalizeId(String value) {
         String normalized = normalize(value).replaceAll("[^a-z0-9_-]+", "_").replaceAll("_+", "_");

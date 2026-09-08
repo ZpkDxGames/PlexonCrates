@@ -34,6 +34,7 @@
     <!-- Current MockBukkit 26.2 is compiled against build 111; the resulting
          plugin remains API-compatible with newer Paper 26.2 builds. -->
     <paper.version>26.2.build.111-stable</paper.version>
+    <plexoncore.version>1.0.0</plexoncore.version>
   </properties>
 
   <repositories>
@@ -48,6 +49,12 @@
       <groupId>io.papermc.paper</groupId>
       <artifactId>paper-api</artifactId>
       <version>${paper.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.zpkdxgames</groupId>
+      <artifactId>PlexonCore</artifactId>
+      <version>${plexoncore.version}</version>
       <scope>provided</scope>
     </dependency>
     <dependency>

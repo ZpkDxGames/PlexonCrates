@@ -12,6 +12,8 @@ import com.antondev.crates.gui.GuiSessionService;
 import com.antondev.crates.gui.MenuService;
 import com.antondev.crates.gui.EditSessionService;
 import com.antondev.crates.gui.AdminMenuService;
+import com.antondev.crates.integration.core.CoreBridge;
+import com.antondev.crates.integration.core.CoreBridgeFactory;
 import com.antondev.crates.listener.CrateListener;
 import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.database.DefinitionRepository;
@@ -77,11 +79,14 @@ public class PlexonCrates extends JavaPlugin {
     private WandService wand;
     private ClaimService claims;
     private PortableCrateService portables;
+    private CoreBridge coreBridge;
     private final Map<String, Long> definitionRevisions = new ConcurrentHashMap<>();
 
     @Override
     public void onEnable() {
         try {
+            coreBridge = CoreBridgeFactory.resolve(this);
+            coreBridge.registerStarting();
             saveBundledFiles();
             YamlConfiguration bootstrap = YamlConfiguration.loadConfiguration(file("config.yml"));
             String databaseFile = bootstrap.getString("database.file", "data/plexoncrates.db");
@@ -151,12 +156,17 @@ public class PlexonCrates extends JavaPlugin {
                         + (unresolvedJournals == 1 ? "y" : "ies")
                         + ". Recovery policy is MANUAL_REVIEW; inspect /pcrates diagnose before changing data.");
             }
+            updateCoreHealth();
             getLogger().info("PlexonCrates " + getPluginMeta().getVersion() + " by Tonim (ZpkDxGames) enabled: "
                     + runtime.all().size() + " published crates, " + runtime.rewardCount() + " rewards, "
                     + locations.all().size()
-                    + " linked blocks. Key source: " + keys.sourceLabel() + "."
+                    + " linked blocks. Key source: " + keys.sourceLabel() + ". Core mode: "
+                    + coreBridge.mode() + "."
                     + (migration.migrated() ? " Migrated 1.0 data into " + migration.backupDirectory() + "." : ""));
         } catch (Exception | LinkageError error) {
+            if (coreBridge != null) {
+                coreBridge.markFailed(error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
+            }
             getLogger().log(Level.SEVERE, "PlexonCrates could not start. Existing files were not reset.", error);
             getServer().getPluginManager().disablePlugin(this);
         }
@@ -175,6 +185,7 @@ public class PlexonCrates extends JavaPlugin {
             draftSessions.clear();
         }
         if (guiSessions != null) guiSessions.clear();
+        if (coreBridge != null) coreBridge.unregister();
         getServer().getServicesManager().unregisterAll(this);
         if (displays != null) displays.stop();
         if (openings != null) openings.clear();
@@ -246,6 +257,10 @@ public class PlexonCrates extends JavaPlugin {
                 try { displays.refresh(); }
                 catch (RuntimeException refreshError) { error.addSuppressed(refreshError); }
                 throw error;
+            }
+            if (coreBridge != null) {
+                coreBridge.registerStarting();
+                updateCoreHealth();
             }
             messages.send(sender, "reloaded");
             return true;
@@ -341,6 +356,20 @@ public class PlexonCrates extends JavaPlugin {
         }
         sender.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>PlexonCrates Diagnostics</bold></gradient>"));
         sender.sendMessage(Text.parse("<gray>Plugin:</gray> <white>" + getPluginMeta().getVersion() + "</white> <dark_gray>•</dark_gray> <gray>Paper API:</gray> <white>26.2</white> <dark_gray>•</dark_gray> <gray>Java:</gray> <white>" + Runtime.version().feature() + "</white>"));
+        if (coreBridge != null) {
+            sender.sendMessage(Text.parse("<gray>Mode:</gray> <white>" + coreBridge.mode()
+                    + "</white> <dark_gray>•</dark_gray> <gray>Core plugin/API:</gray> <white>"
+                    + coreBridge.pluginVersion() + " / " + coreBridge.apiVersion()
+                    + "</white> <dark_gray>•</dark_gray> <gray>Supported:</gray> <white>"
+                    + CoreBridge.SUPPORTED_API_RANGE + "</white>"));
+            sender.sendMessage(Text.parse("<gray>Core module:</gray> <white>" + coreBridge.registrationState()
+                    + "</white> <dark_gray>•</dark_gray> <gray>Detail:</gray> <white>"
+                    + coreBridge.detail() + "</white>"));
+        }
+        boolean apiRegistered = getServer().getServicesManager().getRegistration(PlexonCratesApi.class) != null;
+        sender.sendMessage(Text.parse("<gray>PlexonCratesApi:</gray> "
+                + (apiRegistered ? "<green>registered</green>" : "<red>missing</red>")
+                + " <dark_gray>•</dark_gray> <gray>CrateOpenEvent:</gray> <green>available</green>"));
         sender.sendMessage(Text.parse("<gray>Crates:</gray> <white>" + crates.all().size() + "</white> <dark_gray>(" + drafts + " drafts)</dark_gray> <dark_gray>•</dark_gray> <gray>Rewards:</gray> <white>" + crates.rewardCount() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Keys:</gray> <white>" + keys.definitions().size() + "</white> <dark_gray>•</dark_gray> <gray>Provider:</gray> <white>" + keys.providerStatus() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Key detail:</gray> <white>" + keys.providerDiagnostic() + "</white>"));
@@ -367,6 +396,23 @@ public class PlexonCrates extends JavaPlugin {
                 + runtime.all().size() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Active opening/edit sessions:</gray> <white>"
                 + (openings.pendingCount() + draftSessions.activeSessions()) + "</white>"));
+    }
+
+    private void updateCoreHealth() {
+        if (coreBridge == null || !coreBridge.available()) return;
+        try {
+            int pendingJournals = database == null ? 0 : database.pendingJournalCount();
+            if (pendingJournals > 0) {
+                coreBridge.markDegraded("Crate runtime is ready; " + pendingJournals
+                        + " opening journal entr" + (pendingJournals == 1 ? "y requires" : "ies require")
+                        + " manual review");
+                return;
+            }
+            coreBridge.markReady("Crate engine, API, key registry, runtime snapshot and writer are ready");
+        } catch (Exception error) {
+            coreBridge.markDegraded("Crate runtime is ready; health probe failed: "
+                    + error.getClass().getSimpleName());
+        }
     }
 
     private void draftStateChanged(UUID actorId, String crateId, DraftSessionService.View view) {
@@ -446,6 +492,7 @@ public class PlexonCrates extends JavaPlugin {
     public WandService wand() { return wand; }
     public ClaimService claims() { return claims; }
     public PortableCrateService portables() { return portables; }
+    public CoreBridge coreBridge() { return coreBridge; }
 
     /** Returns the durable definition revision, including inactive archived/disabled crates. */
     public long definitionRevision(String crateId) {

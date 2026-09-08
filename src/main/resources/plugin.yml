@@ -9,7 +9,7 @@ description: Premium GUI-driven crates, animations, physical blocks, virtual key
 commands:
   crates:
     description: Open PlexonCrates, preview crates, administer crates, keys and rewards.
-    usage: /crates [admin|preview|open|link|unlink|key|reward|reload]
+    usage: /crates [admin|preview|open|claims|link|unlink|key|reward|migrate|reload]
     aliases: [crate, pcrates]
 
 permissions:
@@ -27,6 +27,7 @@ permissions:
       plexoncrates.admin.break: true
       plexoncrates.admin.keys: true
       plexoncrates.admin.rewards: true
+      plexoncrates.admin.migrate: true
       plexoncrates.admin.reload: true
   plexoncrates.admin.gui:
     default: op
@@ -37,6 +38,9 @@ permissions:
   plexoncrates.admin.keys:
     default: op
   plexoncrates.admin.rewards:
+    default: op
+  plexoncrates.admin.migrate:
+    description: Scan, report, and import operator-owned PhoenixCratesLite data.
     default: op
   plexoncrates.admin.reload:
     default: op

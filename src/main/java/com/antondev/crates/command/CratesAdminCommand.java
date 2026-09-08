@@ -62,6 +62,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 case "validate" -> plugin.validateFor(sender);
                 case "backup" -> plugin.backupFor(sender);
                 case "diagnose" -> plugin.diagnoseFor(sender);
+                case "migrate" -> PhoenixMigrationCommand.execute(plugin, sender, args);
                 case "status" -> status(sender);
                 case "save" -> {
                     plugin.statistics().save();
@@ -606,6 +607,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
             case "reload", "validate", "save" -> "plexoncrates.admin.reload";
             case "backup" -> "plexoncrates.admin.backup";
             case "diagnose" -> "plexoncrates.admin.diagnose";
+            case "migrate" -> "plexoncrates.admin.migrate";
             default -> "plexoncrates.admin";
         };
     }
@@ -688,17 +690,20 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(Text.parse("<white>/pcrates rerolls <give|take|set> <player|uuid> <amount></white> <dark_gray>—</dark_gray> <gray>Adjust audited reroll tokens.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates portable give <player|uuid> <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Issue signed single-use crate items.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates open <player> <crate> [amount]</white> <dark_gray>—</dark_gray> <gray>Administrative keyless opening.</gray>"));
+        sender.sendMessage(Text.parse("<white>/pcrates migrate phoenix <scan|plan|import|validate|report></white> <dark_gray>—</dark_gray> <gray>PhoenixCratesLite replacement workflow.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates validate</white> <dark_gray>•</dark_gray> <white>reload</white> <dark_gray>•</dark_gray> <white>backup</white> <dark_gray>•</dark_gray> <white>status</white> <dark_gray>•</dark_gray> <white>diagnose</white>"));
     }
 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                                  @NotNull String alias, @NotNull String[] args) {
-        if (!sender.hasPermission("plexoncrates.admin") && !sender.hasPermission("plexoncrates.admin.gui")) return List.of();
+        if (!sender.hasPermission("plexoncrates.admin") && !sender.hasPermission("plexoncrates.admin.gui")
+                && !sender.hasPermission("plexoncrates.admin.migrate")) return List.of();
         if (args.length == 1) return filter(List.of("gui", "create", "edit", "clone", "import", "export", "publish", "delete", "keys", "wand",
                 "link", "unlink", "set", "unset", "additem", "addcommand", "remove", "chance", "givekey",
-                "open", "portable", "virtualgrant", "rerolls", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
+                "open", "portable", "virtualgrant", "rerolls", "migrate", "validate", "reload", "backup", "diagnose", "save", "status", "help"), args[0]);
         String action = args[0].toLowerCase(Locale.ROOT);
+        if (action.equals("migrate")) return PhoenixMigrationCommand.tab(args);
         if (args.length == 2 && List.of("edit", "export", "publish", "delete", "link", "set", "additem", "addcommand", "remove", "chance", "weight").contains(action)) {
             return filter(plugin.crates().ordered().stream().map(Crate::id).toList(), args[1]);
         }

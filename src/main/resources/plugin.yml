@@ -5,7 +5,7 @@ api-version: '26.2'
 description: Exact-item, percentage-first crates with native PlexonKeys compatibility.
 author: Tonim (ZpkDxGames)
 website: https://github.com/ZpkDxGames/PlexonCrates
-softdepend: [PlexonKeys, PlaceholderAPI, Vault]
+softdepend: [PlexonCore, PlexonKeys, PlaceholderAPI, Vault]
 commands:
   crates:
     description: Browse crates, preview rewards, or open a crate.
@@ -13,7 +13,7 @@ commands:
     aliases: [crate, plexoncrates]
   cratesadmin:
     description: Configure PlexonCrates in game.
-    usage: /pcrates [create|edit|clone|import|export|publish|delete|keys|wand|link|unlink|givekey|virtualgrant|rerolls|portable|open|validate|reload|backup|status|diagnose]
+    usage: /pcrates [create|edit|clone|import|export|publish|delete|keys|wand|link|unlink|givekey|virtualgrant|rerolls|portable|open|validate|reload|backup|status|diagnose|migrate]
     aliases: [pcrates, pca]
 permissions:
   plexoncrates.use:

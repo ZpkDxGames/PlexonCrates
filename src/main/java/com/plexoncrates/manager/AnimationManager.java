@@ -2,6 +2,7 @@ package com.plexoncrates.manager;
 
 import com.plexoncrates.animation.Animation;
 import com.plexoncrates.animation.CsgoRollAnimation;
+import com.plexoncrates.animation.InstantAnimation;
 import com.plexoncrates.animation.WheelAnimation;
 import com.plexoncrates.config.ConfigManager;
 import com.plexoncrates.core.PlexonCrates;
@@ -43,6 +44,7 @@ public final class AnimationManager {
         this.rewards = rewards;
         animations.put("CSGO", new CsgoRollAnimation(plugin, gui));
         animations.put("WHEEL", new WheelAnimation(plugin, gui));
+        animations.put("INSTANT", new InstantAnimation());
     }
 
     public void startIdleEffects() {
@@ -146,6 +148,8 @@ public final class AnimationManager {
                 switch (crate.idleEffect().toUpperCase(Locale.ROOT)) {
                     case "CLOUD" -> cloud(center);
                     case "FOUNTAIN" -> fountain(center);
+                    case "RING" -> ring(center);
+                    case "PULSE" -> pulse(center);
                     default -> helix(center);
                 }
             }
@@ -181,6 +185,30 @@ public final class AnimationManager {
         if (((int) (phase * 10)) % 3 == 0) {
             world.spawnParticle(Particle.END_ROD, center.clone().add(0, 1.25D, 0),
                     1, 0.05D, 0.2D, 0.05D, 0.01D);
+        }
+    }
+
+    private void ring(Location center) {
+        World world = center.getWorld();
+        if (world == null) return;
+        double radius = 0.72D;
+        for (int point = 0; point < 6; point++) {
+            double angle = phase + (Math.PI * 2D * point / 6D);
+            world.spawnParticle(Particle.END_ROD,
+                    center.clone().add(Math.cos(angle) * radius, 0.75D, Math.sin(angle) * radius),
+                    1, 0, 0, 0, 0);
+        }
+    }
+
+    private void pulse(Location center) {
+        World world = center.getWorld();
+        if (world == null) return;
+        double radius = 0.35D + ((Math.sin(phase * 1.5D) + 1D) * 0.25D);
+        for (int point = 0; point < 8; point++) {
+            double angle = Math.PI * 2D * point / 8D;
+            world.spawnParticle(Particle.FIREWORKS_SPARK,
+                    center.clone().add(Math.cos(angle) * radius, 0.65D, Math.sin(angle) * radius),
+                    1, 0, 0, 0, 0.01D);
         }
     }
 

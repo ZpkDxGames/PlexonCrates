@@ -3,7 +3,6 @@ package com.antondev.crates.migration.phoenix;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -17,7 +16,6 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Read-only PhoenixCratesLite migration boundary.
@@ -63,7 +61,7 @@ public final class PhoenixMigrationService {
         Files.createDirectories(reportRoot);
 
         List<SourceFile> files = new ArrayList<>();
-        try (var stream = Files.walk(sourceRoot, FileVisitOption.FOLLOW_LINKS)) {
+        try (var stream = Files.walk(sourceRoot)) {
             for (Path candidate : stream.sorted().toList()) {
                 Path normalized = candidate.toAbsolutePath().normalize();
                 if (!normalized.startsWith(sourceRoot)) {

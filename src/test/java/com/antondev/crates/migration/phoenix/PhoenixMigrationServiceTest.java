@@ -17,7 +17,7 @@ final class PhoenixMigrationServiceTest {
     Path temp;
 
     @Test
-    void scanFingerprintsSourceWithoutModifyingItAndPlanFailsClosed() throws Exception {
+    void scanFingerprintsSourceWithoutModifyingItAndUnknownSchemaFailsClosed() throws Exception {
         PhoenixMigrationService service = new PhoenixMigrationService(temp.resolve("PlexonCrates"));
         Path fixture = service.sourceRoot().resolve("crates.yml");
         Files.createDirectories(fixture.getParent());
@@ -45,8 +45,10 @@ final class PhoenixMigrationServiceTest {
         Path report = service.writeReport(first, plan);
         assertTrue(report.startsWith(service.reportRoot()));
         assertFalse(report.startsWith(service.sourceRoot()));
-        assertTrue(Files.readString(report).contains("No crate definitions were imported"));
+        assertTrue(Files.readString(report).contains("Phoenix Migration Report"));
+        assertTrue(Files.readString(report).contains("PLAN"));
         assertArrayEquals(original, Files.readAllBytes(fixture));
+        assertEquals(modifiedBefore, Files.getLastModifiedTime(fixture).toMillis());
     }
 
     @Test
@@ -57,5 +59,6 @@ final class PhoenixMigrationServiceTest {
         assertTrue(scan.files().isEmpty());
         assertEquals(64, scan.fingerprint().length());
         assertFalse(scan.warnings().isEmpty());
+        assertFalse(service.plan(scan).importEnabled());
     }
 }

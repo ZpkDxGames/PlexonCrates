@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -31,6 +32,27 @@ public final class DatabaseManager {
         }
     }
 
+    public record HistoricalOpening(UUID playerId, String playerName, String crateId, long openings) {
+        public HistoricalOpening {
+            if (playerId == null) throw new IllegalArgumentException("playerId is required");
+            playerName = playerName == null ? "" : playerName;
+            if (crateId == null || crateId.isBlank()) throw new IllegalArgumentException("crateId is required");
+            if (openings < 0L) throw new IllegalArgumentException("openings cannot be negative");
+        }
+    }
+
+    public record HistoricalRewardWin(UUID playerId, String playerName, String rewardId,
+                                      String mappedCrateId, long wins) {
+        public HistoricalRewardWin {
+            if (playerId == null) throw new IllegalArgumentException("playerId is required");
+            playerName = playerName == null ? "" : playerName;
+            if (rewardId == null || rewardId.isBlank()) throw new IllegalArgumentException("rewardId is required");
+            if (wins < 0L) throw new IllegalArgumentException("wins cannot be negative");
+        }
+    }
+
+    public record HistoricalImportResult(boolean applied, long openings, long rewardWins) {}
+
     private final PlexonCrates plugin;
     private final ConfigManager config;
     private final ExecutorService executor;
@@ -38,15 +60,20 @@ public final class DatabaseManager {
     private final CompletableFuture<Void> ready;
 
     public DatabaseManager(PlexonCrates plugin, ConfigManager config, ExecutorService executor) {
-        this.plugin = plugin;
-        this.config = config;
-        this.executor = executor;
+        this.plugin = Objects.requireNonNull(plugin);
+        this.config = Objects.requireNonNull(config);
+        this.executor = Objects.requireNonNull(executor);
         this.databaseFile = plugin.getDataFolder().toPath().resolve(config.databaseFile()).normalize();
         this.ready = CompletableFuture.runAsync(this::initializeDatabase, executor);
     }
 
-    public CompletableFuture<Void> ready() { return ready; }
-    public boolean isReady() { return ready.isDone() && !ready.isCompletedExceptionally(); }
+    public CompletableFuture<Void> ready() {
+        return ready;
+    }
+
+    public boolean isReady() {
+        return ready.isDone() && !ready.isCompletedExceptionally();
+    }
 
     public CompletableFuture<Map<String, Long>> virtualKeys(UUID playerId) {
         return supply(connection -> {
@@ -168,6 +195,114 @@ public final class DatabaseManager {
                     history.executeUpdate();
                 }
                 connection.commit();
+            } catch (Exception error) {
+                connection.rollback();
+                throw error;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        });
+    }
+
+    /**
+     * Imports aggregate Phoenix history exactly once for a source hash.
+     *
+     * <p>Phoenix does not retain a timestamp for every historical opening, so this method updates
+     * aggregate statistics without manufacturing opening_history rows. Per-reward historical wins,
+     * including retired/orphan reward IDs, are retained in legacy_reward_wins for auditability.</p>
+     */
+    public CompletableFuture<HistoricalImportResult> importPhoenixHistory(
+            String sourceHash, List<HistoricalOpening> openings, List<HistoricalRewardWin> rewardWins) {
+        if (sourceHash == null || sourceHash.isBlank()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("sourceHash is required"));
+        }
+        List<HistoricalOpening> openingCopy = List.copyOf(openings == null ? List.of() : openings);
+        List<HistoricalRewardWin> rewardCopy = List.copyOf(rewardWins == null ? List.of() : rewardWins);
+        String marker = "phoenix:" + sourceHash;
+
+        return supply(connection -> {
+            connection.setAutoCommit(false);
+            try {
+                try (PreparedStatement exists = connection.prepareStatement(
+                        "SELECT 1 FROM migration_markers WHERE source = ?")) {
+                    exists.setString(1, marker);
+                    try (ResultSet rows = exists.executeQuery()) {
+                        if (rows.next()) {
+                            connection.rollback();
+                            return new HistoricalImportResult(false, 0L, 0L);
+                        }
+                    }
+                }
+
+                long importedOpenings = 0L;
+                for (HistoricalOpening opening : openingCopy) {
+                    if (opening.openings() == 0L) continue;
+                    importedOpenings = Math.addExact(importedOpenings, opening.openings());
+                    long now = System.currentTimeMillis();
+
+                    try (PreparedStatement global = connection.prepareStatement("""
+                            INSERT INTO crate_stats(crate_id, openings, updated_at)
+                            VALUES(?, ?, ?)
+                            ON CONFLICT(crate_id) DO UPDATE SET
+                              openings = crate_stats.openings + excluded.openings,
+                              updated_at = excluded.updated_at
+                            """)) {
+                        global.setString(1, opening.crateId());
+                        global.setLong(2, opening.openings());
+                        global.setLong(3, now);
+                        global.executeUpdate();
+                    }
+                    try (PreparedStatement player = connection.prepareStatement("""
+                            INSERT INTO player_stats(player_uuid, crate_id, openings, updated_at)
+                            VALUES(?, ?, ?, ?)
+                            ON CONFLICT(player_uuid, crate_id) DO UPDATE SET
+                              openings = player_stats.openings + excluded.openings,
+                              updated_at = excluded.updated_at
+                            """)) {
+                        player.setString(1, opening.playerId().toString());
+                        player.setString(2, opening.crateId());
+                        player.setLong(3, opening.openings());
+                        player.setLong(4, now);
+                        player.executeUpdate();
+                    }
+                }
+
+                long importedRewardWins = 0L;
+                try (PreparedStatement reward = connection.prepareStatement("""
+                        INSERT INTO legacy_reward_wins(
+                          source, player_uuid, player_name, reward_id, crate_id, wins
+                        ) VALUES(?, ?, ?, ?, ?, ?)
+                        """)) {
+                    for (HistoricalRewardWin win : rewardCopy) {
+                        if (win.wins() == 0L) continue;
+                        importedRewardWins = Math.addExact(importedRewardWins, win.wins());
+                        reward.setString(1, marker);
+                        reward.setString(2, win.playerId().toString());
+                        reward.setString(3, win.playerName());
+                        reward.setString(4, win.rewardId());
+                        if (win.mappedCrateId() == null || win.mappedCrateId().isBlank()) {
+                            reward.setNull(5, java.sql.Types.VARCHAR);
+                        } else {
+                            reward.setString(5, win.mappedCrateId());
+                        }
+                        reward.setLong(6, win.wins());
+                        reward.addBatch();
+                    }
+                    reward.executeBatch();
+                }
+
+                try (PreparedStatement migration = connection.prepareStatement("""
+                        INSERT INTO migration_markers(source, imported_at, metadata)
+                        VALUES(?, ?, ?)
+                        """)) {
+                    migration.setString(1, marker);
+                    migration.setLong(2, System.currentTimeMillis());
+                    migration.setString(3, "openings=" + importedOpenings + ";rewardWins=" + importedRewardWins);
+                    migration.executeUpdate();
+                }
+
+                connection.commit();
+                return new HistoricalImportResult(true, importedOpenings, importedRewardWins);
             } catch (Exception error) {
                 connection.rollback();
                 throw error;
@@ -312,6 +447,26 @@ public final class DatabaseManager {
                           created_at INTEGER NOT NULL
                         )
                         """);
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS migration_markers(
+                          source TEXT PRIMARY KEY,
+                          imported_at INTEGER NOT NULL,
+                          metadata TEXT NOT NULL
+                        )
+                        """);
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS legacy_reward_wins(
+                          source TEXT NOT NULL,
+                          player_uuid TEXT NOT NULL,
+                          player_name TEXT NOT NULL,
+                          reward_id TEXT NOT NULL,
+                          crate_id TEXT,
+                          wins INTEGER NOT NULL CHECK(wins >= 0),
+                          PRIMARY KEY(source, player_uuid, reward_id)
+                        )
+                        """);
+                statement.execute("CREATE INDEX IF NOT EXISTS idx_legacy_reward_player "
+                        + "ON legacy_reward_wins(player_uuid, source)");
                 statement.execute("CREATE INDEX IF NOT EXISTS idx_claims_player ON claims(player_uuid, id)");
                 statement.execute("CREATE INDEX IF NOT EXISTS idx_history_player ON opening_history(player_uuid, opened_at)");
             }
@@ -352,8 +507,12 @@ public final class DatabaseManager {
     }
 
     @FunctionalInterface
-    private interface SqlWork { void run(Connection connection) throws Exception; }
+    private interface SqlWork {
+        void run(Connection connection) throws Exception;
+    }
 
     @FunctionalInterface
-    private interface SqlQuery<T> { T run(Connection connection) throws Exception; }
+    private interface SqlQuery<T> {
+        T run(Connection connection) throws Exception;
+    }
 }

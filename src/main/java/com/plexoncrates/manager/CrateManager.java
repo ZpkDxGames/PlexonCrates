@@ -3,6 +3,7 @@ package com.plexoncrates.manager;
 import com.plexoncrates.core.PlexonCrates;
 import com.plexoncrates.crate.Crate;
 import com.plexoncrates.crate.CrateLocation;
+import com.plexoncrates.crate.CrateValidator;
 import com.plexoncrates.crate.Reward;
 import com.plexoncrates.crate.RewardAction;
 import com.plexoncrates.crate.RewardActionType;
@@ -118,6 +119,7 @@ public final class CrateManager {
         }
     }
 
+    /** Creates a disabled draft definition. New crates never become live merely by closing a GUI. */
     public Crate create(String rawId) {
         String id = normalizeId(rawId);
         lock.writeLock().lock();
@@ -125,8 +127,8 @@ public final class CrateManager {
             if (crates.containsKey(id)) throw new IllegalArgumentException("Crate already exists: " + id);
             ItemStack icon = named(new ItemStack(Material.CHEST), "&6" + title(id) + " Crate");
             ItemStack key = named(new ItemStack(Material.TRIPWIRE_HOOK), "&6" + title(id) + " Key");
-            Crate crate = new Crate(id, true, "&6&l" + title(id) + " Crate",
-                    List.of("&7New PlexonCrates definition."), icon, "&6" + title(id) + " Key", key,
+            Crate crate = new Crate(id, false, "&6&l" + title(id) + " Crate",
+                    List.of("&7New PlexonCrates draft definition."), icon, "&6" + title(id) + " Key", key,
                     "CSGO", "HELIX", List.of(), List.of());
             crates.put(id, crate);
             saveAsync();
@@ -145,16 +147,11 @@ public final class CrateManager {
     }
 
     /**
-     * Atomically installs a batch of externally migrated crate definitions.
-     *
-     * <p>The method is intentionally conflict-strict: an existing crate ID or occupied physical
-     * location aborts the entire batch before any in-memory state is changed. Imported definitions
-     * are copied before installation so callers cannot mutate the registry after the fact.</p>
+     * Atomically installs a batch of externally migrated crate definitions as disabled review drafts.
+     * Existing crate IDs or occupied locations abort the complete batch before in-memory mutation.
      */
     public CompletableFuture<Void> installImportedCrates(Collection<Crate> imported) {
-        if (imported == null || imported.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
+        if (imported == null || imported.isEmpty()) return CompletableFuture.completedFuture(null);
 
         CompletableFuture<Void> save;
         lock.writeLock().lock();
@@ -165,9 +162,20 @@ public final class CrateManager {
             for (Crate source : imported) {
                 if (source == null) throw new IllegalArgumentException("Imported crate cannot be null");
                 Crate crate = source.copy();
+                crate.setEnabled(false);
                 String id = normalizeId(crate.id());
                 if (crates.containsKey(id) || prepared.containsKey(id)) {
                     throw new IllegalStateException("Imported crate ID already exists: " + id);
+                }
+                // Validate all exact item payloads now, while allowing draft-level missing/zero-weight
+                // concerns to remain visible for administrator review.
+                CrateValidator.Result validation = CrateValidator.validate(crate);
+                for (CrateValidator.Issue issue : validation.issues()) {
+                    if (issue.code().startsWith("crate.icon") || issue.code().startsWith("crate.key")
+                            || issue.code().startsWith("reward.display") || issue.code().startsWith("reward.action")) {
+                        throw new IllegalStateException("Imported crate " + id + " has invalid exact item data: "
+                                + issue.message());
+                    }
                 }
                 for (CrateLocation location : crate.locations()) {
                     String existing = occupied.putIfAbsent(location.key(), id);
@@ -190,15 +198,21 @@ public final class CrateManager {
 
     public Reward addCapturedReward(String crateId, ItemStack source, int weight) {
         if (source == null || source.getType().isAir()) throw new IllegalArgumentException("A real item is required");
+        // Hard gate: accept only a native Paper snapshot that survives an exact byte round-trip.
+        ItemStack captured = ItemCodec.snapshot(source).toItemStack();
         lock.writeLock().lock();
         try {
             Crate crate = requireMutable(crateId);
             String id = nextRewardId(crate);
-            ItemStack captured = source.clone();
             List<RewardAction> actions = List.of(new RewardAction(RewardActionType.ITEM, "", null));
             Reward reward = new Reward(id, true, Math.max(1, weight), captured, actions);
             crate.putReward(reward);
-            saveAsync();
+            try {
+                saveAsync();
+            } catch (RuntimeException persistenceFailure) {
+                crate.removeReward(id);
+                throw persistenceFailure;
+            }
             return reward.copy();
         } finally {
             lock.writeLock().unlock();
@@ -241,6 +255,8 @@ public final class CrateManager {
     }
 
     public void addRewardAction(String crateId, String rewardId, RewardAction action) {
+        if (action == null) throw new IllegalArgumentException("Reward action is required");
+        if (action.item() != null) ItemCodec.snapshot(action.item());
         lock.writeLock().lock();
         try {
             Reward reward = requireMutable(crateId).reward(rewardId)
@@ -252,12 +268,36 @@ public final class CrateManager {
         }
     }
 
-    public void toggleEnabled(String crateId) {
+    public CrateValidator.Result validate(String crateId) {
+        lock.readLock().lock();
+        try {
+            Crate crate = crates.get(normalize(crateId));
+            if (crate == null) throw new IllegalArgumentException("Unknown crate: " + crateId);
+            return CrateValidator.validate(crate.copy());
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Toggles published runtime status. Enabling is refused unless central validation passes;
+     * disabling is always permitted.
+     */
+    public boolean toggleEnabled(String crateId) {
         lock.writeLock().lock();
         try {
             Crate crate = requireMutable(crateId);
+            if (!crate.enabled()) {
+                CrateValidator.Result validation = CrateValidator.validate(crate.copy());
+                if (!validation.valid()) {
+                    plugin.getLogger().warning("Refused to enable invalid crate " + crate.id() + ": "
+                            + validation.summary());
+                    return false;
+                }
+            }
             crate.setEnabled(!crate.enabled());
             saveAsync();
+            return true;
         } finally {
             lock.writeLock().unlock();
         }
@@ -366,7 +406,7 @@ public final class CrateManager {
             saveTail = saveTail.handle((ignored, previousError) -> null).thenRunAsync(() -> {
                 try {
                     Files.createDirectories(file.toPath().getParent());
-                    Files.writeString(file.toPath(), serialized, StandardCharsets.UTF_8);
+                    PathWriter.atomicWrite(file.toPath(), serialized);
                 } catch (Exception error) {
                     plugin.getLogger().log(Level.SEVERE, "Could not save crates.yml", error);
                     throw new RuntimeException(error);
@@ -385,7 +425,7 @@ public final class CrateManager {
     private Crate parseCrate(String rawId, ConfigurationSection section) {
         if (section == null) throw new IllegalArgumentException("Missing crate section");
         String id = normalizeId(rawId);
-        boolean enabled = section.getBoolean("enabled", true);
+        boolean enabled = section.getBoolean("enabled", false);
         String displayName = section.getString("display-name", "&6" + title(id) + " Crate");
         List<String> description = section.getStringList("description");
         ItemStack icon = ItemCodec.read(section.getConfigurationSection("icon"));
@@ -424,8 +464,17 @@ public final class CrateManager {
             }
         }
 
-        return new Crate(id, enabled, displayName, description, icon, keyDisplayName, keyItem,
+        Crate crate = new Crate(id, enabled, displayName, description, icon, keyDisplayName, keyItem,
                 section.getString("animation", "CSGO"), section.getString("idle-effect", "HELIX"), rewards, locations);
+        if (enabled) {
+            CrateValidator.Result validation = CrateValidator.validate(crate);
+            if (!validation.valid()) {
+                crate.setEnabled(false);
+                plugin.getLogger().warning("Loaded crate " + id + " as disabled because validation failed: "
+                        + validation.summary());
+            }
+        }
+        return crate;
     }
 
     private List<RewardAction> readActions(List<Map<?, ?>> maps) {
@@ -437,7 +486,14 @@ public final class CrateManager {
                 String value = String.valueOf(map.containsKey("value") ? map.get("value") : "");
                 ItemStack item = null;
                 Object encoded = map.get("item-base64");
-                if (encoded != null && !String.valueOf(encoded).isBlank()) item = ItemCodec.decode(String.valueOf(encoded));
+                if (encoded != null && !String.valueOf(encoded).isBlank()) {
+                    item = ItemCodec.decode(String.valueOf(encoded));
+                    Object expectedHash = map.get("item-sha256");
+                    if (expectedHash != null && !String.valueOf(expectedHash).isBlank()
+                            && !String.valueOf(expectedHash).equalsIgnoreCase(ItemCodec.fingerprint(item))) {
+                        throw new IllegalArgumentException("Reward action item fingerprint mismatch");
+                    }
+                }
                 actions.add(new RewardAction(type, value, item));
             } catch (Exception error) {
                 plugin.getLogger().warning("Ignoring invalid reward action: " + error.getMessage());
@@ -453,9 +509,9 @@ public final class CrateManager {
             yaml.set(path + ".enabled", crate.enabled());
             yaml.set(path + ".display-name", crate.displayName());
             yaml.set(path + ".description", crate.description());
-            yaml.set(path + ".icon.base64", ItemCodec.encode(crate.icon()));
+            writeExact(yaml, path + ".icon", crate.icon());
             yaml.set(path + ".key.display-name", crate.keyDisplayName());
-            yaml.set(path + ".key.item.base64", ItemCodec.encode(crate.keyItem()));
+            writeExact(yaml, path + ".key.item", crate.keyItem());
             yaml.set(path + ".animation", crate.animation());
             yaml.set(path + ".idle-effect", crate.idleEffect());
 
@@ -475,21 +531,31 @@ public final class CrateManager {
                 String rewardPath = path + ".rewards." + reward.id();
                 yaml.set(rewardPath + ".enabled", reward.enabled());
                 yaml.set(rewardPath + ".weight", reward.weight());
-                yaml.set(rewardPath + ".display-item.base64", ItemCodec.encode(reward.displayItem()));
+                writeExact(yaml, rewardPath + ".display-item", reward.displayItem());
                 List<Map<String, Object>> actions = new ArrayList<>();
                 for (RewardAction action : reward.actions()) {
                     Map<String, Object> map = new LinkedHashMap<>();
                     map.put("type", action.type().name());
                     if (!action.value().isBlank()) map.put("value", action.value());
-                    if (action.item() != null) map.put("item-base64", ItemCodec.encode(action.item()));
+                    if (action.item() != null) {
+                        map.put("item-base64", ItemCodec.encode(action.item()));
+                        map.put("item-sha256", ItemCodec.fingerprint(action.item()));
+                        map.put("item-format", com.plexoncrates.item.ExactItemSnapshot.FORMAT_NAME);
+                    }
                     actions.add(map);
                 }
                 yaml.set(rewardPath + ".actions", actions);
             }
         }
         return "# PlexonCrates 4.0 - managed crate definitions.\n"
-                + "# Use /crates admin for safe in-game editing. Exact items are persisted as base64 snapshots.\n\n"
+                + "# Use /crates admin for safe in-game editing. Exact items use Paper-native NBT snapshots + SHA-256.\n\n"
                 + yaml.saveToString();
+    }
+
+    private static void writeExact(YamlConfiguration yaml, String path, ItemStack item) {
+        yaml.set(path + ".base64", ItemCodec.encode(item));
+        yaml.set(path + ".sha256", ItemCodec.fingerprint(item));
+        yaml.set(path + ".format", com.plexoncrates.item.ExactItemSnapshot.FORMAT_NAME);
     }
 
     private Crate requireMutable(String crateId) {
@@ -546,5 +612,27 @@ public final class CrateManager {
         meta.setDisplayName(ColorUtil.color(name));
         result.setItemMeta(meta);
         return result;
+    }
+
+    /** Small atomic text-file writer used by async persistence. */
+    private static final class PathWriter {
+        private static void atomicWrite(java.nio.file.Path target, String content) throws Exception {
+            java.nio.file.Path parent = target.toAbsolutePath().normalize().getParent();
+            if (parent != null) Files.createDirectories(parent);
+            java.nio.file.Path temp = Files.createTempFile(parent, target.getFileName().toString(), ".tmp");
+            boolean moved = false;
+            try {
+                Files.writeString(temp, content, StandardCharsets.UTF_8);
+                try {
+                    Files.move(temp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                            java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                    Files.move(temp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+                moved = true;
+            } finally {
+                if (!moved) Files.deleteIfExists(temp);
+            }
+        }
     }
 }

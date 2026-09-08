@@ -2,6 +2,7 @@ package com.plexoncrates.core;
 
 import com.plexoncrates.command.CrateCommand;
 import com.plexoncrates.config.ConfigManager;
+import com.plexoncrates.database.DatabaseCompatibility;
 import com.plexoncrates.database.DatabaseManager;
 import com.plexoncrates.listener.BlockProtectionListener;
 import com.plexoncrates.listener.InventoryListener;
@@ -37,6 +38,11 @@ public final class PlexonCrates extends JavaPlugin {
         try {
             configManager = new ConfigManager(this);
             configManager.initialize();
+
+            // Pre-4.0 releases used several identical SQLite table names with different schemas.
+            // Preserve incompatible tables under *_legacy_pre4 names before the 4.0 initializer
+            // creates its own schema. This is a small, startup-only metadata/DDL compatibility pass.
+            DatabaseCompatibility.prepare(this, configManager);
 
             asyncExecutor = new AsyncExecutor(configManager.databasePoolSize() + 1);
             database = new DatabaseManager(this, configManager, asyncExecutor.executor());

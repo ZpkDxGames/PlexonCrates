@@ -6,6 +6,7 @@ import com.plexoncrates.crate.Crate;
 import com.plexoncrates.crate.RewardAction;
 import com.plexoncrates.crate.RewardActionType;
 import com.plexoncrates.migration.PhoenixMigrationService;
+import com.plexoncrates.migration.PhoenixPartialImportRecovery;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -263,28 +264,63 @@ public final class CrateCommand implements CommandExecutor, TabCompleter {
 
     private void importMigration(CommandSender sender) {
         sender.sendMessage(config.prefix() + "§eRe-scanning Phoenix source before confirmed import...");
-        plugin.phoenixMigration().planAsync().thenCompose(plan -> {
-            if (!plan.ready()) {
-                return java.util.concurrent.CompletableFuture.<PhoenixMigrationService.ImportResult>failedFuture(
-                        new IllegalStateException("Migration plan has " + plan.errors().size() + " blocking error(s)"));
-            }
-            return plugin.phoenixMigration().importConfirmed(plan);
-        }).whenComplete((result, error) -> sync(() -> {
-            if (error != null) {
-                migrationFailure(sender, "Phoenix import failed", error);
+        plugin.phoenixMigration().planAsync().whenComplete((plan, scanError) -> {
+            if (scanError != null) {
+                sync(() -> migrationFailure(sender, "Phoenix import failed", scanError));
                 return;
             }
-            sender.sendMessage(config.prefix() + "§aPhoenix import completed into disabled review definitions.");
-            sender.sendMessage("§7Crates: §f" + result.crates() + " §8| §7Rewards: §f" + result.rewards()
-                    + " §8| §7Locations: §f" + result.locations());
-            sender.sendMessage("§7Players: §f" + result.players() + " §8| §7Historical openings: §f" + result.openings()
-                    + " §8| §7Reward wins: §f" + result.rewardWins());
-            sender.sendMessage("§7Orphan reward wins preserved: §f" + result.orphanRewardWins());
-            sender.sendMessage("§7History applied this run: §f" + result.historyApplied());
-            sender.sendMessage("§7Backup: §f" + result.backup());
-            sender.sendMessage("§7Report: §f" + result.report());
-            sender.sendMessage(config.prefix() + "§eReview imported crates in /crates admin before enabling them.");
-        }));
+
+            if (plan.ready()) {
+                plugin.phoenixMigration().importConfirmed(plan).whenComplete((result, error) -> sync(() -> {
+                    if (error != null) {
+                        migrationFailure(sender, "Phoenix import failed", error);
+                        return;
+                    }
+                    sendImportSuccess(sender, result);
+                }));
+                return;
+            }
+
+            if (!PhoenixPartialImportRecovery.canResume(plugin.crates(), plan)) {
+                sync(() -> {
+                    sendPlanSummary(sender, plan, true);
+                    sender.sendMessage(config.prefix()
+                            + "§cImport remains blocked. Existing data does not exactly match a recoverable partial import.");
+                });
+                return;
+            }
+
+            sync(() -> sender.sendMessage(config.prefix()
+                    + "§eExact partial Phoenix import detected. Resuming historical database stage only..."));
+            plugin.database().importPhoenixHistory(plan.sourceHash(), plan.openingRows(), plan.rewardRows())
+                    .whenComplete((history, error) -> sync(() -> {
+                        if (error != null) {
+                            migrationFailure(sender, "Phoenix recovery failed", error);
+                            return;
+                        }
+                        sender.sendMessage(config.prefix() + "§aPartial Phoenix import recovered successfully.");
+                        sender.sendMessage("§7Existing disabled definitions verified unchanged: §f" + plan.crates().size());
+                        sender.sendMessage("§7Historical openings: §f" + plan.openings()
+                                + " §8| §7Reward wins: §f" + plan.rewardWins());
+                        sender.sendMessage("§7Orphan reward wins preserved: §f" + plan.orphanRewardWins());
+                        sender.sendMessage("§7History applied this run: §f" + history.applied());
+                        sender.sendMessage(config.prefix()
+                                + "§eReview imported crates in /crates admin before enabling them.");
+                    }));
+        });
+    }
+
+    private void sendImportSuccess(CommandSender sender, PhoenixMigrationService.ImportResult result) {
+        sender.sendMessage(config.prefix() + "§aPhoenix import completed into disabled review definitions.");
+        sender.sendMessage("§7Crates: §f" + result.crates() + " §8| §7Rewards: §f" + result.rewards()
+                + " §8| §7Locations: §f" + result.locations());
+        sender.sendMessage("§7Players: §f" + result.players() + " §8| §7Historical openings: §f" + result.openings()
+                + " §8| §7Reward wins: §f" + result.rewardWins());
+        sender.sendMessage("§7Orphan reward wins preserved: §f" + result.orphanRewardWins());
+        sender.sendMessage("§7History applied this run: §f" + result.historyApplied());
+        sender.sendMessage("§7Backup: §f" + result.backup());
+        sender.sendMessage("§7Report: §f" + result.report());
+        sender.sendMessage(config.prefix() + "§eReview imported crates in /crates admin before enabling them.");
     }
 
     private void sendPlanSummary(CommandSender sender, PhoenixMigrationService.Plan plan, boolean detailed) {

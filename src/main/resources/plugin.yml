@@ -1,119 +1,42 @@
 name: PlexonCrates
 version: '${project.version}'
-main: com.antondev.crates.PlexonCrates
-api-version: '26.2'
-description: Exact-item, percentage-first crates with native PlexonKeys compatibility.
-author: Tonim (ZpkDxGames)
+main: com.plexoncrates.core.PlexonCrates
+api-version: '1.20'
+author: Tonim
 website: https://github.com/ZpkDxGames/PlexonCrates
-softdepend: [PlexonCore, PlexonKeys, PlaceholderAPI, Vault]
+description: Premium GUI-driven crates, animations, physical blocks, virtual keys and durable claims.
+
 commands:
   crates:
-    description: Browse crates, preview rewards, or open a crate.
-    usage: /crates [crate|preview|open|history|claim|keys|milestones|rerolls] [crate|page|id] [amount]
-    aliases: [crate, plexoncrates]
-  cratesadmin:
-    description: Configure PlexonCrates in game.
-    usage: /pcrates [create|edit|clone|import|export|publish|delete|keys|wand|link|unlink|givekey|virtualgrant|rerolls|portable|open|migrate|validate|reload|backup|status|diagnose]
-    aliases: [pcrates, pca]
+    description: Open PlexonCrates, preview crates, administer crates, keys and rewards.
+    usage: /crates [admin|preview|open|link|unlink|key|reward|reload]
+    aliases: [crate, pcrates]
+
 permissions:
   plexoncrates.use:
-    description: Broad compatibility permission for player crate features.
     default: true
-    children:
-      plexoncrates.preview: true
-      plexoncrates.open: true
-      plexoncrates.history: true
-      plexoncrates.claim: true
-      plexoncrates.milestones: true
-      plexoncrates.rerolls: true
   plexoncrates.preview:
-    description: Browse crates and preview eligible rewards.
     default: true
   plexoncrates.open:
-    description: Open crates using physical inventory keys.
-    default: true
-  plexoncrates.history:
-    description: Review personal opening history.
-    default: true
-  plexoncrates.claim:
-    description: Deliver durable exact-item Claim Inbox entries.
-    default: true
-  plexoncrates.milestones:
-    description: View durable milestone progress for published crates.
-    default: true
-  plexoncrates.rerolls:
-    description: View the current reroll-token balance.
     default: true
   plexoncrates.admin:
-    description: All PlexonCrates administration features.
     default: op
     children:
       plexoncrates.admin.gui: true
-      plexoncrates.admin.crates: true
+      plexoncrates.admin.link: true
+      plexoncrates.admin.break: true
       plexoncrates.admin.keys: true
       plexoncrates.admin.rewards: true
-      plexoncrates.admin.milestones: true
-      plexoncrates.admin.locations: true
-      plexoncrates.admin.give: true
-      plexoncrates.admin.rerolls: true
-      plexoncrates.admin.portable: true
       plexoncrates.admin.reload: true
-      plexoncrates.admin.backup: true
-      plexoncrates.admin.diagnose: true
-      plexoncrates.admin.migrate: true
-      plexoncrates.admin.takeover: true
-      plexoncrates.admin.protection-bypass: true
   plexoncrates.admin.gui:
-    description: Open the administrative dashboard.
     default: op
-  plexoncrates.admin.crates:
-    description: Create, edit, clone, publish, archive, and delete crate definitions.
+  plexoncrates.admin.link:
+    default: op
+  plexoncrates.admin.break:
     default: op
   plexoncrates.admin.keys:
-    description: Manage exact physical key definitions and provider discovery.
     default: op
   plexoncrates.admin.rewards:
-    description: Create and edit crate rewards.
-    default: op
-  plexoncrates.admin.milestones:
-    description: Create and edit cumulative exact-item milestone rewards.
-    default: op
-  plexoncrates.admin.locations:
-    description: Use the Link Wand and manage physical crate locations.
-    default: op
-  plexoncrates.admin.rerolls:
-    description: Grant, take, or set audited reroll-token balances.
-    default: op
-  plexoncrates.admin.portable:
-    description: Issue signed single-use portable crate items.
-    default: op
-  plexoncrates.admin.give:
-    description: Give exact keys and run explicit administrative openings.
     default: op
   plexoncrates.admin.reload:
-    description: Validate and atomically reload configuration.
-    default: op
-  plexoncrates.admin.backup:
-    description: Create consistent YAML and SQLite backups.
-    default: op
-  plexoncrates.admin.diagnose:
-    description: View detailed configuration and integration diagnostics.
-    default: op
-  plexoncrates.admin.migrate:
-    description: Scan, plan, validate, report, and confirm PhoenixCratesLite migrations.
-    default: op
-  plexoncrates.admin.takeover:
-    description: Confirm takeover of another administrator's writable draft lease.
-    default: op
-  plexoncrates.admin.protection-bypass:
-    description: Explicitly allow breaking protected linked crate blocks.
-    default: op
-  plexoncrates.bypass.key:
-    description: Open crates without consuming a key.
-    default: op
-  plexoncrates.bypass.cooldown:
-    description: Ignore crate opening cooldowns.
-    default: op
-  plexoncrates.bypass.limit:
-    description: Ignore per-player and global reward limits.
     default: op

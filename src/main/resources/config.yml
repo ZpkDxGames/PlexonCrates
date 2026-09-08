@@ -1,111 +1,62 @@
-# PlexonCrates 3.0.0 | Created by Tonim (ZpkDxGames)
-# Paper 26.2 / Java 25. All text uses MiniMessage, never legacy & colors.
-config-version: 3
+# PlexonCrates 4.0
+# Global engine configuration. Crates, rewards, key items and locations live in crates.yml.
+
+plugin:
+  # Prefix used by command and system messages. '&' color codes are supported.
+  prefix: "&8[&6PlexonCrates&8] &r"
+  locale: "en_US"
+  debug: false
 
 database:
-  # Mutable links, statistics, limits, pity, history, journals, drafts, and audit data.
-  file: data/plexoncrates.db
-  maximum-queued-writes: 4096
-  shutdown-timeout-seconds: 8
-
-settings:
-  enabled: true
-  # [] allows every world. Exclusions always take priority.
-  worlds: [Survival_World, Survival_World_nether, Survival_World_the_end]
-  excluded-worlds: []
-  # Reward items that do not fit are safely dropped at the player's feet.
-  drop-overflow-items: true
-  # Maximum number of keys consumed by one sneak-right-click or command.
-  maximum-bulk-open: 64
-  # Save dirty statistics on a lightweight interval and again on shutdown.
-  statistics-save-seconds: 300
-
-# Every module ships in this JAR. These switches hide gameplay controls while
-# preserving configured definitions and durable player state.
-features:
-  milestones: true
-  rerolls: true
-  mass-opening: true
-  claim-inbox: true
-  virtual-key-wallet: false
-  selective-opening: true
-  alternative-rewards: true
-  portable-crates: true
-
-plexonkeys:
-  enabled: true
-  plugin-name: PlexonKeys
-  # LIVE_FIRST reads PlexonKeys' current CONFIG or CAPTURED templates directly.
-  # If PlexonKeys is absent or unavailable, keys.yml is used automatically.
-  mode: LIVE_FIRST
-  fallback-file: keys.yml
-
-interaction:
-  # Offhand keys are ignored by default to prevent surprising consumption.
-  consume-offhand-keys: false
-  left-click-preview: true
-  right-click-open: true
-  sneak-right-click-bulk: true
-  cancel-vanilla-block-use: true
-  maximum-target-distance: 8
+  # SQLite is intentionally local and self-contained.
+  file: "data/plexoncrates.db"
+  # Number of background workers used for database reads/writes.
+  pool-size: 2
+  # SQLite busy timeout in milliseconds.
+  busy-timeout-ms: 5000
 
 opening:
-  animation-enabled: true
-  default-animation: ROULETTE
-  # Optional exact overflow policy: REJECT, DROP, CLAIM, or CLAIM_ALL. If omitted,
-  # settings.drop-overflow-items keeps the 2.0-compatible DROP/REJECT behavior.
-  # overflow: CLAIM
-  bulk-summary-threshold: 5
-  # MANUAL_REVIEW never blindly reruns command rewards after a crash.
-  recovery-policy: MANUAL_REVIEW
-  animation-duration-ticks: 54
-  animation-period-ticks: 2
-  opening-sound: minecraft:block.note_block.hat
-  finish-sound: minecraft:entity.player.levelup
-  sound-volume: 0.8
-  sound-pitch: 1.1
+  # Prevents a player from starting a second opening while an animation is active.
+  one-at-a-time: true
+  # Opening animation duration. Individual animation implementations may use this as a target.
+  duration-ticks: 100
+  # If true, a player closing an opening inventory has it reopened until the animation completes.
+  lock-inventory-during-animation: true
 
-holograms:
+keys:
+  # Virtual keys are stored in SQLite and shown in /crates.
+  virtual-enabled: true
+  # Physical keys are exact ItemStack matches against each crate key definition.
+  physical-enabled: true
+  # If true, right-clicking a physical crate while holding its exact key opens it.
+  physical-open-requires-held-key: true
+
+claims:
+  # Item rewards that do not fit in the inventory are stored as durable claims.
   enabled: true
-  vertical-offset: 1.65
-  view-range: 32.0
-  line-width: 240
-  shadowed: true
-  see-through: false
+  # Maximum claims shown per GUI page.
+  page-size: 45
 
-particles:
+effects:
   enabled: true
-  type: END_ROD
-  interval-ticks: 20
-  count: 3
-  horizontal-spread: 0.32
-  vertical-spread: 0.18
-  view-range: 32.0
+  # Tick interval for ambient effects. 4-10 is recommended.
+  idle-interval-ticks: 5
+  # Maximum linked crate blocks rendered per idle pass.
+  max-blocks-per-pass: 64
+  sounds-enabled: true
+  particles-enabled: true
 
-editing:
-  input-timeout-seconds: 60
-  session-timeout-minutes: 30
-
-locations:
-  # [] inherits settings.worlds. Unsafe or temporary block types are rejected.
-  allowed-worlds: []
-  denied-materials:
-  - AIR
-  - CAVE_AIR
-  - VOID_AIR
-  - WATER
-  - LAVA
-  - FIRE
-  - SOUL_FIRE
-  - NETHER_PORTAL
-  - END_PORTAL
-  - END_GATEWAY
-
-integrations:
-  placeholderapi: true
-  vault: true
-
-logging:
-  console: true
-  file: true
-  date-format: dd/MM/yyyy HH:mm:ss
+messages:
+  no-permission: "&cYou do not have permission to do that."
+  player-only: "&cThis action can only be used by a player."
+  crate-not-found: "&cUnknown crate: &f%crate%"
+  already-opening: "&eYou already have a crate opening in progress."
+  no-key: "&cYou do not have a matching key for &f%crate%&c."
+  linked: "&aLinked this block to crate &f%crate%&a."
+  unlinked: "&aRemoved the crate link from this block."
+  tile-required: "&cPhysical crate blocks must support persistent block data (chest, barrel, shulker, etc.)."
+  reload-complete: "&aPlexonCrates configuration reloaded."
+  reward-added: "&aCaptured &f%item% &aas a reward for &f%crate%&a."
+  key-granted: "&aGranted &f%amount%x %crate% &avirtual key(s) to &f%player%&a."
+  claim-delivered: "&aClaim delivered."
+  claim-blocked: "&eFree some inventory space before claiming this reward."

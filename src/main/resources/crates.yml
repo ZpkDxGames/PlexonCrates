@@ -1,0 +1,154 @@
+# PlexonCrates 4.0 crate definitions.
+#
+# weight: integer probability weight. Displayed chance = reward weight / sum of enabled reward weights.
+# key.item: exact physical key template. CustomModelData is supported.
+# locations: linked tile-state blocks. Link new blocks in-game with /crates link <id>.
+# reward actions execute in listed order.
+#
+# Supported reward action types:
+#   ITEM    - gives the exact configured item snapshot (the reward icon if no action-specific item exists)
+#   COMMAND - console command; %player% and %crate% placeholders supported
+#   MESSAGE - sends a colored message to the winner
+#   SOUND   - plays a Bukkit Sound enum value to the winner
+
+crates:
+  vote:
+    enabled: true
+    display-name: "&a&lVote Crate"
+    description:
+      - "&7A reliable crate earned from voting."
+      - "&7Simple rewards with a fast roll."
+    icon:
+      material: CHEST
+      name: "&aVote Crate"
+      lore:
+        - "&7Right-click a linked crate to preview."
+    key:
+      display-name: "&aVote Key"
+      item:
+        material: TRIPWIRE_HOOK
+        amount: 1
+        name: "&a&lVote Key"
+        lore:
+          - "&7Opens the Vote Crate"
+        custom-model-data: 1001
+    animation: CSGO
+    idle-effect: HELIX
+    locations: []
+    rewards:
+      diamonds:
+        enabled: true
+        weight: 40
+        display-item:
+          material: DIAMOND
+          amount: 4
+          name: "&b4 Diamonds"
+        actions:
+          - type: ITEM
+          - type: MESSAGE
+            value: "&aYou won &b4 Diamonds&a!"
+          - type: SOUND
+            value: "ENTITY_EXPERIENCE_ORB_PICKUP"
+      emeralds:
+        enabled: true
+        weight: 35
+        display-item:
+          material: EMERALD
+          amount: 8
+          name: "&a8 Emeralds"
+        actions:
+          - type: ITEM
+      golden-apples:
+        enabled: true
+        weight: 20
+        display-item:
+          material: GOLDEN_APPLE
+          amount: 2
+          name: "&62 Golden Apples"
+        actions:
+          - type: ITEM
+      announcement:
+        enabled: true
+        weight: 5
+        display-item:
+          material: NETHER_STAR
+          amount: 1
+          name: "&e&lLucky Star"
+          lore:
+            - "&7Rare Vote Crate reward."
+        actions:
+          - type: ITEM
+          - type: COMMAND
+            value: "broadcast &e%player% found a Lucky Star in the Vote Crate!"
+          - type: SOUND
+            value: "ENTITY_PLAYER_LEVELUP"
+
+  mythic:
+    enabled: true
+    display-name: "&d&lMythic Crate"
+    description:
+      - "&7High-end prizes and dramatic effects."
+    icon:
+      material: ENDER_CHEST
+      name: "&dMythic Crate"
+    key:
+      display-name: "&dMythic Key"
+      item:
+        material: TRIPWIRE_HOOK
+        amount: 1
+        name: "&d&lMythic Key"
+        lore:
+          - "&7Opens the Mythic Crate"
+        custom-model-data: 2001
+    animation: WHEEL
+    idle-effect: FOUNTAIN
+    locations: []
+    rewards:
+      netherite:
+        enabled: true
+        weight: 45
+        display-item:
+          material: NETHERITE_INGOT
+          amount: 2
+          name: "&82 Netherite Ingots"
+        actions:
+          - type: ITEM
+      beacon:
+        enabled: true
+        weight: 30
+        display-item:
+          material: BEACON
+          amount: 1
+          name: "&bBeacon"
+        actions:
+          - type: ITEM
+          - type: SOUND
+            value: "BLOCK_BEACON_ACTIVATE"
+      mythic-sword:
+        enabled: true
+        weight: 20
+        display-item:
+          material: NETHERITE_SWORD
+          amount: 1
+          name: "&d&lMythic Sword"
+          lore:
+            - "&7A premium showcase reward."
+        actions:
+          - type: ITEM
+          - type: MESSAGE
+            value: "&dYou pulled the Mythic Sword!"
+          - type: COMMAND
+            value: "broadcast &d%player% won a Mythic Sword!"
+          - type: SOUND
+            value: "ENTITY_PLAYER_LEVELUP"
+      dragon-egg:
+        enabled: true
+        weight: 5
+        display-item:
+          material: DRAGON_EGG
+          amount: 1
+          name: "&5&lDragon Egg"
+        actions:
+          - type: ITEM
+          - type: COMMAND
+            value: "broadcast &5%player% hit the 5% Dragon Egg reward!"

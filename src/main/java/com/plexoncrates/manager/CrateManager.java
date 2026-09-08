@@ -144,6 +144,50 @@ public final class CrateManager {
         return create(id);
     }
 
+    /**
+     * Atomically installs a batch of externally migrated crate definitions.
+     *
+     * <p>The method is intentionally conflict-strict: an existing crate ID or occupied physical
+     * location aborts the entire batch before any in-memory state is changed. Imported definitions
+     * are copied before installation so callers cannot mutate the registry after the fact.</p>
+     */
+    public CompletableFuture<Void> installImportedCrates(Collection<Crate> imported) {
+        if (imported == null || imported.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        CompletableFuture<Void> save;
+        lock.writeLock().lock();
+        try {
+            Map<String, Crate> prepared = new LinkedHashMap<>();
+            Map<String, String> occupied = new LinkedHashMap<>(locationIndex);
+
+            for (Crate source : imported) {
+                if (source == null) throw new IllegalArgumentException("Imported crate cannot be null");
+                Crate crate = source.copy();
+                String id = normalizeId(crate.id());
+                if (crates.containsKey(id) || prepared.containsKey(id)) {
+                    throw new IllegalStateException("Imported crate ID already exists: " + id);
+                }
+                for (CrateLocation location : crate.locations()) {
+                    String existing = occupied.putIfAbsent(location.key(), id);
+                    if (existing != null && !existing.equals(id)) {
+                        throw new IllegalStateException("Imported location " + location.key()
+                                + " is already assigned to " + existing);
+                    }
+                }
+                prepared.put(id, crate);
+            }
+
+            crates.putAll(prepared);
+            rebuildLocationIndex();
+            save = saveAsync();
+        } finally {
+            lock.writeLock().unlock();
+        }
+        return save;
+    }
+
     public Reward addCapturedReward(String crateId, ItemStack source, int weight) {
         if (source == null || source.getType().isAir()) throw new IllegalArgumentException("A real item is required");
         lock.writeLock().lock();
@@ -341,10 +385,16 @@ public final class CrateManager {
     private Crate parseCrate(String rawId, ConfigurationSection section) {
         if (section == null) throw new IllegalArgumentException("Missing crate section");
         String id = normalizeId(rawId);
+        boolean enabled = section.getBoolean("enabled", true);
+        String displayName = section.getString("display-name", "&6" + title(id) + " Crate");
+        List<String> description = section.getStringList("description");
         ItemStack icon = ItemCodec.read(section.getConfigurationSection("icon"));
+
         ConfigurationSection key = section.getConfigurationSection("key");
         if (key == null) throw new IllegalArgumentException("Missing key configuration");
+        String keyDisplayName = key.getString("display-name", "&6" + title(id) + " Key");
         ItemStack keyItem = ItemCodec.read(key.getConfigurationSection("item"));
+
         List<Reward> rewards = new ArrayList<>();
         ConfigurationSection rewardRoot = section.getConfigurationSection("rewards");
         if (rewardRoot != null) {
@@ -359,6 +409,7 @@ public final class CrateManager {
                         Math.max(0, rewardSection.getInt("weight", 1)), displayItem, actions));
             }
         }
+
         List<CrateLocation> locations = new ArrayList<>();
         for (Map<?, ?> map : section.getMapList("locations")) {
             try {
@@ -372,9 +423,8 @@ public final class CrateManager {
                 plugin.getLogger().warning("Ignoring malformed location in crate " + id + ": " + error.getMessage());
             }
         }
-        return new Crate(id, section.getBoolean("enabled", true),
-                section.getString("display-name", "&6" + title(id) + " Crate"), section.getStringList("description"), icon,
-                key.getString("display-name", "&6" + title(id) + " Key"), keyItem,
+
+        return new Crate(id, enabled, displayName, description, icon, keyDisplayName, keyItem,
                 section.getString("animation", "CSGO"), section.getString("idle-effect", "HELIX"), rewards, locations);
     }
 
@@ -382,8 +432,8 @@ public final class CrateManager {
         List<RewardAction> actions = new ArrayList<>();
         for (Map<?, ?> map : maps) {
             try {
-                RewardActionType type = RewardActionType.valueOf(String.valueOf(
-                        map.containsKey("type") ? map.get("type") : "ITEM").toUpperCase(Locale.ROOT));
+                RewardActionType type = RewardActionType.valueOf(
+                        String.valueOf(map.containsKey("type") ? map.get("type") : "ITEM").toUpperCase(Locale.ROOT));
                 String value = String.valueOf(map.containsKey("value") ? map.get("value") : "");
                 ItemStack item = null;
                 Object encoded = map.get("item-base64");
@@ -408,14 +458,19 @@ public final class CrateManager {
             yaml.set(path + ".key.item.base64", ItemCodec.encode(crate.keyItem()));
             yaml.set(path + ".animation", crate.animation());
             yaml.set(path + ".idle-effect", crate.idleEffect());
+
             List<Map<String, Object>> locations = new ArrayList<>();
             for (CrateLocation location : crate.locations()) {
                 Map<String, Object> map = new LinkedHashMap<>();
                 if (location.worldId() != null) map.put("world-uuid", location.worldId().toString());
-                map.put("world", location.worldName()); map.put("x", location.x()); map.put("y", location.y()); map.put("z", location.z());
+                map.put("world", location.worldName());
+                map.put("x", location.x());
+                map.put("y", location.y());
+                map.put("z", location.z());
                 locations.add(map);
             }
             yaml.set(path + ".locations", locations);
+
             for (Reward reward : crate.rewards()) {
                 String rewardPath = path + ".rewards." + reward.id();
                 yaml.set(rewardPath + ".enabled", reward.enabled());

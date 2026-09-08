@@ -2,6 +2,8 @@
 
 PlexonCrates 4.0 is a ground-up Paper rewrite focused on GUI-first crate management, exact-item rewards, virtual and physical keys, low-overhead effects, and non-blocking persistence.
 
+This branch is the isolated 4.0 revamp line; the previous 3.0 implementation remains preserved on its own branch.
+
 ## Runtime targets
 
 - Paper 1.20.x through 1.21.x

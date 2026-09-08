@@ -20,9 +20,10 @@ import java.util.Set;
  * Startup compatibility guard for databases created by pre-4.0 PlexonCrates builds.
  *
  * <p>Older releases used some of the same SQLite table names with different columns. SQLite's
- * {@code CREATE TABLE IF NOT EXISTS} cannot upgrade an existing table, so 4.0 must detect these
- * structural collisions before {@link DatabaseManager} creates its schema. Incompatible tables are
- * renamed in-place and kept as read-only legacy backups; compatible 4.0 tables are never touched.</p>
+ * {@code CREATE TABLE IF NOT EXISTS} cannot upgrade an existing table, so 4.0 detects structural
+ * collisions before {@link DatabaseManager} creates its schema. Incompatible tables are renamed
+ * in-place and retained as read-only legacy backups. A consistent SQLite backup is created before
+ * any structural repair.</p>
  */
 public final class DatabaseCompatibility {
     private static final Map<String, Set<String>> REQUIRED_COLUMNS = requiredColumns();
@@ -35,14 +36,19 @@ public final class DatabaseCompatibility {
     private DatabaseCompatibility() {}
 
     public static void prepare(PlexonCrates plugin, ConfigManager config) throws Exception {
-        Path database = plugin.getDataFolder().toPath().resolve(config.databaseFile()).normalize();
-        if (!Files.isRegularFile(database)) return;
+        Path database = plugin.getDataFolder().toPath().resolve(config.databaseFile()).toAbsolutePath().normalize();
+        Path parent = database.getParent();
+        if (parent != null) Files.createDirectories(parent);
 
         Class.forName("org.sqlite.JDBC");
         try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + database)) {
             try (Statement pragma = connection.createStatement()) {
                 pragma.execute("PRAGMA busy_timeout=" + config.busyTimeoutMillis());
+                pragma.execute("PRAGMA foreign_keys=ON");
             }
+
+            DatabaseSchemaVersion.ensureMetaTable(connection);
+            DatabaseSchemaVersion.requireSupported(connection);
 
             Map<String, Set<String>> incompatible = new LinkedHashMap<>();
             for (Map.Entry<String, Set<String>> entry : REQUIRED_COLUMNS.entrySet()) {
@@ -52,10 +58,11 @@ public final class DatabaseCompatibility {
             }
             if (incompatible.isEmpty()) return;
 
+            Path backup = createConsistentBackup(connection, plugin, database);
+            plugin.getLogger().warning("Created pre-upgrade SQLite backup: " + backup);
+
             connection.setAutoCommit(false);
             try {
-                // Index names are global in SQLite. Remove only indexes owned by PlexonCrates so the
-                // new 4.0 tables can recreate them after legacy tables have been renamed.
                 try (Statement statement = connection.createStatement()) {
                     for (String index : OWNED_INDEXES) {
                         statement.execute("DROP INDEX IF EXISTS " + quoteIdentifier(index));
@@ -104,6 +111,24 @@ public final class DatabaseCompatibility {
             }
         }
         return Map.copyOf(result);
+    }
+
+    private static Path createConsistentBackup(Connection connection, PlexonCrates plugin, Path database) throws Exception {
+        Path root = plugin.getDataFolder().toPath().resolve("backups/schema").toAbsolutePath().normalize();
+        Files.createDirectories(root);
+        Path backup = root.resolve("schema-before-v" + DatabaseSchemaVersion.CURRENT_VERSION + "-"
+                + System.currentTimeMillis() + ".db").normalize();
+        if (!backup.startsWith(root)) throw new IllegalStateException("Schema backup path escaped backup directory");
+        if (Files.exists(backup)) throw new IllegalStateException("Schema backup target already exists: " + backup);
+
+        String escaped = backup.toString().replace("'", "''");
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("VACUUM INTO '" + escaped + "'");
+        }
+        if (!Files.isRegularFile(backup) || Files.size(backup) == 0L) {
+            throw new IllegalStateException("SQLite pre-upgrade backup was not created correctly for " + database);
+        }
+        return backup;
     }
 
     private static boolean tableExists(Connection connection, String table) throws Exception {

@@ -4,6 +4,7 @@ import com.plexoncrates.command.CrateCommand;
 import com.plexoncrates.config.ConfigManager;
 import com.plexoncrates.database.DatabaseCompatibility;
 import com.plexoncrates.database.DatabaseManager;
+import com.plexoncrates.database.DatabaseSchemaVersion;
 import com.plexoncrates.listener.BlockProtectionListener;
 import com.plexoncrates.listener.InventoryListener;
 import com.plexoncrates.listener.PlayerInteractListener;
@@ -41,7 +42,7 @@ public final class PlexonCrates extends JavaPlugin {
 
             // Pre-4.0 releases used several identical SQLite table names with different schemas.
             // Preserve incompatible tables under *_legacy_pre4 names before the 4.0 initializer
-            // creates its own schema. This is a small, startup-only metadata/DDL compatibility pass.
+            // creates its own schema. Structural repairs create a consistent pre-upgrade backup.
             DatabaseCompatibility.prepare(this, configManager);
 
             asyncExecutor = new AsyncExecutor(configManager.databasePoolSize() + 1);
@@ -62,7 +63,19 @@ public final class PlexonCrates extends JavaPlugin {
             animations.startIdleEffects();
 
             database.ready().whenComplete((ignored, error) -> {
-                if (error != null) getLogger().log(Level.SEVERE, "Database initialization failed", error);
+                if (error != null) {
+                    getLogger().log(Level.SEVERE, "Database initialization failed", error);
+                    return;
+                }
+                try {
+                    DatabaseSchemaVersion.markCurrent(
+                            getDataFolder().toPath().resolve(configManager.databaseFile()).normalize(),
+                            getDescription().getVersion(),
+                            configManager.busyTimeoutMillis());
+                    getLogger().info("SQLite schema version " + DatabaseSchemaVersion.CURRENT_VERSION + " is active.");
+                } catch (Exception schemaError) {
+                    getLogger().log(Level.SEVERE, "Could not persist SQLite schema version metadata", schemaError);
+                }
             });
 
             getLogger().info("PlexonCrates " + getDescription().getVersion()

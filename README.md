@@ -5,22 +5,27 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/ZpkDxGames/PlexonCrates/build.yml?branch=main&style=for-the-badge&label=Build)](https://github.com/ZpkDxGames/PlexonCrates/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/ZpkDxGames/PlexonCrates?style=for-the-badge)](https://github.com/ZpkDxGames/PlexonCrates/releases/latest)
 
-PlexonCrates 2.0 is a safe, GUI-first crate system created by **Tonim (ZpkDxGames)** for Paper and the Plexon plugin family. It combines exact physical keys, guided crate/reward editing, protected world links, journaled openings, persistent limits and pity, and readable YAML definitions without requiring a framework plugin.
+PlexonCrates 3.0 is the active development line of the safe, GUI-first crate system created by **Tonim (ZpkDxGames)** for Paper and the Plexon plugin family. It combines exact physical keys, percentage-first rewards, guided crate editing, protected world links, journaled openings, persistent limits and pity, and portable definitions without requiring a framework plugin.
 
 This is an independent implementation inspired by the usability goals and feature concepts of [ExcellentCrates](https://github.com/nulli0n/ExcellentCrates-spigot). No ExcellentCrates source code is included or modified.
 
-## 2.0 highlights
+## Highlights
 
 - Four zero-setup defaults: `basic`, `rare`, `epic`, and `legendary`, with 32 bundled rewards.
 - Live PlexonKeys `CONFIG` and `CAPTURED` templates, last-known-good caching, exact fallbacks, and controlled legacy templates.
 - Exact item matching that preserves PDC, custom metadata, components, enchantments, lore, names, and other Bukkit item data.
 - Non-destructive drag/cursor capture for custom keys, crate icons, and reward items.
-- Persistent crate drafts with publish validation, cloning, search, archive/delete confirmation, and safe YAML import/export.
+- Exact `0.01%` base chances backed by a 10,000-ticket allocator, automatic proportional rebalancing, and eligible-pool normalization.
+- Versioned SQLite crate drafts with ordered autosaves, forward undo, visible save health, single-writer leases, confirmed takeover, publish validation, cloning, search, and safe import/export.
+- Atomic definition publication into normalized SQLite rows plus a revisioned immutable runtime snapshot; unpublished edits never reach player browsing, linked blocks, displays, API lookups, or openings.
 - Item, console-command, experience, level, and Vault money actions in one reward bundle.
 - Permission filters, player/global lifetime and rolling-window limits, reward cooldowns, rarities, and deterministic pity guarantees.
 - `INSTANT`, `ROULETTE`, `REVEAL`, and `SUMMARY` presentation modes plus per-reward titles, sounds, particles, messages, and broadcasts.
 - Protected Link Wand workflow for unlimited physical blocks, native TextDisplay holograms, centralized particles, and safe unlinking.
 - Journal-first openings with immediate revalidation, per-player race locks, exact key accounting, immutable outcomes, SQLite history, and manual crash-review diagnostics.
+- Durable Claim Inbox entries for exact overflow/recovery delivery, typed virtual-key claims, and atomic reroll-token/virtual-key ledgers with idempotent mutations.
+- Deterministic milestone progression, reroll decision planning, mass-opening bounds, and alternative-reward validation.
+- HMAC-signed portable crate items with durable issuance, non-consuming preview confirmation, offline Claim Inbox delivery, restart-safe reservations, and single-use replay protection.
 - Atomic configuration reloads, consistent backups, administrative audit records, and reversible 1.0 migration.
 - Optional PlaceholderAPI and Vault integrations; no hard plugin dependency.
 
@@ -36,8 +41,8 @@ PlexonKeys, Vault, and PlaceholderAPI are soft dependencies. Bundled exact key f
 
 ## Fresh install
 
-1. Download `PlexonCrates-2.0.0.jar` and its checksum from [GitHub Releases](https://github.com/ZpkDxGames/PlexonCrates/releases/latest).
-2. Verify it with `sha256sum -c PlexonCrates-2.0.0.jar.sha256`.
+1. Download `PlexonCrates-3.0.0.jar` and its checksum from [GitHub Releases](https://github.com/ZpkDxGames/PlexonCrates/releases/latest).
+2. Verify it with `sha256sum -c PlexonCrates-3.0.0.jar.sha256`.
 3. Put the JAR in the server's `plugins` folder, preferably beside PlexonKeys.
 4. Start Paper once and review `plugins/PlexonCrates/config.yml`.
 5. Ensure `settings.worlds` contains the exact worlds where crates will be used, or set it to `[]` to allow every non-excluded world.
@@ -72,13 +77,19 @@ The key registry provides create, duplicate, import, provider sync, test-give, r
 | `/crates preview <crate>` | Preview the rewards this player can currently win and their recalculated chances |
 | `/crates open <crate> [amount]` | Open with exact physical keys from inventory |
 | `/crates history [page]` | Read recent persisted opening outcomes |
+| `/crates claim [page|id]` | Open and deliver durable exact-item claims |
+| `/crates keys` | View physical and optional virtual-key balances |
+| `/crates milestones <crate>` | View durable opening progress for a crate |
+| `/crates rerolls` | View the audited reroll-token balance |
 | `/crates help` | Show the player command summary |
 
 At a linked block, left-click previews, right-click opens one, and sneak-right-click requests a bounded bulk opening. Offhand keys are ignored by default. A bulk key bypass is clamped to one opening to prevent accidental free mass openings.
 
+Right-clicking an authentic portable crate opens a reward preview and explicit confirmation. Closing it consumes nothing. Confirmation rechecks the signature, issuance UUID, owner, state, and retained revision before reserving the issuance; duplicated or replayed items can deliver only once.
+
 ## Administration
 
-`/pcrates` opens the dashboard. The GUI supports persistent guided drafts, full reward editing, exact capture, key rotation, location inspection, statistics, validation, reload, backups, and diagnostics. Display items are never trusted as data; all actions resolve through server-side menu state.
+`/pcrates` opens the dashboard. The GUI supports persistent guided drafts, full reward editing, exact capture, key rotation, location inspection, statistics, validation, reload, backups, and diagnostics. Drafts load asynchronously and show `Loading`, `Saving`, `Publishing`, `Saved`, `Save failed`, or `Read only`; failed writes block further mutation until retried. Publishing freezes the durable revision, validates it, commits the complete normalized graph and audit entry in one SQLite transaction, and only then swaps the active runtime snapshot. A second administrator can inspect the current definition but must confirm a permission-gated takeover before editing. Every inventory has a server-owned session UUID and crate editors carry the exact draft UUID, revision, and lease token; superseded views and pre-takeover actions are rejected. Display items are never trusted as data; all actions resolve through server-side menu state.
 
 | Command | Purpose |
 |---|---|
@@ -87,6 +98,7 @@ At a linked block, left-click previews, right-click opens one, and sneak-right-c
 | `/pcrates clone <crate> <new-id>` | Clone a definition as a draft |
 | `/pcrates import <file.yml> <new-id>` | Import `imports/file.yml` as a validated draft |
 | `/pcrates export <crate>` | Export a definition to `exports/<crate>.yml` |
+| `/pcrates publish <crate>` | Validate and atomically publish the latest durable draft revision |
 | `/pcrates delete <crate>` | Open destructive confirmation |
 | `/pcrates keys` | Open the physical-key registry |
 | `/pcrates keys sync` | Refresh PlexonKeys discovery and templates |
@@ -94,16 +106,19 @@ At a linked block, left-click previews, right-click opens one, and sneak-right-c
 | `/pcrates link <crate>` | Link the targeted block |
 | `/pcrates unlink` | Confirm unlinking the targeted block |
 | `/pcrates givekey <player> <key> [amount]` | Give the currently resolved exact key |
+| `/pcrates virtualgrant <player\|uuid> <key> <amount>` | Credit an audited virtual-key balance |
+| `/pcrates rerolls <give\|take\|set> <player\|uuid> <amount>` | Adjust an audited reroll-token balance |
+| `/pcrates portable give <player\|uuid> <crate> [amount]` | Issue distinct signed items; offline delivery uses the Claim Inbox |
 | `/pcrates open <player> <crate> [amount]` | Perform an explicit administrative keyless opening |
 | `/pcrates validate` | Validate configuration without activating it |
 | `/pcrates reload` | Validate and atomically activate a new snapshot |
 | `/pcrates backup` | Create a consistent YAML and SQLite backup |
 | `/pcrates status` | Show a concise runtime summary |
-| `/pcrates diagnose` | Show provider, schema, collision, queue, location, draft, and journal details |
+| `/pcrates diagnose` | Show provider, schema, collision, queue, journal, Claim Inbox, and portable-signer/issuance health |
 
-Compatibility editing commands remain available: `/pcrates set`, `unset`, `additem`, `addcommand`, `remove`, `weight`, and `save`.
+Compatibility editing commands remain available: `/pcrates set`, `unset`, `additem`, `addcommand`, `remove`, `chance`, and `save`. The old `/pcrates weight` spelling remains a deprecated alias during 3.x.
 
-In the Crates menu, shift-left-click a crate to export it. Imported definitions must be 2.0 YAML and always enter the `DRAFT` state under a new safe ID; publishing performs the normal key/reward checks.
+In the Crates menu, shift-left-click a crate to export it. Imported version 2 or 3 definitions always enter the `DRAFT` state under a new safe ID; publishing performs the normal key/reward checks.
 
 ## Permissions
 
@@ -120,8 +135,10 @@ In the Crates menu, shift-left-click a crate to export it. Imported definitions 
 | `plexoncrates.admin.rewards` | OP | Create, edit, reorder, test, copy, and remove rewards |
 | `plexoncrates.admin.locations` | OP | Use the Link Wand and manage locations |
 | `plexoncrates.admin.give` | OP | Give keys and request administrative openings |
+| `plexoncrates.admin.portable` | OP | Issue signed single-use portable crate items |
 | `plexoncrates.admin.reload` | OP | Validate, reload, and flush statistics |
 | `plexoncrates.admin.backup` | OP | Create backups |
+| `plexoncrates.admin.takeover` | OP | Confirm takeover of another administrator's writable draft lease |
 | `plexoncrates.admin.diagnose` | OP | View detailed diagnostics |
 | `plexoncrates.admin.protection-bypass` | OP | Break a protected linked block intentionally |
 | `plexoncrates.bypass.key` | OP | Open without a key; bulk is still clamped to one |
@@ -135,23 +152,23 @@ Each crate can require its own permission. Each reward can independently require
 | Path | Responsibility |
 |---|---|
 | `config.yml` | Runtime, database, interaction, opening, visual, integration, and logging settings |
-| `keys.yml` | Provider-backed and plugin-owned exact physical-key definitions |
+| `keys.yml` | Current compatibility/import mirror for provider-backed and plugin-owned exact keys |
 | `menus.yml` | Configurable inventory layouts, slots, icons, names, and lore |
 | `messages.yml` | MiniMessage feedback |
-| `crates/*.yml` | Versioned crate and reward definitions |
-| `data/plexoncrates.db` | Links, statistics, limits, pity, history, journals, drafts, template cache, migration markers, and audit data |
+| `crates/*.yml` | Compatibility/import-export mirrors for editable crate definitions |
+| `data/plexoncrates.db` | Canonical published definitions, normalized rewards/actions/exact items/keys, drafts, links, statistics, limits, pity, milestones, ledgers, claims, portable issuance, history, journals, migrations, and audit data |
 | `imports/` / `exports/` | Deliberate crate-definition transfer boundary |
 | `backups/` | Automatic migration and manual consistent backups |
 | `logs/openings-YYYY-MM-DD.log` | Optional human-readable opening log |
 
-SQLite writes use one bounded worker. World interaction, GUI clicks, animations, and reward selection do not perform synchronous database I/O.
+SQLite is the canonical mutable definition and recovery store; YAML remains a deliberate import/export mirror. SQLite writes use one bounded worker. World interaction, GUI clicks, animations, and reward selection do not perform synchronous database I/O.
 
 ## Crate and reward definitions
 
-Weights are relative. A player sees percentages calculated only from enabled rewards they are currently eligible to receive. Limits can be omitted or set to `0` for unlimited behavior.
+Base chances are stored as integer basis points (`10,000 = 100.00%`). For each player, the currently eligible subset is renormalized into exactly 10,000 unbiased integer tickets. Limits can be omitted or set to `0` for unlimited behavior. Version 2 relative weights are converted with stable largest-remainder allocation when imported or edited.
 
 ```yaml
-config-version: 2
+config-version: 3
 id: vote
 state: PUBLISHED
 display-order: 50
@@ -175,7 +192,7 @@ rewards:
     enabled: true
     display-name: <aqua><bold>Custom Drill</bold></aqua>
     rarity: EPIC
-    weight: 5
+    chance-basis-points: 500
     required-permission: ''
     blocked-permission: ''
     limits:
@@ -213,9 +230,11 @@ Opening history, statistics, limits, pity state, and journal completion are comm
 
 Closing an animation or disconnecting after delivery cannot remove or duplicate the already-frozen outcome. Cosmetic failures are logged without undoing delivery.
 
+Portable openings join the same journal after their signed issuance is reserved. Failed preconditions and shutdown release pre-consumption reservations; startup also releases interrupted reservations. Once an issuance is consumed, copies remain invalid. The local HMAC secret persists in SQLite, and startup refuses to silently generate a replacement while outstanding issuances exist.
+
 ## Public API and events
 
-Other plugins can obtain `com.antondev.crates.api.PlexonCratesApi` from Bukkit's services manager. The API returns immutable snapshots and can query crates/keys or request a validated opening.
+Other plugins can obtain `com.antondev.crates.api.PlexonCratesApi` from Bukkit's services manager. The API returns only immutable published definitions, exposes global/per-crate snapshot revisions, and can query crates/keys or request a validated opening.
 
 Primary-thread Bukkit events:
 
@@ -225,6 +244,8 @@ Primary-thread Bukkit events:
 - `CrateOpenEvent` — after delivery succeeds;
 - `CrateLinkEvent` and `CrateUnlinkEvent` — cancellable before persistence;
 - `CrateDefinitionChangeEvent` — after a crate is created, updated, published, disabled, archived, or deleted.
+- `CrateDraftPublishEvent` — cancellable after full validation and before the atomic definition transaction;
+- `PortableCrateUseEvent` — cancellable after token/owner validation and before issuance reservation or item consumption.
 
 ## Build and test
 
@@ -232,7 +253,7 @@ Primary-thread Bukkit events:
 mvn --batch-mode --no-transfer-progress clean verify
 ```
 
-Build with Java 25. The shaded artifact is `target/PlexonCrates-2.0.0.jar`; SQLite is bundled, while Paper and optional plugin APIs remain provided dependencies. See [TESTING.md](TESTING.md) for automated coverage and the real-server acceptance checklist.
+Build with Java 25. During 3.0 development the shaded artifact is `target/PlexonCrates-3.0.0-SNAPSHOT.jar`; SQLite is bundled, while Paper and optional plugin APIs remain provided dependencies. See [TESTING.md](TESTING.md) for automated coverage and the real-server acceptance checklist.
 
 ## License and authorship
 

@@ -68,7 +68,7 @@ public final class DisplayService {
         BlockPosition position = link.position();
         World world = position.loadedWorld();
         if (world == null || !world.isChunkLoaded(position.x() >> 4, position.z() >> 4)) return;
-        Crate crate = plugin.crates().find(link.crateId()).orElse(null);
+        Crate crate = plugin.runtime().find(link.crateId()).orElse(null);
         if (crate == null || !crate.enabled() || holograms.containsKey(position.key())) return;
         Location location = position.center(plugin.settings().hologramOffset());
         if (location == null) return;
@@ -109,7 +109,7 @@ public final class DisplayService {
             BlockPosition position = link.position();
             World world = position.loadedWorld();
             if (world == null || !world.isChunkLoaded(position.x() >> 4, position.z() >> 4)) continue;
-            Crate crate = plugin.crates().find(link.crateId()).orElse(null);
+            Crate crate = plugin.runtime().find(link.crateId()).orElse(null);
             if (crate == null || !crate.enabled()) continue;
             Location center = position.center(1.12);
             if (center == null || !hasNearbyPlayer(world, center, rangeSquared)) continue;

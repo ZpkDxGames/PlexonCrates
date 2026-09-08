@@ -3,9 +3,14 @@ package com.antondev.crates;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
+import com.antondev.crates.config.Text;
 import com.antondev.crates.domain.reward.RewardPresentation;
+import com.antondev.crates.gui.GuiSessionService;
 import com.antondev.crates.gui.MenuHolder;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,7 +25,11 @@ import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryAction;
+import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import org.junit.jupiter.api.AfterEach;
@@ -90,14 +99,83 @@ class AdministrationIntegrationTest {
     }
 
     @Test
+    void rewardPoolMultiSlotDragCapturesExactlyOnceWithoutChangingTheSource() {
+        var player = server.addPlayer("PoolDragEditor");
+        player.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+        plugin.menus().openRewards(player, crate, 0);
+        awaitDraft(player, crate.id());
+        MenuHolder holder = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+        List<Integer> slots = plugin.menusConfig().slots("reward-pool.reward-slots");
+        ItemStack original = exactReward(Material.NETHER_STAR, 7);
+        byte[] before = original.serializeAsBytes();
+
+        var targets = new LinkedHashMap<Integer, ItemStack>();
+        targets.put(slots.getFirst(), original.clone()); // occupied
+        targets.put(slots.get(10), original.clone()); // empty
+        targets.put(slots.get(11), original.clone()); // empty
+        InventoryDragEvent drag = new InventoryDragEvent(player.getOpenInventory(), null,
+                original, false, targets);
+        plugin.menus().drag(drag);
+
+        var updated = plugin.crates().find("basic").orElseThrow();
+        var captured = updated.rewards().values().stream()
+                .filter(reward -> reward.id().startsWith("nether_star_")).toList();
+        assertTrue(drag.isCancelled());
+        assertEquals(1, captured.size());
+        assertEquals(7, captured.getFirst().itemCopies().getFirst().getAmount());
+        assertTrue(captured.getFirst().itemCopies().getFirst().isSimilar(original));
+        assertEquals(10_000, updated.rewards().values().stream()
+                .filter(reward -> reward.enabled()).mapToInt(reward -> reward.chanceBasisPoints()).sum());
+        assertEquals(7, original.getAmount());
+        assertArrayEquals(before, original.serializeAsBytes());
+        assertEquals(MenuHolder.Kind.REWARDS,
+                ((MenuHolder) player.getOpenInventory().getTopInventory().getHolder()).kind());
+    }
+
+    @Test
+    void rewardPoolCursorAndShiftCaptureAreCopyOnly() {
+        var player = server.addPlayer("PoolClickEditor");
+        player.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+        List<Integer> slots = plugin.menusConfig().slots("reward-pool.reward-slots");
+
+        ItemStack cursorSource = exactReward(Material.DIAMOND_SWORD, 1);
+        byte[] cursorBefore = cursorSource.serializeAsBytes();
+        plugin.menus().openRewards(player, crate, 0);
+        awaitDraft(player, crate.id());
+        player.setItemOnCursor(cursorSource);
+        InventoryClickEvent cursorClick = new InventoryClickEvent(player.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, slots.get(8), ClickType.LEFT, InventoryAction.SWAP_WITH_CURSOR);
+        plugin.menus().click(cursorClick);
+        assertTrue(cursorClick.isCancelled());
+        assertArrayEquals(cursorBefore, cursorSource.serializeAsBytes());
+        assertEquals(9, plugin.crates().find("basic").orElseThrow().rewards().size());
+
+        ItemStack shiftSource = exactReward(Material.EMERALD, 13);
+        byte[] shiftBefore = shiftSource.serializeAsBytes();
+        player.getInventory().setItem(0, shiftSource);
+        InventoryClickEvent shiftClick = new InventoryClickEvent(player.getOpenInventory(),
+                InventoryType.SlotType.QUICKBAR, player.getOpenInventory().getTopInventory().getSize() + 27,
+                ClickType.SHIFT_LEFT, InventoryAction.MOVE_TO_OTHER_INVENTORY);
+        plugin.menus().click(shiftClick);
+        assertTrue(shiftClick.isCancelled());
+        assertArrayEquals(shiftBefore, shiftSource.serializeAsBytes());
+        assertEquals(13, player.getInventory().getItem(0).getAmount());
+        assertEquals(10, plugin.crates().find("basic").orElseThrow().rewards().size());
+    }
+
+    @Test
     void existingRewardCanBeFullyEditedAndReorderedThroughTheBuilder() throws Exception {
         var player = server.addPlayer("RewardEditor");
         player.setOp(true);
         var crate = plugin.crates().find("basic").orElseThrow();
         var original = crate.orderedRewards().getFirst();
+        plugin.adminMenus().ensureDraft(player, crate.id());
+        awaitDraft(player, crate.id());
         plugin.adminMenus().editReward(player, crate, original);
         var draft = plugin.editSessions().reward(player);
-        draft.weight(42.5);
+        draft.baseChancePercent(42.5);
         draft.toggleEnabled();
         draft.addCommand("say reward-editor-test");
         draft.presentation(new RewardPresentation("<gold>Winner</gold>", "<gray>Well done</gray>",
@@ -110,7 +188,7 @@ class AdministrationIntegrationTest {
         var updatedCrate = plugin.crates().find("basic").orElseThrow();
         var updated = updatedCrate.rewards().get(original.id());
         assertFalse(updated.enabled());
-        assertEquals(42.5, updated.weight());
+        assertEquals(0.0, updated.baseChancePercent());
         assertTrue(updated.commands().contains("say reward-editor-test"));
         assertEquals("minecraft:entity.player.levelup", updated.presentation().sound());
         assertTrue(updated.presentation().firework());
@@ -119,20 +197,468 @@ class AdministrationIntegrationTest {
     }
 
     @Test
-    void invalidReloadLeavesThePublishedRuntimeSnapshotUntouched() throws Exception {
+    void supersededInventorySessionCannotRouteItsServerSideActions() {
+        var player = server.addPlayer("SessionEditor");
+        player.setOp(true);
+
+        plugin.adminMenus().openDashboard(player);
+        MenuHolder stale = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+        plugin.adminMenus().openDashboard(player);
+        MenuHolder current = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+
+        assertNotEquals(stale.sessionId(), current.sessionId());
+        assertEquals(current.sessionId(), plugin.guiSessions().activeSession(player.getUniqueId()).orElseThrow());
+        assertEquals(GuiSessionService.Validation.SUPERSEDED_SESSION,
+                plugin.guiSessions().validate(player, stale, plugin.draftSessions()));
+
+        int crates = plugin.menusConfig().slot("admin.crates");
+        InventoryClickEvent delayed = new InventoryClickEvent(player.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, crates, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        plugin.adminMenus().handleClick(delayed, stale);
+
+        assertTrue(delayed.isCancelled());
+        assertSame(current, player.getOpenInventory().getTopInventory().getHolder());
+    }
+
+    @Test
+    void quickCreateGeneratesStableIdAndOpensTheDraftWithoutTextInput() {
+        var player = server.addPlayer("QuickCreator");
+        player.setOp(true);
+        int before = plugin.crates().all().size();
+        plugin.adminMenus().openCrates(player, 0);
+
+        player.simulateInventoryClick(player.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("crate-list.create"));
+
+        MenuHolder holder = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
+        assertEquals(MenuHolder.Kind.EDITOR, holder.kind());
+        assertTrue(holder.crateId().matches("crate_[0-9a-f]{8}"));
+        var created = plugin.crates().find(holder.crateId()).orElseThrow();
+        assertEquals(com.antondev.crates.domain.crate.CrateState.DRAFT, created.state());
+        assertTrue(Text.serialize(created.displayName()).contains("New Crate"));
+        assertEquals(before + 1, plugin.crates().all().size());
+        awaitDraft(player, holder.crateId());
+        assertTrue(plugin.draftSessions().view(player.getUniqueId(), holder.crateId()).orElseThrow().writable());
+    }
+
+    @Test
+    void matchingLeaseCanAdvanceButTakeoverLeavesThePreviousViewStale() throws Exception {
+        var first = server.addPlayer("LeaseOwner");
+        var second = server.addPlayer("LeaseTaker");
+        first.setOp(true);
+        second.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+
+        plugin.adminMenus().openCrateEditor(first, crate);
+        awaitDraft(first, crate.id());
+        MenuHolder firstHolder = (MenuHolder) first.getOpenInventory().getTopInventory().getHolder();
+        long before = firstHolder.revision();
+        plugin.crates().setDescription(crate.id(), List.of(Component.text("Revision advance")), first.getName());
+        plugin.adminMenus().saveDraftRevision(first, crate.id(), "IDENTITY", "Changed description");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var saved = plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow();
+        assertTrue(saved.revision() > before);
+        assertEquals(saved.revision(), firstHolder.revision());
+        assertEquals(GuiSessionService.Validation.CURRENT,
+                plugin.guiSessions().validate(first, firstHolder, plugin.draftSessions()));
+
+        plugin.adminMenus().openCrateEditor(second, plugin.crates().find(crate.id()).orElseThrow());
+        awaitDraft(second, crate.id());
+        second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("editor.takeover"));
+        second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("confirm-takeover.confirm"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var displaced = plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow();
+        assertFalse(displaced.writable());
+        assertNotEquals(displaced.leaseToken(), firstHolder.leaseToken());
+        assertEquals(GuiSessionService.Validation.STALE_DRAFT,
+                plugin.guiSessions().validate(first, firstHolder, plugin.draftSessions()));
+
+        int back = plugin.menusConfig().slot("editor.back");
+        InventoryClickEvent staleBack = new InventoryClickEvent(first.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, back, ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        plugin.adminMenus().handleClick(staleBack, firstHolder);
+        assertTrue(staleBack.isCancelled());
+        assertSame(firstHolder, first.getOpenInventory().getTopInventory().getHolder());
+    }
+
+    @Test
+    void secondAdministratorIsReadOnlyUntilConfirmedTakeover() {
+        var first = server.addPlayer("FirstEditor");
+        var second = server.addPlayer("SecondEditor");
+        first.setOp(true);
+        second.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+
+        plugin.adminMenus().openCrateEditor(first, crate);
+        awaitDraft(first, crate.id());
+        plugin.adminMenus().openCrateEditor(second, crate);
+        awaitDraft(second, crate.id());
+        assertTrue(plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow().writable());
+        assertFalse(plugin.draftSessions().view(second.getUniqueId(), crate.id()).orElseThrow().writable());
+
+        int before = crate.rewards().size();
+        plugin.menus().openRewards(second, crate, 0);
+        List<Integer> slots = plugin.menusConfig().slots("reward-pool.reward-slots");
+        ItemStack source = exactReward(Material.DIAMOND, 3);
+        second.setItemOnCursor(source);
+        InventoryClickEvent rejected = new InventoryClickEvent(second.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, slots.get(8), ClickType.LEFT, InventoryAction.SWAP_WITH_CURSOR);
+        plugin.menus().click(rejected);
+        assertEquals(before, plugin.crates().find(crate.id()).orElseThrow().rewards().size());
+
+        plugin.adminMenus().openCrateEditor(second, crate);
+        second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("editor.takeover"));
+        assertEquals(MenuHolder.Kind.CONFIRM_TAKEOVER,
+                ((MenuHolder) second.getOpenInventory().getTopInventory().getHolder()).kind());
+        second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("confirm-takeover.confirm"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        assertTrue(plugin.draftSessions().view(second.getUniqueId(), crate.id()).orElseThrow().writable());
+        assertFalse(plugin.draftSessions().view(first.getUniqueId(), crate.id()).orElseThrow().writable());
+    }
+
+    @Test
+    void draftEditsStayOutOfPlayerRuntimeUntilAtomicPublication() throws Exception {
+        var editor = server.addPlayer("Publisher");
+        editor.setOp(true);
+        var activeBefore = plugin.runtime().find("basic").orElseThrow();
+        long runtimeBefore = plugin.runtime().snapshot().revision();
+        Component changedName = Component.text("Unpublished draft name");
+
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setDisplayName("basic", changedName, editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "IDENTITY", "Changed display name");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        assertEquals(changedName, plugin.crates().find("basic").orElseThrow().displayName());
+        assertEquals(activeBefore.displayName(), plugin.runtime().find("basic").orElseThrow().displayName());
+
+        var future = plugin.definitionPublisher().publish(editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var publication = future.join();
+
+        assertEquals(changedName, plugin.runtime().find("basic").orElseThrow().displayName());
+        assertNotEquals(runtimeBefore, plugin.runtime().snapshot().revision());
+        assertEquals(2, publication.crateRevision());
+        assertTrue(publication.yamlMirrorUpdated());
+        assertTrue(plugin.draftSessions().view(editor.getUniqueId(), "basic").isEmpty());
+        var counts = plugin.definitionRepository().counts("basic").join();
+        assertEquals(8, counts.rewards());
+        assertTrue(counts.items() > 0);
+        assertTrue(counts.actions() >= counts.items());
+        assertEquals(1, counts.keyLinks());
+    }
+
+    @Test
+    void publicationPersistsOrderedMilestoneDefinitionsWithExactDisplayMetadata() throws Exception {
+        var editor = server.addPlayer("MilestonePublisher");
+        editor.setOp(true);
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setMilestone("basic", "first_preview", 3,
+                com.antondev.crates.service.MilestoneService.RepeatPolicy.ONCE, 0,
+                com.antondev.crates.service.MilestoneService.DeliveryPolicy.CLAIM,
+                "coal_cache", Component.text("First Preview"), new ItemStack(Material.CHEST),
+                true, editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "MILESTONE",
+                "Added first preview milestone");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var future = plugin.definitionPublisher().publish(editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        future.join();
+
+        var definitions = plugin.database().loadMilestoneDefinitions("basic").join();
+        assertEquals(1, definitions.size());
+        var definition = definitions.getFirst();
+        assertEquals("first_preview", definition.milestoneId());
+        assertEquals(3, definition.threshold());
+        assertEquals("ONCE", definition.repeatPolicy());
+        assertTrue(new String(definition.payload(), java.nio.charset.StandardCharsets.UTF_8)
+                .contains("reward-id: coal_cache"));
+        assertTrue(new String(definition.payload(), java.nio.charset.StandardCharsets.UTF_8)
+                .contains("preview-visible: true"));
+
+        var published = plugin.runtime().find("basic").orElseThrow();
+        plugin.menus().openPreview(editor, published, 0, false);
+        ItemStack open = editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("preview.open"));
+        String lore = open.getItemMeta().lore().stream().map(Text::serialize)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertTrue(lore.contains("Milestone progress"));
+        assertTrue(lore.contains("0 / 3"));
+    }
+
+    @Test
+    void milestoneEditorCreatesConfiguresAndDeletesWithoutTechnicalIdInput() throws Exception {
+        var editor = server.addPlayer("MilestoneEditor");
+        editor.setOp(true);
+        var crate = plugin.crates().find("basic").orElseThrow();
+        plugin.adminMenus().openCrateEditor(editor, crate);
+        awaitDraft(editor, crate.id());
+        int before = crate.milestones().size();
+
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("editor.milestones"));
+        assertEquals(MenuHolder.Kind.MILESTONES,
+                ((MenuHolder) editor.getOpenInventory().getTopInventory().getHolder()).kind());
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-list.create"));
+        MenuHolder selector = (MenuHolder) editor.getOpenInventory().getTopInventory().getHolder();
+        assertEquals(MenuHolder.Kind.MILESTONE_REWARD_SELECT, selector.kind());
+        int rewardSlot = plugin.menusConfig().slots("milestone-reward-select.reward-slots").stream()
+                .filter(slot -> selector.action(slot) != null).findFirst().orElseThrow();
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT, rewardSlot);
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        MenuHolder detail = (MenuHolder) editor.getOpenInventory().getTopInventory().getHolder();
+        assertEquals(MenuHolder.Kind.MILESTONE_DETAIL, detail.kind());
+        assertTrue(detail.rewardId().matches("milestone_[0-9a-f]{8}"));
+        var created = plugin.crates().find(crate.id()).orElseThrow().milestones()
+                .get(detail.rewardId());
+        assertEquals(before + 1, plugin.crates().find(crate.id()).orElseThrow().milestones().size());
+        assertEquals(com.antondev.crates.service.MilestoneService.RepeatPolicy.ONCE,
+                created.definition().repeatPolicy());
+        assertTrue(created.previewVisible());
+
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-detail.repeat"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var repeating = plugin.crates().find(crate.id()).orElseThrow().milestones().get(detail.rewardId());
+        assertEquals(com.antondev.crates.service.MilestoneService.RepeatPolicy.REPEATING,
+                repeating.definition().repeatPolicy());
+        assertEquals(repeating.threshold(), repeating.definition().cycleLength());
+
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-detail.delivery"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-detail.preview"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var configured = plugin.crates().find(crate.id()).orElseThrow().milestones().get(detail.rewardId());
+        assertEquals(com.antondev.crates.service.MilestoneService.DeliveryPolicy.AUTO_DELIVER,
+                configured.deliveryPolicy());
+        assertFalse(configured.previewVisible());
+
+        ItemStack source = exactReward(Material.RESPAWN_ANCHOR, 3);
+        byte[] beforeCapture = source.serializeAsBytes();
+        editor.setItemOnCursor(source);
+        int displaySlot = plugin.menusConfig().slot("milestone-detail.display");
+        InventoryClickEvent capture = new InventoryClickEvent(editor.getOpenInventory(),
+                InventoryType.SlotType.CONTAINER, displaySlot, ClickType.LEFT,
+                InventoryAction.SWAP_WITH_CURSOR);
+        plugin.adminMenus().handleClick(capture,
+                (MenuHolder) editor.getOpenInventory().getTopInventory().getHolder());
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertArrayEquals(beforeCapture, source.serializeAsBytes());
+        assertEquals(Material.RESPAWN_ANCHOR, plugin.crates().find(crate.id()).orElseThrow()
+                .milestones().get(detail.rewardId()).displayItem().getType());
+
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("milestone-detail.delete"));
+        assertEquals(MenuHolder.Kind.CONFIRM_MILESTONE_DELETE,
+                ((MenuHolder) editor.getOpenInventory().getTopInventory().getHolder()).kind());
+        editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
+                plugin.menusConfig().slot("confirm-milestone-delete.confirm"));
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertEquals(before, plugin.crates().find(crate.id()).orElseThrow().milestones().size());
+        assertEquals(MenuHolder.Kind.MILESTONES,
+                ((MenuHolder) editor.getOpenInventory().getTopInventory().getHolder()).kind());
+    }
+
+    @Test
+    void disabledOptionalModulesHideControlsButPreservePublishedDefinitions() throws Exception {
+        var editor = server.addPlayer("FeatureGatePublisher");
+        editor.setOp(true);
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setAlternativeReward("basic", "coal_cache", "iron_supplies",
+                java.util.Set.of(com.antondev.crates.service.AlternativeRewardResolver.Reason.PLAYER_LIMIT),
+                editor.getName());
+        plugin.crates().setRerollPolicy("basic",
+                com.antondev.crates.service.RerollService.Policy.recommended(), editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "FEATURES",
+                "Configured optional feature definitions");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var configFile = new java.io.File(plugin.getDataFolder(), "config.yml");
+        var config = org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(configFile);
+        config.set("features.claim-inbox", false);
+        config.set("features.mass-opening", false);
+        config.set("features.milestones", false);
+        config.set("features.rerolls", false);
+        config.set("features.alternative-rewards", false);
+        config.save(configFile);
+        assertTrue(plugin.reloadFor(editor));
+
+        var publication = plugin.definitionPublisher().publish(
+                editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var published = publication.join().crate();
+        assertTrue(published.rerolls().enabled());
+        assertEquals("iron_supplies", published.rewards().get("coal_cache").alternativeRewardId());
+        assertTrue(new String(plugin.database().loadRerollPolicy("basic").join().orElseThrow().payload(),
+                java.nio.charset.StandardCharsets.UTF_8).contains("enabled=true"));
+
+        plugin.menus().openBrowser(editor);
+        assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("browser.claims")).getType());
+        plugin.menus().openPreview(editor, published, 0, false);
+        ItemStack open = editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("preview.open"));
+        String openLore = open.getItemMeta().lore().stream().map(Text::serialize)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertFalse(openLore.contains("Shift-click to choose"));
+        ItemStack firstReward = editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slots("preview.reward-slots").getFirst());
+        String rewardLore = firstReward.getItemMeta().lore().stream().map(Text::serialize)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertFalse(rewardLore.contains("Alternative:"));
+
+        plugin.adminMenus().openCrateEditor(editor, plugin.crates().find("basic").orElseThrow());
+        assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("editor.rerolls")).getType());
+        assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("editor.milestones")).getType());
+        var source = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache");
+        plugin.editSessions().beginReward(editor, "basic", source, 0);
+        plugin.adminMenus().openRewardBuilder(editor);
+        assertEquals(Material.BLACK_STAINED_GLASS_PANE, editor.getOpenInventory().getTopInventory()
+                .getItem(plugin.menusConfig().slot("reward-builder.alternative")).getType());
+    }
+
+    @Test
+    void disablingAndReenablingPublishesTheLifecycleWithoutLeakingIntoRuntime() throws Exception {
+        var editor = server.addPlayer("LifecycleEditor");
+        editor.setOp(true);
+        var before = plugin.runtime().find("basic").orElseThrow();
+        long initialRevision = plugin.definitionRevision("basic");
+
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setState("basic", com.antondev.crates.domain.crate.CrateState.DISABLED, editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "STATE", "Disabled crate");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        var disabled = plugin.definitionPublisher().publish(editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertEquals(com.antondev.crates.domain.crate.CrateState.DISABLED, disabled.join().crate().state());
+        assertTrue(plugin.runtime().find("basic").isEmpty());
+        assertEquals(initialRevision + 1, plugin.definitionRevision("basic"));
+        assertEquals("DISABLED", plugin.definitionRepository().loadPublished().join().definitions().stream()
+                .filter(definition -> definition.crateId().equals("basic")).findFirst().orElseThrow().lifecycle());
+
+        plugin.adminMenus().ensureDraft(editor, "basic");
+        awaitDraft(editor, "basic");
+        plugin.crates().setState("basic", com.antondev.crates.domain.crate.CrateState.PUBLISHED, editor.getName());
+        plugin.adminMenus().saveDraftRevision(editor, "basic", "STATE", "Re-enabled crate");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        var reenabled = plugin.definitionPublisher().publish(editor.getUniqueId(), editor.getName(), "basic");
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
+        assertEquals(com.antondev.crates.domain.crate.CrateState.PUBLISHED, reenabled.join().crate().state());
+        // Adventure's gradient component implementation may not compare equal after a
+        // YAML round-trip even when its serialized MiniMessage is unchanged. Compare
+        // the stable presentation form so this lifecycle test focuses on the runtime
+        // not leaking a disabled definition into the player-facing registry.
+        assertEquals(Text.serialize(before.displayName()),
+                Text.serialize(plugin.runtime().find("basic").orElseThrow().displayName()));
+        assertEquals(initialRevision + 2, plugin.definitionRevision("basic"));
+    }
+
+    @Test
+    void malformedYamlMirrorCannotOverrideTheCanonicalPublishedRuntime() throws Exception {
         var player = server.addPlayer("ReloadEditor");
         player.setOp(true);
-        double originalWeight = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").weight();
+        double originalChance = plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").baseChancePercent();
         Path file = plugin.getDataFolder().toPath().resolve("crates/basic.yml");
         String valid = Files.readString(file);
-        String invalid = valid.replaceFirst("weight: 28(?:\\.0)?", "weight: 0");
+        String invalid = valid.replaceFirst("chance-basis-points: 2800", "chance-basis-points: 0");
         assertFalse(valid.equals(invalid));
         Files.writeString(file, invalid);
         try {
-            assertFalse(plugin.reloadFor(player));
-            assertEquals(originalWeight,
-                    plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").weight());
+            assertTrue(plugin.reloadFor(player));
+            assertEquals(originalChance,
+                    plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").baseChancePercent());
             assertTrue(plugin.crates().find("basic").orElseThrow().enabled());
+            assertEquals(invalid, Files.readString(file));
+            Files.delete(file);
+            assertTrue(plugin.reloadFor(player));
+            assertEquals(originalChance,
+                    plugin.crates().find("basic").orElseThrow().rewards().get("coal_cache").baseChancePercent());
+            assertTrue(plugin.crates().serialized("basic").contains("coal_cache"));
+        } finally {
+            Files.writeString(file, valid);
+        }
+    }
+
+    @Test
+    void durableDraftPayloadRestoresWhenItsYamlMirrorIsMissing() throws Exception {
+        var player = server.addPlayer("DraftRestartEditor");
+        player.setOp(true);
+        var activeName = plugin.runtime().find("basic").orElseThrow().displayName();
+        var draftName = Component.text("Durable restart draft");
+        Path file = plugin.getDataFolder().toPath().resolve("crates/basic.yml");
+        String valid = Files.readString(file);
+        try {
+            plugin.adminMenus().ensureDraft(player, "basic");
+            awaitDraft(player, "basic");
+            plugin.crates().setDisplayName("basic", draftName, player.getName());
+            plugin.adminMenus().saveDraftRevision(player, "basic", "IDENTITY", "Changed display name");
+            plugin.database().awaitIdle().join();
+            server.getScheduler().performTicks(2);
+
+            Files.delete(file);
+            assertTrue(plugin.reloadFor(player));
+
+            assertEquals(draftName, plugin.crates().find("basic").orElseThrow().displayName());
+            assertEquals(activeName, plugin.runtime().find("basic").orElseThrow().displayName());
+            assertTrue(Files.notExists(file));
+            assertTrue(plugin.crates().serialized("basic").contains("Durable restart draft"));
+        } finally {
+            Files.writeString(file, valid);
+        }
+    }
+
+    @Test
+    void canonicalKeyDefinitionsSurviveAMissingYamlMirror() throws Exception {
+        var player = server.addPlayer("CanonicalKeyEditor");
+        player.setOp(true);
+        Path file = plugin.getDataFolder().toPath().resolve("keys.yml");
+        String valid = Files.readString(file);
+        try {
+            Files.delete(file);
+
+            assertTrue(plugin.reloadFor(player));
+            ItemStack template = plugin.keys().template("basic").orElseThrow();
+            assertTrue(plugin.keys().matches(template, "basic"));
+            assertEquals("basic", plugin.keys().definition("basic").orElseThrow().id());
         } finally {
             Files.writeString(file, valid);
         }
@@ -178,5 +704,21 @@ class AdministrationIntegrationTest {
         BlockPistonExtendEvent extend = new BlockPistonExtendEvent(piston, List.of(linked), BlockFace.EAST);
         server.getPluginManager().callEvent(extend);
         assertTrue(extend.isCancelled());
+    }
+
+    private ItemStack exactReward(Material material, int amount) {
+        ItemStack item = new ItemStack(material, amount);
+        item.editMeta(meta -> {
+            meta.displayName(Component.text("Exact " + material));
+            meta.getPersistentDataContainer().set(new NamespacedKey(plugin, "reward_capture_" + material.name().toLowerCase()),
+                    PersistentDataType.STRING, "preserve-me");
+        });
+        return item;
+    }
+
+    private void awaitDraft(Player player, String crateId) {
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertTrue(plugin.draftSessions().view(player.getUniqueId(), crateId).isPresent());
     }
 }

@@ -11,9 +11,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.DoubleSupplier;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
@@ -21,9 +23,56 @@ import java.util.function.Predicate;
  * selection and limit checks free of synchronous database work.
  */
 public final class RewardStateService {
-    public record Plan(List<CrateReward> rewards, boolean pityTriggered) {
+    /** One source ticket and the exact reward it resolves to for this player. */
+    public record Outcome(CrateReward source, CrateReward actual,
+                          AlternativeRewardResolver.Reason alternativeReason) {
+        public Outcome {
+            source = java.util.Objects.requireNonNull(source, "source");
+            actual = java.util.Objects.requireNonNull(actual, "actual");
+            if (source.id().equals(actual.id()) && alternativeReason != null) {
+                throw new IllegalArgumentException("A direct reward cannot have a fallback reason");
+            }
+            if (!source.id().equals(actual.id()) && alternativeReason == null) {
+                throw new IllegalArgumentException("A fallback reward needs its source reason");
+            }
+        }
+
+        public boolean fallback() {
+            return !source.id().equals(actual.id());
+        }
+    }
+
+    /** Frozen actual deliveries plus their source-ticket audit metadata. */
+    public record Plan(List<CrateReward> rewards, boolean pityTriggered, List<Outcome> outcomes) {
         public Plan {
             rewards = List.copyOf(rewards);
+            outcomes = List.copyOf(outcomes);
+            if (rewards.size() != outcomes.size()) {
+                throw new IllegalArgumentException("Every frozen reward needs one outcome entry");
+            }
+            for (int index = 0; index < rewards.size(); index++) {
+                if (!rewards.get(index).id().equals(outcomes.get(index).actual().id())) {
+                    throw new IllegalArgumentException("Frozen rewards and outcomes do not match");
+                }
+            }
+        }
+
+        public Plan(List<CrateReward> rewards, boolean pityTriggered) {
+            this(rewards, pityTriggered, rewards.stream()
+                    .map(reward -> new Outcome(reward, reward, null)).toList());
+        }
+
+        public String outcomeDetail() {
+            var entries = new ArrayList<String>();
+            for (int index = 0; index < outcomes.size(); index++) {
+                Outcome outcome = outcomes.get(index);
+                entries.add(index + ":source=" + outcome.source().id()
+                        + ",actual=" + outcome.actual().id()
+                        + ",fallback=" + outcome.fallback()
+                        + ",reason=" + (outcome.alternativeReason() == null
+                        ? "NONE" : outcome.alternativeReason().name()));
+            }
+            return "outcomes[" + String.join(";", entries) + "]";
         }
     }
 
@@ -66,47 +115,224 @@ public final class RewardStateService {
                 global.get(new GlobalRewardKey(crate.id(), reward.id())));
     }
 
-    /** Selects as many outcomes as remain deliverable, up to the requested amount. */
+    /** Compatibility planner without alternative resolution. */
     public Plan plan(UUID playerId, Crate crate, int requested, OpenSource source,
                      Predicate<CrateReward> baseEligibility, boolean bypassLimits, long now) {
+        return planResolved(playerId, crate, requested, source,
+                reward -> baseEligibility.test(reward) ? null
+                        : AlternativeRewardResolver.Reason.TRANSACTION_FAILURE,
+                false, bypassLimits, now);
+    }
+
+    /**
+     * Selects source tickets by their configured chances, resolves an allowed one-edge fallback,
+     * and advances the actual reward's counters after every result in the batch.
+     */
+    public Plan planResolved(UUID playerId, Crate crate, int requested, OpenSource source,
+                             Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+                             boolean alternativesEnabled, boolean bypassLimits, long now) {
         Map<PlayerRewardKey, PlayerCounter> workingPlayers = new LinkedHashMap<>(players);
         Map<GlobalRewardKey, GlobalCounter> workingGlobal = new LinkedHashMap<>(global);
         int misses = pity.getOrDefault(new PlayerCrateKey(playerId, crate.id()), 0);
         boolean countPity = countsPity(crate.pity(), source);
         boolean triggered = false;
-        var selected = new ArrayList<CrateReward>();
+        var outcomes = new ArrayList<Outcome>();
         for (int index = 0; index < requested; index++) {
-            List<CrateReward> eligible = available(playerId, crate, baseEligibility, bypassLimits, now,
-                    workingPlayers, workingGlobal);
-            if (eligible.isEmpty()) break;
+            List<Outcome> available = availableResolved(playerId, crate, baseIneligibility,
+                    alternativesEnabled, bypassLimits, now, workingPlayers, workingGlobal);
+            if (available.isEmpty()) break;
             boolean guarantee = countPity && due(crate.pity(), misses);
             if (guarantee) {
-                eligible = eligible.stream().filter(reward -> pityReward(crate.pity(), reward)).toList();
-                if (eligible.isEmpty()) break;
+                available = available.stream().filter(outcome -> pityReward(crate.pity(), outcome.source())).toList();
+                if (available.isEmpty()) break;
                 triggered = true;
             }
-            Optional<CrateReward> choice = RewardSelector.selectAt(eligible, normalizedRoll());
-            if (choice.isEmpty()) break;
-            CrateReward reward = choice.get();
-            selected.add(reward);
-            increment(playerId, crate.id(), reward, now, workingPlayers, workingGlobal);
-            if (countPity) misses = pityReward(crate.pity(), reward) ? 0 : increment(misses);
+            List<CrateReward> sourceTickets = available.stream().map(Outcome::source).toList();
+            Optional<CrateReward> ticket = RewardSelector.selectAt(sourceTickets, normalizedRoll());
+            if (ticket.isEmpty()) break;
+            CrateReward selectedSource = ticket.get();
+            Outcome outcome = available.stream()
+                    .filter(candidate -> candidate.source().id().equals(selectedSource.id()))
+                    .findFirst().orElseThrow();
+            outcomes.add(outcome);
+            increment(playerId, crate.id(), outcome.actual(), now, workingPlayers, workingGlobal);
+            if (countPity) misses = pityReward(crate.pity(), outcome.source()) ? 0 : increment(misses);
         }
-        return new Plan(selected, triggered);
+        return new Plan(outcomes.stream().map(Outcome::actual).toList(), triggered, outcomes);
     }
 
-    /** Revalidates a frozen selection against state changed by another completed opening. */
+    /** Compatibility selective planner without alternative resolution. */
+    public Plan planSelected(UUID playerId, Crate crate, String rewardId, int requested, OpenSource source,
+                             Predicate<CrateReward> baseEligibility, boolean bypassLimits, long now) {
+        return planSelectedResolved(playerId, crate, rewardId, requested, source,
+                reward -> baseEligibility.test(reward) ? null
+                        : AlternativeRewardResolver.Reason.TRANSACTION_FAILURE,
+                false, bypassLimits, now);
+    }
+
+    /** Validates a deliberate source reward and freezes an all-or-nothing resolved batch. */
+    public Plan planSelectedResolved(UUID playerId, Crate crate, String rewardId, int requested, OpenSource source,
+                                     Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+                                     boolean alternativesEnabled, boolean bypassLimits, long now) {
+        if (requested < 1 || rewardId == null) return new Plan(List.of(), false);
+        CrateReward sourceReward = crate.rewards().get(rewardId);
+        if (sourceReward == null) return new Plan(List.of(), false);
+        Map<PlayerRewardKey, PlayerCounter> workingPlayers = new LinkedHashMap<>(players);
+        Map<GlobalRewardKey, GlobalCounter> workingGlobal = new LinkedHashMap<>(global);
+        var outcomes = new ArrayList<Outcome>();
+        for (int index = 0; index < requested; index++) {
+            Optional<Outcome> resolved = resolveAgainst(playerId, crate, sourceReward, baseIneligibility,
+                    alternativesEnabled, bypassLimits, now, workingPlayers, workingGlobal);
+            if (resolved.isEmpty()) return new Plan(List.of(), false);
+            Outcome outcome = resolved.get();
+            outcomes.add(outcome);
+            increment(playerId, crate.id(), outcome.actual(), now, workingPlayers, workingGlobal);
+        }
+        Plan plan = new Plan(outcomes.stream().map(Outcome::actual).toList(), false, outcomes);
+        return evaluateResolved(playerId, crate, plan, source, baseIneligibility,
+                alternativesEnabled, bypassLimits, now).isPresent() ? plan : new Plan(List.of(), false);
+    }
+
+    /** Resolves a single source against the current snapshot for an accurate preview. */
+    public Optional<Outcome> resolveOutcome(UUID playerId, Crate crate, CrateReward source,
+                                            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+                                            boolean alternativesEnabled, boolean bypassLimits, long now) {
+        return resolveAgainst(playerId, crate, source, baseIneligibility, alternativesEnabled, bypassLimits, now,
+                players, global);
+    }
+
+    /**
+     * Returns the exact source-to-actual outcomes available to a single reroll at
+     * the current state snapshot, including the opening's active pity guarantee.
+     */
+    public List<Outcome> rerollOutcomes(
+            UUID playerId, Crate crate, OpenSource source,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now) {
+        List<Outcome> available = availableResolved(playerId, crate, baseIneligibility,
+                alternativesEnabled, bypassLimits, now, players, global);
+        int misses = pity.getOrDefault(new PlayerCrateKey(playerId, crate.id()), 0);
+        if (countsPity(crate.pity(), source) && due(crate.pity(), misses)) {
+            available = available.stream()
+                    .filter(outcome -> pityReward(crate.pity(), outcome.source())).toList();
+        }
+        return List.copyOf(available);
+    }
+
+    /** Selects one weighted replacement while excluding previously shown actual rewards. */
+    public Plan planRerollResolved(
+            UUID playerId, Crate crate, OpenSource source,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now,
+            Set<String> excludedActualRewardIds) {
+        Set<String> excluded = excludedActualRewardIds == null ? Set.of() : Set.copyOf(excludedActualRewardIds);
+        List<Outcome> available = rerollOutcomes(playerId, crate, source, baseIneligibility,
+                alternativesEnabled, bypassLimits, now).stream()
+                .filter(outcome -> !excluded.contains(outcome.actual().id())).toList();
+        if (available.isEmpty()) return new Plan(List.of(), false);
+        List<CrateReward> tickets = available.stream().map(Outcome::source).toList();
+        Optional<CrateReward> selected = RewardSelector.selectAt(tickets, normalizedRoll());
+        if (selected.isEmpty()) return new Plan(List.of(), false);
+        Outcome outcome = available.stream()
+                .filter(candidate -> candidate.source().id().equals(selected.get().id()))
+                .findFirst().orElseThrow();
+        return new Plan(List.of(outcome.actual()), false, List.of(outcome));
+    }
+
+    /**
+     * Computes the pool at one candidate position after replaying the frozen
+     * prefix. This lets an explicitly enabled mass opening reroll its final
+     * candidate without discarding or duplicating any other delivery.
+     */
+    public List<Outcome> rerollOutcomesAt(
+            UUID playerId, Crate crate, OpenSource source, Plan frozen, int index,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now) {
+        if (frozen == null || index < 0 || index >= frozen.outcomes().size()) return List.of();
+        Map<PlayerRewardKey, PlayerCounter> workingPlayers = new LinkedHashMap<>(players);
+        Map<GlobalRewardKey, GlobalCounter> workingGlobal = new LinkedHashMap<>(global);
+        int misses = pity.getOrDefault(new PlayerCrateKey(playerId, crate.id()), 0);
+        boolean countPity = countsPity(crate.pity(), source);
+        for (int currentIndex = 0; currentIndex < index; currentIndex++) {
+            Outcome expected = frozen.outcomes().get(currentIndex);
+            CrateReward currentSource = crate.rewards().get(expected.source().id());
+            if (currentSource == null) return List.of();
+            Optional<Outcome> resolved = resolveAgainst(playerId, crate, currentSource, baseIneligibility,
+                    alternativesEnabled, bypassLimits, now, workingPlayers, workingGlobal);
+            if (resolved.isEmpty() || !sameResolution(expected, resolved.get())) return List.of();
+            if (countPity && due(crate.pity(), misses) && !pityReward(crate.pity(), currentSource)) {
+                return List.of();
+            }
+            increment(playerId, crate.id(), resolved.get().actual(), now, workingPlayers, workingGlobal);
+            if (countPity) misses = pityReward(crate.pity(), currentSource) ? 0 : increment(misses);
+        }
+        List<Outcome> available = availableResolved(playerId, crate, baseIneligibility,
+                alternativesEnabled, bypassLimits, now, workingPlayers, workingGlobal);
+        if (countPity && due(crate.pity(), misses)) {
+            available = available.stream()
+                    .filter(outcome -> pityReward(crate.pity(), outcome.source())).toList();
+        }
+        return List.copyOf(available);
+    }
+
+    /** Selects and installs one weighted candidate into a frozen batch position. */
+    public Plan planRerollAtResolved(
+            UUID playerId, Crate crate, OpenSource source, Plan frozen, int index,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now,
+            Set<String> excludedActualRewardIds) {
+        Set<String> excluded = excludedActualRewardIds == null ? Set.of() : Set.copyOf(excludedActualRewardIds);
+        List<Outcome> available = rerollOutcomesAt(playerId, crate, source, frozen, index,
+                baseIneligibility, alternativesEnabled, bypassLimits, now).stream()
+                .filter(outcome -> !excluded.contains(outcome.actual().id())).toList();
+        if (available.isEmpty()) return new Plan(List.of(), false);
+        Optional<CrateReward> selected = RewardSelector.selectAt(
+                available.stream().map(Outcome::source).toList(), normalizedRoll());
+        if (selected.isEmpty()) return new Plan(List.of(), false);
+        Outcome replacement = available.stream()
+                .filter(candidate -> candidate.source().id().equals(selected.get().id()))
+                .findFirst().orElseThrow();
+        var outcomes = new ArrayList<>(frozen.outcomes());
+        outcomes.set(index, replacement);
+        return new Plan(outcomes.stream().map(Outcome::actual).toList(), frozen.pityTriggered(), outcomes);
+    }
+
+    /** Compatibility revalidation for a direct frozen selection. */
     public boolean canApply(UUID playerId, Crate crate, List<CrateReward> selected, OpenSource source,
                             Predicate<CrateReward> baseEligibility, boolean bypassLimits, long now) {
-        return evaluate(playerId, crate, selected, source, baseEligibility, bypassLimits, now).isPresent();
+        return canApplyResolved(playerId, crate, new Plan(selected, false), source,
+                reward -> baseEligibility.test(reward) ? null
+                        : AlternativeRewardResolver.Reason.TRANSACTION_FAILURE,
+                false, bypassLimits, now);
     }
 
-    /** Applies a previously validated frozen selection and returns its exact durable mutation. */
+    /** Revalidates the exact frozen source-to-actual mapping before value is consumed. */
+    public boolean canApplyResolved(UUID playerId, Crate crate, Plan plan, OpenSource source,
+                                    Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+                                    boolean alternativesEnabled, boolean bypassLimits, long now) {
+        return evaluateResolved(playerId, crate, plan, source, baseIneligibility,
+                alternativesEnabled, bypassLimits, now).isPresent();
+    }
+
+    /** Compatibility mutation for direct rewards. */
     public DatabaseService.RewardStateCommit apply(UUID playerId, Crate crate, List<CrateReward> selected,
                                                    OpenSource source, Predicate<CrateReward> baseEligibility,
                                                    boolean bypassLimits, long now) {
-        Evaluation evaluated = evaluate(playerId, crate, selected, source, baseEligibility, bypassLimits, now)
-                .orElseThrow(() -> new IllegalStateException("Reward limits or pity state changed before delivery"));
+        return applyResolved(playerId, crate, new Plan(selected, false), source,
+                reward -> baseEligibility.test(reward) ? null
+                        : AlternativeRewardResolver.Reason.TRANSACTION_FAILURE,
+                false, bypassLimits, now);
+    }
+
+    /** Applies a resolved frozen plan and returns its exact durable mutation. */
+    public DatabaseService.RewardStateCommit applyResolved(UUID playerId, Crate crate, Plan plan,
+                                                           OpenSource source,
+                                                           Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+                                                           boolean alternativesEnabled,
+                                                           boolean bypassLimits, long now) {
+        Evaluation evaluated = evaluateResolved(playerId, crate, plan, source, baseIneligibility,
+                alternativesEnabled, bypassLimits, now)
+                .orElseThrow(() -> new IllegalStateException("Reward state changed before delivery"));
         players.clear();
         players.putAll(evaluated.players());
         global.clear();
@@ -120,7 +346,7 @@ public final class RewardStateService {
         }
 
         var mutations = new ArrayList<DatabaseService.RewardMutation>();
-        for (String rewardId : selected.stream().map(CrateReward::id).distinct().toList()) {
+        for (String rewardId : plan.rewards().stream().map(CrateReward::id).distinct().toList()) {
             PlayerCounter player = players.get(new PlayerRewardKey(playerId, crate.id(), rewardId));
             GlobalCounter server = global.get(new GlobalRewardKey(crate.id(), rewardId));
             mutations.add(new DatabaseService.RewardMutation(
@@ -141,46 +367,112 @@ public final class RewardStateService {
         return Math.max(0, crate.pity().threshold() - pityMisses(playerId, crate.id()));
     }
 
-    private Optional<Evaluation> evaluate(UUID playerId, Crate crate, List<CrateReward> selected, OpenSource source,
-                                          Predicate<CrateReward> baseEligibility, boolean bypassLimits, long now) {
+    private Optional<Evaluation> evaluateResolved(
+            UUID playerId, Crate crate, Plan plan, OpenSource source,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now) {
         Map<PlayerRewardKey, PlayerCounter> workingPlayers = new LinkedHashMap<>(players);
         Map<GlobalRewardKey, GlobalCounter> workingGlobal = new LinkedHashMap<>(global);
         int misses = pity.getOrDefault(new PlayerCrateKey(playerId, crate.id()), 0);
         boolean countPity = countsPity(crate.pity(), source);
-        for (CrateReward reward : selected) {
-            if (!baseEligibility.test(reward)) return Optional.empty();
-            PlayerRewardKey playerKey = new PlayerRewardKey(playerId, crate.id(), reward.id());
-            GlobalRewardKey globalKey = new GlobalRewardKey(crate.id(), reward.id());
-            if (!bypassLimits && !withinLimits(playerId, crate.id(), reward, now,
-                    workingPlayers.get(playerKey), workingGlobal.get(globalKey))) return Optional.empty();
-            if (countPity && due(crate.pity(), misses) && !pityReward(crate.pity(), reward)) return Optional.empty();
-            increment(playerId, crate.id(), reward, now, workingPlayers, workingGlobal);
-            if (countPity) misses = pityReward(crate.pity(), reward) ? 0 : increment(misses);
+        for (Outcome frozen : plan.outcomes()) {
+            CrateReward currentSource = crate.rewards().get(frozen.source().id());
+            if (currentSource == null) return Optional.empty();
+            Optional<Outcome> current = resolveAgainst(playerId, crate, currentSource, baseIneligibility,
+                    alternativesEnabled, bypassLimits, now, workingPlayers, workingGlobal);
+            if (current.isEmpty() || !sameResolution(frozen, current.get())) return Optional.empty();
+            if (countPity && due(crate.pity(), misses) && !pityReward(crate.pity(), currentSource)) {
+                return Optional.empty();
+            }
+            increment(playerId, crate.id(), current.get().actual(), now, workingPlayers, workingGlobal);
+            if (countPity) misses = pityReward(crate.pity(), currentSource) ? 0 : increment(misses);
         }
         return Optional.of(new Evaluation(workingPlayers, workingGlobal, misses));
     }
 
-    private static List<CrateReward> available(UUID playerId, Crate crate,
-                                               Predicate<CrateReward> baseEligibility, boolean bypassLimits, long now,
-                                               Map<PlayerRewardKey, PlayerCounter> workingPlayers,
-                                               Map<GlobalRewardKey, GlobalCounter> workingGlobal) {
-        return crate.orderedRewards().stream().filter(baseEligibility).filter(reward -> bypassLimits || withinLimits(
-                playerId, crate.id(), reward, now,
-                workingPlayers.get(new PlayerRewardKey(playerId, crate.id(), reward.id())),
-                workingGlobal.get(new GlobalRewardKey(crate.id(), reward.id())))).toList();
+    private static List<Outcome> availableResolved(
+            UUID playerId, Crate crate,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now,
+            Map<PlayerRewardKey, PlayerCounter> workingPlayers,
+            Map<GlobalRewardKey, GlobalCounter> workingGlobal) {
+        var available = new ArrayList<Outcome>();
+        for (CrateReward source : crate.orderedRewards()) {
+            resolveAgainst(playerId, crate, source, baseIneligibility, alternativesEnabled, bypassLimits,
+                    now, workingPlayers, workingGlobal).ifPresent(available::add);
+        }
+        return List.copyOf(available);
+    }
+
+    private static Optional<Outcome> resolveAgainst(
+            UUID playerId, Crate crate, CrateReward source,
+            Function<CrateReward, AlternativeRewardResolver.Reason> baseIneligibility,
+            boolean alternativesEnabled, boolean bypassLimits, long now,
+            Map<PlayerRewardKey, PlayerCounter> workingPlayers,
+            Map<GlobalRewardKey, GlobalCounter> workingGlobal) {
+        if (source == null || !source.enabled() || source.chanceBasisPoints() <= 0 || !source.hasDelivery()) {
+            return Optional.empty();
+        }
+        AlternativeRewardResolver.Reason sourceReason = baseIneligibility.apply(source);
+        if (sourceReason == null && !bypassLimits) {
+            sourceReason = limitReason(playerId, crate.id(), source, now, workingPlayers, workingGlobal);
+        }
+        if (sourceReason == null) return Optional.of(new Outcome(source, source, null));
+        if (!alternativesEnabled || !source.hasAlternative()
+                || !source.alternativeReasons().contains(sourceReason)
+                || !AlternativeRewardResolver.fallbackReasonAllowed(sourceReason)) {
+            return Optional.empty();
+        }
+        CrateReward fallback = crate.rewards().get(source.alternativeRewardId());
+        // A zero-chance reward may be a deliberate fallback target; it is never an independent source ticket.
+        if (fallback == null || !fallback.enabled() || !fallback.hasDelivery()) return Optional.empty();
+        if (baseIneligibility.apply(fallback) != null) return Optional.empty();
+        if (!bypassLimits && limitReason(playerId, crate.id(), fallback, now,
+                workingPlayers, workingGlobal) != null) return Optional.empty();
+        return Optional.of(new Outcome(source, fallback, sourceReason));
+    }
+
+    private static AlternativeRewardResolver.Reason limitReason(
+            UUID playerId, String crateId, CrateReward reward, long now,
+            Map<PlayerRewardKey, PlayerCounter> workingPlayers,
+            Map<GlobalRewardKey, GlobalCounter> workingGlobal) {
+        RewardLimits limits = reward.limits();
+        PlayerCounter player = normalized(workingPlayers.get(
+                new PlayerRewardKey(playerId, crateId, reward.id())), limits.playerWindowSeconds(), now);
+        GlobalCounter server = normalized(workingGlobal.get(
+                new GlobalRewardKey(crateId, reward.id())), limits.globalWindowSeconds(), now);
+        if (limits.playerLifetime() > 0 && player.total() >= limits.playerLifetime()) {
+            return AlternativeRewardResolver.Reason.PLAYER_LIMIT;
+        }
+        if (limits.playerWindow() > 0 && player.window() >= limits.playerWindow()) {
+            return AlternativeRewardResolver.Reason.PLAYER_LIMIT;
+        }
+        if (limits.globalLifetime() > 0 && server.total() >= limits.globalLifetime()) {
+            return AlternativeRewardResolver.Reason.GLOBAL_LIMIT;
+        }
+        if (limits.globalWindow() > 0 && server.window() >= limits.globalWindow()) {
+            return AlternativeRewardResolver.Reason.GLOBAL_LIMIT;
+        }
+        if (limits.cooldownSeconds() > 0 && player.lastWonAt() > 0
+                && now - player.lastWonAt() < seconds(limits.cooldownSeconds())) {
+            return AlternativeRewardResolver.Reason.COOLDOWN;
+        }
+        return null;
+    }
+
+    private static boolean sameResolution(Outcome expected, Outcome actual) {
+        return expected.source().id().equals(actual.source().id())
+                && expected.actual().id().equals(actual.actual().id())
+                && expected.alternativeReason() == actual.alternativeReason();
     }
 
     private static boolean withinLimits(UUID playerId, String crateId, CrateReward reward, long now,
                                         PlayerCounter rawPlayer, GlobalCounter rawGlobal) {
-        RewardLimits limits = reward.limits();
-        PlayerCounter player = normalized(rawPlayer, limits.playerWindowSeconds(), now);
-        GlobalCounter global = normalized(rawGlobal, limits.globalWindowSeconds(), now);
-        if (limits.playerLifetime() > 0 && player.total() >= limits.playerLifetime()) return false;
-        if (limits.playerWindow() > 0 && player.window() >= limits.playerWindow()) return false;
-        if (limits.globalLifetime() > 0 && global.total() >= limits.globalLifetime()) return false;
-        if (limits.globalWindow() > 0 && global.window() >= limits.globalWindow()) return false;
-        return limits.cooldownSeconds() <= 0 || player.lastWonAt() <= 0
-                || now - player.lastWonAt() >= seconds(limits.cooldownSeconds());
+        var playerState = new LinkedHashMap<PlayerRewardKey, PlayerCounter>();
+        var globalState = new LinkedHashMap<GlobalRewardKey, GlobalCounter>();
+        if (rawPlayer != null) playerState.put(new PlayerRewardKey(playerId, crateId, reward.id()), rawPlayer);
+        if (rawGlobal != null) globalState.put(new GlobalRewardKey(crateId, reward.id()), rawGlobal);
+        return limitReason(playerId, crateId, reward, now, playerState, globalState) == null;
     }
 
     private static void increment(UUID playerId, String crateId, CrateReward reward, long now,
@@ -228,7 +520,8 @@ public final class RewardStateService {
     }
 
     private static boolean pityReward(PityPolicy policy, CrateReward reward) {
-        return policy.rewardIds().contains(reward.id()) || (policy.rarity() != null && policy.rarity() == reward.rarity());
+        return policy.rewardIds().contains(reward.id())
+                || (policy.rarity() != null && policy.rarity() == reward.rarity());
     }
 
     private double normalizedRoll() {

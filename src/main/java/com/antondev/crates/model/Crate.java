@@ -2,7 +2,10 @@ package com.antondev.crates.model;
 
 import com.antondev.crates.domain.crate.AnimationType;
 import com.antondev.crates.domain.crate.CrateState;
+import com.antondev.crates.domain.key.KeyPaymentPolicy;
+import com.antondev.crates.domain.opening.OpeningMode;
 import com.antondev.crates.domain.reward.PityPolicy;
+import com.antondev.crates.service.RerollService;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,13 +27,18 @@ public record Crate(
         Set<String> excludedWorlds,
         List<String> acceptedKeyIds,
         int keyCost,
+        KeyPaymentPolicy paymentPolicy,
+        boolean mixedPayment,
         int cooldownSeconds,
         boolean bulkEnabled,
         int bulkMaximum,
+        OpeningMode openingMode,
         AnimationType animation,
         List<Component> hologramLines,
         String broadcast,
         PityPolicy pity,
+        RerollService.Policy rerolls,
+        Map<String, CrateMilestone> milestones,
         Map<String, CrateReward> rewards) {
 
     public Crate {
@@ -40,12 +48,45 @@ public record Crate(
         excludedWorlds = Set.copyOf(excludedWorlds);
         acceptedKeyIds = List.copyOf(acceptedKeyIds);
         hologramLines = List.copyOf(hologramLines);
+        milestones = Collections.unmodifiableMap(new LinkedHashMap<>(milestones));
         rewards = Collections.unmodifiableMap(new LinkedHashMap<>(rewards));
+        paymentPolicy = java.util.Objects.requireNonNull(paymentPolicy, "paymentPolicy");
+        openingMode = java.util.Objects.requireNonNull(openingMode, "openingMode");
+        rerolls = java.util.Objects.requireNonNull(rerolls, "rerolls");
+    }
+
+    /** Source-compatible constructor for the pre-reroll 3.0 model. */
+    public Crate(String id, CrateState state, int displayOrder, Component displayName,
+                 List<Component> description, ItemStack icon, String permission,
+                 Set<String> worlds, Set<String> excludedWorlds, List<String> acceptedKeyIds,
+                 int keyCost, KeyPaymentPolicy paymentPolicy, boolean mixedPayment,
+                 int cooldownSeconds, boolean bulkEnabled, int bulkMaximum,
+                 OpeningMode openingMode, AnimationType animation, List<Component> hologramLines,
+                 String broadcast, PityPolicy pity, Map<String, CrateMilestone> milestones,
+                 Map<String, CrateReward> rewards) {
+        this(id, state, displayOrder, displayName, description, icon, permission, worlds,
+                excludedWorlds, acceptedKeyIds, keyCost, paymentPolicy, mixedPayment,
+                cooldownSeconds, bulkEnabled, bulkMaximum, openingMode, animation,
+                hologramLines, broadcast, pity, RerollService.Policy.disabled(), milestones, rewards);
+    }
+
+    /** Source-compatible constructor for the 2.x/early-3.x physical random model. */
+    public Crate(String id, CrateState state, int displayOrder, Component displayName,
+                 List<Component> description, ItemStack icon, String permission,
+                 Set<String> worlds, Set<String> excludedWorlds, List<String> acceptedKeyIds,
+                 int keyCost, int cooldownSeconds, boolean bulkEnabled, int bulkMaximum,
+                 AnimationType animation, List<Component> hologramLines, String broadcast,
+                 PityPolicy pity, Map<String, CrateReward> rewards) {
+        this(id, state, displayOrder, displayName, description, icon, permission, worlds,
+                excludedWorlds, acceptedKeyIds, keyCost, KeyPaymentPolicy.PHYSICAL_ONLY, false,
+                cooldownSeconds, bulkEnabled, bulkMaximum, OpeningMode.RANDOM, animation,
+                hologramLines, broadcast, pity, RerollService.Policy.disabled(), Map.of(), rewards);
     }
 
     @Override public ItemStack icon() { return icon.clone(); }
     public ItemStack iconCopy() { return icon.clone(); }
     public List<CrateReward> orderedRewards() { return List.copyOf(rewards.values()); }
+    public List<CrateMilestone> orderedMilestones() { return List.copyOf(milestones.values()); }
 
     /** Compatibility alias used by the 1.0 API and commands. */
     public boolean enabled() { return state == CrateState.PUBLISHED; }

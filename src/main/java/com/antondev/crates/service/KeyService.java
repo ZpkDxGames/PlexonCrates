@@ -12,6 +12,7 @@ import com.antondev.crates.domain.key.KeySource;
 import com.antondev.crates.domain.key.ProviderStatus;
 import com.antondev.crates.domain.key.ResolvedKey;
 import com.antondev.crates.integration.plexonkeys.PlexonKeysKeyProvider;
+import com.antondev.crates.item.ItemSnapshotCodec;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -28,6 +29,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import net.kyori.adventure.text.Component;
 import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.ConfigurationSection;
@@ -41,6 +44,18 @@ public final class KeyService {
     public record Snapshot(Map<String, KeyDefinition> definitions) {
         public Snapshot {
             definitions = Collections.unmodifiableMap(new LinkedHashMap<>(definitions));
+        }
+    }
+
+    /** Canonical key definitions plus exact live-provider cache recovered from SQLite. */
+    public record CanonicalSnapshot(Snapshot definitions, Map<String, ItemStack> lastKnownGood) {
+        public CanonicalSnapshot {
+            definitions = java.util.Objects.requireNonNull(definitions, "definitions");
+            lastKnownGood = normalizedCopies(lastKnownGood);
+        }
+
+        @Override public Map<String, ItemStack> lastKnownGood() {
+            return normalizedCopies(lastKnownGood);
         }
     }
 
@@ -128,14 +143,74 @@ public final class KeyService {
         return new Snapshot(loaded);
     }
 
+    /**
+     * Reconstructs the key registry from the canonical normalized tables.  The
+     * YAML file remains a compatibility/import surface; it is never required for
+     * a published key to resolve after a restart. Invalid optional rows are
+     * skipped with a diagnostic so one damaged key cannot disable healthy crates.
+     */
+    public static CanonicalSnapshot fromDatabase(List<DatabaseService.StoredKeyDefinition> stored,
+                                                 Logger logger) {
+        var loaded = new LinkedHashMap<String, KeyDefinition>();
+        var lastGood = new LinkedHashMap<String, ItemStack>();
+        if (stored == null) return new CanonicalSnapshot(new Snapshot(loaded), lastGood);
+        for (DatabaseService.StoredKeyDefinition row : stored) {
+            if (row == null) continue;
+            String id = normalize(row.keyId());
+            try {
+                if (!CrateRegistry.validId(id)) throw new IllegalArgumentException("invalid key ID");
+                KeySource source = KeySource.valueOf(row.sourceType().trim().toUpperCase(Locale.ROOT));
+                Map<String, String> settings = parseSettings(row.settingsPayload());
+                KeyMatchMode matchMode = enumValue(KeyMatchMode.class, settings.getOrDefault("match-mode", "EXACT"),
+                        "canonical key match-mode");
+                String externalId = normalize(settings.getOrDefault("external-id", id));
+                if (source == KeySource.PLEXONKEYS && !CrateRegistry.validId(externalId)) {
+                    throw new IllegalArgumentException("invalid external key ID");
+                }
+                boolean cache = Boolean.parseBoolean(settings.getOrDefault("cache-last-known-good", "true"));
+                ItemStack current = template(row, "CURRENT", 0);
+                ItemStack fallback = template(row, "FALLBACK", 0);
+                var legacy = row.templates().stream()
+                        .filter(template -> template.templateKind().equalsIgnoreCase("LEGACY"))
+                        .sorted(java.util.Comparator.comparingInt(DatabaseService.StoredKeyTemplate::sequence))
+                        .map(KeyService::decodeTemplate)
+                        .filter(java.util.Objects::nonNull).toList();
+                ItemStack owned = source == KeySource.PLEXONKEYS ? null : current;
+                ItemStack icon = current != null ? current.clone()
+                        : fallback != null ? fallback.clone() : new ItemStack(org.bukkit.Material.TRIPWIRE_HOOK);
+                Component displayName = Text.parse(row.displayName());
+                icon.editMeta(meta -> meta.displayName(displayName));
+                KeyDefinition definition = new KeyDefinition(id, !row.archived(), displayName, icon, source,
+                        externalId, matchMode, cache, owned, fallback, legacy, row.createdAt(), row.updatedAt());
+                if (loaded.putIfAbsent(id, definition) != null) {
+                    throw new IllegalArgumentException("duplicate key ID");
+                }
+                if (source == KeySource.PLEXONKEYS && current != null) lastGood.put(id, current);
+            } catch (RuntimeException error) {
+                if (logger != null) logger.log(Level.WARNING,
+                        "Ignoring invalid canonical key definition " + row.keyId(), error);
+            }
+        }
+        return new CanonicalSnapshot(new Snapshot(loaded), lastGood);
+    }
+
     public void apply(Snapshot snapshot) {
+        apply(snapshot, lastKnownGood);
+    }
+
+    public void apply(Snapshot snapshot, Map<String, ItemStack> canonicalCache) {
         definitions = snapshot.definitions();
+        lastKnownGood = normalizedCopies(canonicalCache);
         provider = new PlexonKeysKeyProvider(plugin, plugin.settings().plexonKeysPlugin());
         syncDiscovery();
     }
 
     public Snapshot snapshot() {
         return new Snapshot(definitions);
+    }
+
+    public Map<String, ItemStack> lastKnownGoodSnapshot() {
+        return normalizedCopies(lastKnownGood);
     }
 
     public Optional<ResolvedKey> resolve(String keyId) {
@@ -426,8 +501,7 @@ public final class KeyService {
     }
 
     private void mutate(ThrowingConsumer<YamlConfiguration> change) throws Exception {
-        YamlConfiguration yaml = new YamlConfiguration();
-        yaml.loadFromString(Files.readString(file, StandardCharsets.UTF_8));
+        YamlConfiguration yaml = mirrorOrSnapshot();
         change.accept(yaml);
         Snapshot parsed;
         Path temporary = Files.createTempFile(file.getParent(), "keys-validate-", ".yml");
@@ -440,6 +514,22 @@ public final class KeyService {
         AtomicFiles.write(file, yaml.saveToString());
         definitions = parsed.definitions();
         syncDiscovery();
+    }
+
+    private YamlConfiguration mirrorOrSnapshot() throws Exception {
+        YamlConfiguration yaml = new YamlConfiguration();
+        if (Files.isRegularFile(file)) {
+            try {
+                yaml.loadFromString(Files.readString(file, StandardCharsets.UTF_8));
+                return yaml;
+            } catch (Exception error) {
+                plugin.getLogger().log(Level.WARNING,
+                        "Rebuilding an invalid optional key YAML mirror from canonical definitions", error);
+            }
+        }
+        yaml.set("config-version", 2);
+        for (KeyDefinition definition : definitions.values()) writeDefinition(yaml, definition, Instant.now());
+        return yaml;
     }
 
     private static void writeDefinition(YamlConfiguration yaml, KeyDefinition definition, Instant importedAt) {
@@ -467,6 +557,35 @@ public final class KeyService {
         var result = new LinkedHashMap<String, ItemStack>();
         values.forEach((id, item) -> result.put(normalize(id), ItemCodec.one(item)));
         return Collections.unmodifiableMap(result);
+    }
+
+    private static ItemStack template(DatabaseService.StoredKeyDefinition row, String kind, int sequence) {
+        return row.templates().stream()
+                .filter(value -> value.templateKind().equalsIgnoreCase(kind) && value.sequence() == sequence)
+                .findFirst().map(KeyService::decodeTemplate).orElse(null);
+    }
+
+    private static ItemStack decodeTemplate(DatabaseService.StoredKeyTemplate template) {
+        try {
+            ItemSnapshotCodec.Snapshot snapshot = new ItemSnapshotCodec.Snapshot(template.bytes(), template.material(), 1,
+                    template.serializedSize(), template.sha256(), false, false, template.capturedAt());
+            return new ItemSnapshotCodec().restoreTemplate(snapshot);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static Map<String, String> parseSettings(byte[] payload) {
+        var values = new LinkedHashMap<String, String>();
+        if (payload == null || payload.length == 0) return values;
+        String text = new String(payload, StandardCharsets.UTF_8);
+        for (String line : text.split("\\R")) {
+            int separator = line.indexOf('=');
+            if (separator <= 0) continue;
+            values.put(line.substring(0, separator).trim().toLowerCase(Locale.ROOT),
+                    line.substring(separator + 1).trim());
+        }
+        return values;
     }
 
     private static String normalize(String value) {

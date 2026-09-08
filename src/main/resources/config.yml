@@ -1,6 +1,6 @@
-# PlexonCrates 2.0.0 | Created by Tonim (ZpkDxGames)
+# PlexonCrates 3.0.0 | Created by Tonim (ZpkDxGames)
 # Paper 26.2 / Java 25. All text uses MiniMessage, never legacy & colors.
-config-version: 2
+config-version: 3
 
 database:
   # Mutable links, statistics, limits, pity, history, journals, drafts, and audit data.
@@ -19,6 +19,18 @@ settings:
   maximum-bulk-open: 64
   # Save dirty statistics on a lightweight interval and again on shutdown.
   statistics-save-seconds: 300
+
+# Every module ships in this JAR. These switches hide gameplay controls while
+# preserving configured definitions and durable player state.
+features:
+  milestones: true
+  rerolls: true
+  mass-opening: true
+  claim-inbox: true
+  virtual-key-wallet: false
+  selective-opening: true
+  alternative-rewards: true
+  portable-crates: true
 
 plexonkeys:
   enabled: true
@@ -40,6 +52,9 @@ interaction:
 opening:
   animation-enabled: true
   default-animation: ROULETTE
+  # Optional exact overflow policy: REJECT, DROP, CLAIM, or CLAIM_ALL. If omitted,
+  # settings.drop-overflow-items keeps the 2.0-compatible DROP/REJECT behavior.
+  # overflow: CLAIM
   bulk-summary-threshold: 5
   # MANUAL_REVIEW never blindly reruns command rewards after a crash.
   recovery-policy: MANUAL_REVIEW

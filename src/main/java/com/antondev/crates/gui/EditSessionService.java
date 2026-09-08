@@ -8,12 +8,15 @@ import com.antondev.crates.domain.reward.RewardLimits;
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.domain.key.KeyDefinition;
 import com.antondev.crates.model.CrateReward;
+import com.antondev.crates.service.AlternativeRewardResolver;
+import com.antondev.crates.service.CrateRegistry;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
@@ -28,7 +31,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.scheduler.BukkitTask;
 
-/** Owns safe chat inputs and transient item-builder state. Persistent crate drafts remain YAML/SQLite backed. */
+/** Owns safe chat inputs and transient item-builder state around durable SQLite draft sessions. */
 public final class EditSessionService implements Listener {
     private final PlexonCrates plugin;
     private final Map<UUID, TextInput> inputs = new ConcurrentHashMap<>();
@@ -81,7 +84,7 @@ public final class EditSessionService implements Listener {
         draft.displayItem = source.displayCopy();
         source.itemCopies().forEach(item -> draft.items.add(item.clone()));
         draft.commands.addAll(source.commands());
-        draft.weight = source.weight();
+        draft.baseChancePercent = source.baseChancePercent();
         draft.rarity = source.rarity();
         draft.experiencePoints = source.experiencePoints();
         draft.experienceLevels = source.experienceLevels();
@@ -92,6 +95,10 @@ public final class EditSessionService implements Listener {
         draft.presentation = source.presentation();
         draft.personalMessage = source.personalMessage();
         draft.broadcast = source.broadcast();
+        draft.alternativeRewardId = source.alternativeRewardId();
+        draft.alternativeReasons = source.alternativeReasons();
+        draft.availableFrom = source.availableFrom();
+        draft.availableUntil = source.availableUntil();
         draft.originalOrderIndex = orderIndex;
         draft.orderIndex = orderIndex;
         rewards.put(player.getUniqueId(), draft);
@@ -123,6 +130,7 @@ public final class EditSessionService implements Listener {
         inputs.remove(event.getPlayer().getUniqueId());
         keys.remove(event.getPlayer().getUniqueId());
         rewards.remove(event.getPlayer().getUniqueId());
+        plugin.draftSessions().forget(event.getPlayer().getUniqueId());
     }
 
     public void stop() {
@@ -158,6 +166,7 @@ public final class EditSessionService implements Listener {
         long sessionExpiry = now - plugin.settings().sessionTimeoutMinutes() * 60_000L;
         keys.entrySet().removeIf(entry -> entry.getValue().updatedAt < sessionExpiry);
         rewards.entrySet().removeIf(entry -> entry.getValue().updatedAt < sessionExpiry);
+        plugin.draftSessions().expireOlderThan(sessionExpiry);
     }
 
     private static String concise(Throwable error) {
@@ -209,7 +218,7 @@ public final class EditSessionService implements Listener {
         private ItemStack displayItem;
         private boolean editing;
         private boolean enabled = true;
-        private double weight = 10.0;
+        private double baseChancePercent = 10.0;
         private RewardRarity rarity = RewardRarity.COMMON;
         private final List<ItemStack> items = new ArrayList<>();
         private final List<String> commands = new ArrayList<>();
@@ -222,6 +231,10 @@ public final class EditSessionService implements Listener {
         private RewardPresentation presentation = RewardPresentation.none();
         private String personalMessage = "";
         private String broadcast = "";
+        private String alternativeRewardId;
+        private Set<AlternativeRewardResolver.Reason> alternativeReasons = Set.of();
+        private Instant availableFrom;
+        private Instant availableUntil;
         private int originalOrderIndex = -1;
         private int orderIndex = -1;
         private long updatedAt = System.currentTimeMillis();
@@ -239,11 +252,24 @@ public final class EditSessionService implements Listener {
         public boolean editing() { return editing; }
         public boolean enabled() { return enabled; }
         public void toggleEnabled() { enabled = !enabled; touch(); }
-        public double weight() { return weight; }
-        public void weight(double value) {
-            if (!Double.isFinite(value) || value <= 0 || value > 1_000_000_000) throw new IllegalArgumentException("Weight must be positive and finite");
-            weight = value; touch();
+        public double baseChancePercent() { return baseChancePercent; }
+        public void baseChancePercent(double value) {
+            if (!Double.isFinite(value) || value < 0 || value > 100) {
+                throw new IllegalArgumentException("Chance must be between 0.00% and 100.00%");
+            }
+            try {
+                java.math.BigDecimal.valueOf(value).movePointRight(2)
+                        .setScale(0, java.math.RoundingMode.UNNECESSARY).intValueExact();
+            } catch (ArithmeticException error) {
+                throw new IllegalArgumentException("Chance supports exact 0.01% precision", error);
+            }
+            baseChancePercent = value;
+            touch();
         }
+        /** @deprecated Use {@link #baseChancePercent()}. */
+        @Deprecated(forRemoval = false) public double weight() { return baseChancePercent(); }
+        /** @deprecated Use {@link #baseChancePercent(double)}. */
+        @Deprecated(forRemoval = false) public void weight(double value) { baseChancePercent(value); }
         public RewardRarity rarity() { return rarity; }
         public void rarity(RewardRarity value) { rarity = value; touch(); }
         public List<ItemStack> items() { return items.stream().map(ItemStack::clone).toList(); }
@@ -308,6 +334,37 @@ public final class EditSessionService implements Listener {
             broadcast = serverBroadcast == null ? "" : serverBroadcast.trim();
             Text.parse(personalMessage);
             Text.parse(broadcast);
+            touch();
+        }
+        public String alternativeRewardId() { return alternativeRewardId; }
+        public Set<AlternativeRewardResolver.Reason> alternativeReasons() { return alternativeReasons; }
+        public void alternative(String rewardId, Set<AlternativeRewardResolver.Reason> reasons) {
+            String id = rewardId == null || rewardId.isBlank() ? null
+                    : rewardId.trim().toLowerCase(java.util.Locale.ROOT);
+            Set<AlternativeRewardResolver.Reason> selected = reasons == null ? Set.of() : Set.copyOf(reasons);
+            if (id == null) {
+                if (!selected.isEmpty()) throw new IllegalArgumentException("Clear reasons when removing the alternative");
+            } else {
+                if (!CrateRegistry.validId(id) || id.equals(this.id)) {
+                    throw new IllegalArgumentException("Choose a different valid reward ID");
+                }
+                if (selected.isEmpty() || !selected.stream()
+                        .allMatch(AlternativeRewardResolver::fallbackReasonAllowed)) {
+                    throw new IllegalArgumentException("Choose at least one supported alternative reason");
+                }
+            }
+            alternativeRewardId = id;
+            alternativeReasons = selected;
+            touch();
+        }
+        public Instant availableFrom() { return availableFrom; }
+        public Instant availableUntil() { return availableUntil; }
+        public void availability(Instant startsAt, Instant endsAt) {
+            if (startsAt != null && endsAt != null && !startsAt.isBefore(endsAt)) {
+                throw new IllegalArgumentException("Availability start must precede its end");
+            }
+            availableFrom = startsAt;
+            availableUntil = endsAt;
             touch();
         }
         public int orderIndex() { return orderIndex; }

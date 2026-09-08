@@ -6,6 +6,7 @@ invalid-world: <yellow>Crates cannot be opened in this world.</yellow>
 invalid-crate: <red>Unknown crate.</red> <gray>Choose:</gray> <white><crates></white>
 invalid-amount: <red>Enter a whole amount between 1 and <maximum>.</red>
 no-key: <yellow>You need a <key> <yellow>to open this crate.</yellow> <click:run_command:/keys><aqua>[/keys]</aqua></click>
+insufficient-payment: <yellow>You do not have enough accepted physical or virtual <key><yellow>.</yellow> <click:run_command:/crates keys><aqua>[View keys]</aqua></click>
 no-eligible-rewards: <red>This crate has no rewards you are eligible to receive. Your key was not consumed.</red>
 inventory-full: <yellow>Your inventory does not have enough space for this reward. Your key was not consumed.</yellow>
 already-opening: <yellow>Your previous crate transaction is still being prepared.</yellow>
@@ -16,6 +17,19 @@ database-error: <red>The opening journal is temporarily unavailable.</red> <yell
 input-cancelled: <yellow>Editor input cancelled.</yellow>
 input-timeout: <yellow>Editor input expired. Your saved crate draft is still available.</yellow>
 input-invalid: <red>That value was rejected:</red> <gray><error></gray>
+draft-loading: <yellow>This durable draft is still loading. Try again in a moment.</yellow>
+draft-publishing: <yellow>This draft is already being published.</yellow>
+draft-read-only: <yellow>This draft is read-only because <white><owner></white> holds the writable lease.</yellow>
+draft-save-failed: <red>The latest draft save failed:</red> <gray><error></gray> <yellow>Use Retry Save before editing again.</yellow>
+draft-save-retried: <green>The latest crate draft snapshot was saved successfully.</green>
+draft-takeover-complete: <green>You now hold the writable lease for this crate draft.</green>
+draft-undo-complete: <green>Restored the previous durable draft revision.</green>
+draft-published: <green>Published <crate><green> as revision <white><revision></white>.</green>
+draft-publish-failed: <red>Publication failed:</red> <gray><error></gray> <yellow>The previous runtime revision is still active.</yellow>
+draft-published-mirror-warning: <yellow>The SQLite publication is active, but its optional YAML mirror could not be updated. Check the server log.</yellow>
+key-replacement-drafted: <green>Saved replacement-key drafts for <white><count></white> crate(s).</green> <yellow>Publish those crates before deleting the active key.</yellow>
+key-replacement-awaiting-publish: <yellow>This key is still used by a published crate. Publish its pending replacement draft before deleting the key.</yellow>
+gui-stale: <yellow>This menu is out of date. Reopen it before trying that action again.</yellow>
 validation-passed: <green>Validation passed:</green> <white><crates></white> <gray>crates,</gray> <white><keys></white> <gray>keys,</gray> <white><rewards></white> <gray>rewards.</gray>
 validation-failed: <red>Validation failed:</red> <gray><error></gray>
 backup-started: <yellow>Creating a consistent YAML and SQLite backup asynchronously…</yellow>
@@ -25,24 +39,27 @@ cooldown: <yellow>Please wait <seconds>s before opening this crate again.</yello
 opened: <gray>You opened <crate> <gray>and received</gray> <reward><gray>!</gray>
 bulk-opened: <gray>You opened <yellow><amount>x</yellow> <crate> <gray>and received <yellow><rewards></yellow> rewards.</gray>
 reward-overflow: <yellow>Your inventory was full, so overflow rewards were dropped safely at your feet.</yellow>
+reward-claim-pending: <yellow>Your exact reward was placed in Claim Inbox because inventory space was unavailable. Use <white>/crates claim</white> to deliver it safely.</yellow>
+milestone-claim-pending: <yellow>Your milestone reward is ready in Claim Inbox. Use <white>/crates claim</white> to deliver it safely.</yellow>
 preview-hint: <dark_gray>Left-click previews • Right-click opens • Sneak-right-click opens in bulk</dark_gray>
-reloaded: <green>Configuration, crates, keys, menus, locations, and displays reloaded.</green>
+reloaded: <green>Configuration, editor mirrors, keys, menus, locations, and displays reloaded.</green> <gray>The published runtime snapshot was not bypassed.</gray>
 config-error: <red>Reload rejected:</red> <gray><error></gray> <yellow>The previous valid state is still active.</yellow>
 target-required: <yellow>Look directly at a block within <distance> blocks.</yellow>
 location-set: <green>Linked this block to <crate><green>.</green>
 location-removed: <green>Removed the crate link from this block.</green>
 location-not-found: <yellow>That block is not linked to a crate.</yellow>
 location-protected: <yellow>This crate block is protected. Use <white>/pcrates unset</white> before breaking it.</yellow>
-reward-added: <green>Captured reward</green> <white><reward></white> <green>for <crate><green> with weight <yellow><weight></yellow>.</green>
+reward-added: <green>Captured</green> <white><reward></white> <green>for <crate><green> at <yellow><chance>%</yellow>; existing chances were rebalanced.</green>
 command-reward-added: <green>Added command reward</green> <white><reward></white> <green>to <crate><green>.</green>
 reward-removed: <green>Removed reward</green> <white><reward></white> <green>from <crate><green>.</green>
-weight-updated: <green>Updated</green> <white><reward></white> <green>in <crate><green> to weight <yellow><weight></yellow>.</green>
+chance-updated: <green>Updated</green> <white><reward></white> <green>in <crate><green> to <yellow><chance>%</yellow>; other unlocked chances were rebalanced.</green>
 reward-not-found: <red>That reward does not exist in this crate.</red>
 reward-exists: <red>That reward ID already exists.</red>
 invalid-reward-id: <red>Reward IDs may contain lowercase letters, numbers, underscores, and hyphens only.</red>
-invalid-weight: <red>Weight must be a finite number greater than zero.</red>
+invalid-chance: <red>Chance must be from 0.00% to 100.00% with at most two decimal places.</red>
 hold-item: <yellow>Hold the exact reward item in your main hand first.</yellow>
 key-given: <green>Delivered <amount>x <key> <green>to <player><green>.</green>
+virtual-key-granted: <green>Credited <amount>x virtual <key> keys to <player>.</green>
 forced-open: <green>Opened <amount>x <crate> <green>for <player><green> without consuming keys.</green>
 player-not-found: <red>That player is not online.</red>
 statistics-saved: <green>Statistics saved.</green>

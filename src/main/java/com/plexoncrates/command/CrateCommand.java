@@ -3,8 +3,10 @@ package com.plexoncrates.command;
 import com.plexoncrates.config.ConfigManager;
 import com.plexoncrates.core.PlexonCrates;
 import com.plexoncrates.crate.Crate;
+import com.plexoncrates.crate.Reward;
 import com.plexoncrates.crate.RewardAction;
 import com.plexoncrates.crate.RewardActionType;
+import com.plexoncrates.item.ItemDiagnostics;
 import com.plexoncrates.migration.PhoenixMigrationService;
 import com.plexoncrates.migration.PhoenixPartialImportRecovery;
 import java.util.ArrayList;
@@ -53,6 +55,7 @@ public final class CrateCommand implements CommandExecutor, TabCompleter {
                 case "unlink" -> unlink(sender);
                 case "key" -> key(sender, args);
                 case "reward" -> reward(sender, args);
+                case "item" -> item(sender, args);
                 case "migrate" -> migrate(sender, args);
                 case "reload" -> reload(sender);
                 case "help" -> help(sender);
@@ -214,6 +217,69 @@ public final class CrateCommand implements CommandExecutor, TabCompleter {
         }
         plugin.crates().addRewardAction(crate.id(), rewardId, rewardAction);
         sender.sendMessage(config.prefix() + "§aAdded §f" + type + " §aaction to §f" + rewardId + "§a.");
+    }
+
+    private void item(CommandSender sender, String[] args) {
+        Player player = player(sender);
+        require(player, "plexoncrates.admin.items");
+        if (args.length < 2) throw new CommandFailure("Usage: /crates item <inspect|compare> ...");
+
+        ItemStack held = player.getInventory().getItemInMainHand();
+        if (held.getType().isAir()) throw new CommandFailure("Hold the item to inspect in your main hand.");
+
+        String action = args[1].toLowerCase(Locale.ROOT);
+        if (action.equals("inspect")) {
+            sendItemInspection(sender, held);
+            return;
+        }
+        if (!action.equals("compare")) {
+            throw new CommandFailure("Item action must be inspect or compare.");
+        }
+        if (args.length < 4) {
+            throw new CommandFailure("Usage: /crates item compare <crate> <key|icon|reward-id>");
+        }
+
+        Crate crate = crate(args, 2);
+        String targetId = args[3];
+        ItemStack target;
+        String targetLabel;
+        if (targetId.equalsIgnoreCase("key")) {
+            target = crate.keyItem();
+            targetLabel = crate.id() + " key";
+        } else if (targetId.equalsIgnoreCase("icon")) {
+            target = crate.icon();
+            targetLabel = crate.id() + " icon";
+        } else {
+            Reward reward = crate.rewards().stream()
+                    .filter(candidate -> candidate.id().equalsIgnoreCase(targetId))
+                    .findFirst()
+                    .orElseThrow(() -> new CommandFailure("Unknown reward in " + crate.id() + ": " + targetId));
+            target = reward.displayItem();
+            targetLabel = crate.id() + "/" + reward.id();
+        }
+
+        ItemDiagnostics.Comparison comparison = ItemDiagnostics.compare(held, target);
+        sender.sendMessage(config.prefix() + "§6§lExact Item Comparison");
+        sender.sendMessage("§7Target: §f" + targetLabel);
+        sender.sendMessage("§7Held SHA-256: §f" + comparison.held().sha256());
+        sender.sendMessage("§7Target SHA-256: §f" + comparison.target().sha256());
+        sender.sendMessage("§7Exact bytes: " + yesNo(comparison.exact()));
+        sender.sendMessage("§7Exact ignoring amount: " + yesNo(comparison.exactIgnoringAmount()));
+        sender.sendMessage("§7Held amount / target amount: §f" + comparison.held().amount()
+                + " §8/ §f" + comparison.target().amount());
+    }
+
+    private void sendItemInspection(CommandSender sender, ItemStack item) {
+        ItemDiagnostics.SnapshotInfo info = ItemDiagnostics.inspect(item);
+        sender.sendMessage(config.prefix() + "§6§lExact Item Inspection");
+        sender.sendMessage("§7Material: §f" + info.material() + " §8x§f" + info.amount());
+        sender.sendMessage("§7Format: §f" + info.format());
+        sender.sendMessage("§7Native bytes: §f" + info.byteLength());
+        sender.sendMessage("§7Minecraft data version: §f" + info.minecraftDataVersion());
+        sender.sendMessage("§7SHA-256: §f" + info.sha256());
+        sender.sendMessage("§7PDC keys: §f" + (info.pdcKeys().isEmpty() ? "none" : String.join(", ", info.pdcKeys())));
+        sender.sendMessage("§7Native round-trip: §aPASS");
+        sender.sendMessage("§8PDC values are intentionally not shown.");
     }
 
     private void migrate(CommandSender sender, String[] args) {
@@ -425,6 +491,8 @@ public final class CrateCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage("§c/crates reward remove <crate> <reward>");
             sender.sendMessage("§c/crates reward weight <crate> <reward> <weight>");
             sender.sendMessage("§c/crates reward action <crate> <reward> <ITEM|COMMAND|MESSAGE|SOUND> [value]");
+            sender.sendMessage("§c/crates item inspect §7- Fingerprint the held exact item");
+            sender.sendMessage("§c/crates item compare <crate> <key|icon|reward-id>");
             sender.sendMessage("§c/crates migrate phoenix <scan|plan|report|import confirm>");
             sender.sendMessage("§c/crates reload");
         }
@@ -436,7 +504,7 @@ public final class CrateCommand implements CommandExecutor, TabCompleter {
         if (args.length == 1) {
             List<String> root = new ArrayList<>(List.of("preview", "open", "claims", "help"));
             if (sender.hasPermission("plexoncrates.admin")) {
-                root.addAll(List.of("admin", "link", "unlink", "key", "reward", "migrate", "reload"));
+                root.addAll(List.of("admin", "link", "unlink", "key", "reward", "item", "migrate", "reload"));
             }
             return filter(root, args[0]);
         }
@@ -445,6 +513,18 @@ public final class CrateCommand implements CommandExecutor, TabCompleter {
         if (args.length == 2 && List.of("preview", "open", "link").contains(sub)) return filter(crateIds, args[1]);
         if (sub.equals("open") && args.length == 3) return filter(List.of("virtual", "physical"), args[2]);
         if (sub.equals("admin") && args.length == 2) return filter(List.of("create"), args[1]);
+        if (sub.equals("item")) {
+            if (args.length == 2) return filter(List.of("inspect", "compare"), args[1]);
+            if (args.length == 3 && args[1].equalsIgnoreCase("compare")) return filter(crateIds, args[2]);
+            if (args.length == 4 && args[1].equalsIgnoreCase("compare")) {
+                return plugin.crates().find(args[2])
+                        .map(crate -> {
+                            List<String> targets = new ArrayList<>(List.of("key", "icon"));
+                            targets.addAll(crate.rewards().stream().map(Reward::id).toList());
+                            return filter(targets, args[3]);
+                        }).orElse(List.of());
+            }
+        }
         if (sub.equals("migrate")) {
             if (args.length == 2) return filter(List.of("phoenix"), args[1]);
             if (args.length == 3 && args[1].equalsIgnoreCase("phoenix")) {
@@ -466,7 +546,7 @@ public final class CrateCommand implements CommandExecutor, TabCompleter {
             if (args.length == 4 && List.of("remove", "weight", "action")
                     .contains(args[1].toLowerCase(Locale.ROOT))) {
                 return plugin.crates().find(args[2])
-                        .map(crate -> filter(crate.rewards().stream().map(reward -> reward.id()).toList(), args[3]))
+                        .map(crate -> filter(crate.rewards().stream().map(Reward::id).toList(), args[3]))
                         .orElse(List.of());
             }
             if (args.length == 4 && args[1].equalsIgnoreCase("add")) {
@@ -504,6 +584,10 @@ public final class CrateCommand implements CommandExecutor, TabCompleter {
     private static String message(Throwable error) {
         String text = error.getMessage();
         return text == null || text.isBlank() ? error.getClass().getSimpleName() : text;
+    }
+
+    private static String yesNo(boolean value) {
+        return value ? "§aYES" : "§cNO";
     }
 
     private static List<String> filter(List<String> values, String prefix) {

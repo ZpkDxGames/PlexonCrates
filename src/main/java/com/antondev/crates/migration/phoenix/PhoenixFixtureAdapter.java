@@ -135,7 +135,7 @@ public final class PhoenixFixtureAdapter {
 
                 List<String> hologram = yaml.getStringList("hologram.lines").stream()
                         .map(PhoenixFixtureAdapter::legacyToMini).toList();
-                if (hologram.isEmpty()) hologram = List.of(displayName,
+                if (hologram.isEmpty()) hologram = List.of(legacyToMini(displayName),
                         "<gray>Left-click to preview</gray>", "<white>Right-click to open</white>");
 
                 String sourceAnimation = yaml.getString("opening-animation.open", "CSGO_GUI");
@@ -315,7 +315,7 @@ public final class PhoenixFixtureAdapter {
             }
         }
         int amount = normalizeAmount ? 1 : spec.getInt("amount", result.getAmount());
-        if (amount < 1 || amount > Math.max(6400, result.getMaxStackSize())) {
+        if (amount < 1 || amount > 6400) {
             throw new IllegalArgumentException("Invalid Phoenix item amount " + amount + " at " + description);
         }
         result.setAmount(amount);
@@ -342,10 +342,11 @@ public final class PhoenixFixtureAdapter {
     }
 
     private static List<String> sortedNumeric(Set<String> values) {
-        return values.stream().sorted(Comparator.comparingInt(value -> {
+        Comparator<String> order = Comparator.comparingInt((String value) -> {
             try { return Integer.parseInt(value); }
             catch (NumberFormatException ignored) { return Integer.MAX_VALUE; }
-        }).thenComparing(value -> value)).toList();
+        }).thenComparing(Comparator.naturalOrder());
+        return values.stream().sorted(order).toList();
     }
 
     public static String normalizeId(String source) {
@@ -370,7 +371,7 @@ public final class PhoenixFixtureAdapter {
         };
     }
 
-    private static String legacyToMini(String source) {
+    public static String legacyToMini(String source) {
         if (source == null || source.isEmpty()) return "";
         String result = source;
         String[][] replacements = {

@@ -36,8 +36,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 
 public final class CrateManager {
-    private static final List<String> ANIMATIONS = List.of("CSGO", "WHEEL");
-    private static final List<String> IDLE_EFFECTS = List.of("HELIX", "CLOUD", "FOUNTAIN", "NONE");
+    private static final List<String> ANIMATIONS = List.of("CSGO", "WHEEL", "INSTANT");
+    private static final List<String> IDLE_EFFECTS = List.of("HELIX", "CLOUD", "FOUNTAIN", "RING", "PULSE", "NONE");
 
     private final PlexonCrates plugin;
     private final ExecutorService executor;
@@ -66,7 +66,8 @@ public final class CrateManager {
                     Crate crate = parseCrate(rawId, root.getConfigurationSection(rawId));
                     loaded.put(crate.id(), crate);
                 } catch (Exception error) {
-                    plugin.getLogger().log(Level.SEVERE, "Skipping invalid crate definition " + rawId, error);
+                    plugin.getLogger().log(Level.SEVERE,
+                            "Skipping invalid crate definition " + rawId + " rather than substituting damaged item data", error);
                 }
             }
         }
@@ -167,8 +168,6 @@ public final class CrateManager {
                 if (crates.containsKey(id) || prepared.containsKey(id)) {
                     throw new IllegalStateException("Imported crate ID already exists: " + id);
                 }
-                // Validate all exact item payloads now, while allowing draft-level missing/zero-weight
-                // concerns to remain visible for administrator review.
                 CrateValidator.Result validation = CrateValidator.validate(crate);
                 for (CrateValidator.Issue issue : validation.issues()) {
                     if (issue.code().startsWith("crate.icon") || issue.code().startsWith("crate.key")
@@ -198,7 +197,6 @@ public final class CrateManager {
 
     public Reward addCapturedReward(String crateId, ItemStack source, int weight) {
         if (source == null || source.getType().isAir()) throw new IllegalArgumentException("A real item is required");
-        // Hard gate: accept only a native Paper snapshot that survives an exact byte round-trip.
         ItemStack captured = ItemCodec.snapshot(source).toItemStack();
         lock.writeLock().lock();
         try {
@@ -307,7 +305,7 @@ public final class CrateManager {
         lock.writeLock().lock();
         try {
             Crate crate = requireMutable(crateId);
-            int current = ANIMATIONS.indexOf(crate.animation());
+            int current = ANIMATIONS.indexOf(crate.animation().toUpperCase(Locale.ROOT));
             String next = ANIMATIONS.get((current + 1 + ANIMATIONS.size()) % ANIMATIONS.size());
             crate.setAnimation(next);
             saveAsync();
@@ -321,7 +319,7 @@ public final class CrateManager {
         lock.writeLock().lock();
         try {
             Crate crate = requireMutable(crateId);
-            int current = IDLE_EFFECTS.indexOf(crate.idleEffect());
+            int current = IDLE_EFFECTS.indexOf(crate.idleEffect().toUpperCase(Locale.ROOT));
             String next = IDLE_EFFECTS.get((current + 1 + IDLE_EFFECTS.size()) % IDLE_EFFECTS.size());
             crate.setIdleEffect(next);
             saveAsync();
@@ -444,7 +442,6 @@ public final class CrateManager {
                 if (rewardSection == null) continue;
                 ItemStack displayItem = ItemCodec.read(rewardSection.getConfigurationSection("display-item"));
                 List<RewardAction> actions = readActions(rewardSection.getMapList("actions"));
-                if (actions.isEmpty()) actions = List.of(new RewardAction(RewardActionType.ITEM, "", null));
                 rewards.add(new Reward(rewardId, rewardSection.getBoolean("enabled", true),
                         Math.max(0, rewardSection.getInt("weight", 1)), displayItem, actions));
             }
@@ -477,6 +474,7 @@ public final class CrateManager {
         return crate;
     }
 
+    /** Exact item/action corruption is fatal for the containing crate; no fallback reward is built. */
     private List<RewardAction> readActions(List<Map<?, ?>> maps) {
         List<RewardAction> actions = new ArrayList<>();
         for (Map<?, ?> map : maps) {
@@ -496,7 +494,7 @@ public final class CrateManager {
                 }
                 actions.add(new RewardAction(type, value, item));
             } catch (Exception error) {
-                plugin.getLogger().warning("Ignoring invalid reward action: " + error.getMessage());
+                throw new IllegalArgumentException("Invalid reward action; refusing lossy fallback", error);
             }
         }
         return actions;

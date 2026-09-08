@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/revamp-blueprint
+      - agent/4.0-exact-items-gui
   pull_request:
     branches:
       - main

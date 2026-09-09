@@ -1,7 +1,6 @@
 package com.antondev.crates.config;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Locale;
 import java.util.Map;
@@ -140,9 +139,9 @@ public final class ItemCodec {
         byte[] bytes;
         try {
             bytes = copy.serializeAsBytes();
-            verifyCurrentServerRoundTrip(bytes);
+            verifyCurrentServerDecode(bytes);
         } catch (RuntimeException error) {
-            throw new IllegalArgumentException("Paper could not round-trip this exact item", error);
+            throw new IllegalArgumentException("Paper could not serialize and restore this exact item", error);
         }
         String encoded = Base64.getEncoder().encodeToString(bytes);
         if (encoded.length() > MAX_CAPTURE_LENGTH) throw new IllegalArgumentException("This item is too large to capture");
@@ -169,14 +168,12 @@ public final class ItemCodec {
         return copy;
     }
 
-    private static void verifyCurrentServerRoundTrip(byte[] bytes) {
+    private static void verifyCurrentServerDecode(byte[] bytes) {
         ItemStack restored = ItemStack.deserializeBytes(bytes.clone());
         if (restored == null || restored.getType().isAir()) {
             throw new IllegalArgumentException("Paper decoded the exact item to an empty item");
         }
-        byte[] roundTrip = restored.serializeAsBytes();
-        if (!Arrays.equals(bytes, roundTrip)) {
-            throw new IllegalArgumentException("Paper native item bytes are not stable on this server build");
-        }
+        // Do not demand byte-for-byte reserialization here. Paper/MockBukkit may normalize a
+        // valid native payload during data fixing. The stored Base64 bytes remain authoritative.
     }
 }

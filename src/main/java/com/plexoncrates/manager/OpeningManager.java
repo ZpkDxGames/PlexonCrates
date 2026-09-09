@@ -14,15 +14,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
-/**
- * Owns the transition from key consumption to opening animation.
- *
- * <p>The pending set is intentionally separate from AnimationManager's active map. Virtual-key
- * consumption is asynchronous, so relying only on the animation map leaves a window where several
- * rapid clicks can enqueue several debits before the first animation starts. A player is reserved
- * before any key transaction begins and remains reserved until the animation synchronously takes
- * ownership or the request is aborted.</p>
- */
+/** Owns key reservation/consumption and the hand-off into an opening animation. */
 public final class OpeningManager {
     private final PlexonCrates plugin;
     private final ConfigManager config;
@@ -55,33 +47,52 @@ public final class OpeningManager {
         keys.consumeVirtual(playerId, crate).whenComplete((consumed, error) -> {
             if (!plugin.isEnabled()) {
                 release(playerId);
-                if (error == null && Boolean.TRUE.equals(consumed)) refundVirtual(playerId, crate, "plugin disabled before opening animation");
+                if (error == null && Boolean.TRUE.equals(consumed)) {
+                    refundVirtual(playerId, crate, "plugin disabled before opening animation");
+                }
                 return;
             }
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                if (error != null) {
-                    release(playerId);
-                    plugin.getLogger().log(Level.SEVERE, "Virtual key transaction failed", error);
-                    if (player.isOnline()) player.sendMessage(config.prefix() + "§cThe virtual key transaction failed.");
-                    return;
-                }
-                if (!Boolean.TRUE.equals(consumed)) {
-                    release(playerId);
-                    if (player.isOnline()) player.sendMessage(config.message("no-key", "crate", crate.id()));
-                    return;
-                }
-                if (!player.isOnline()) {
-                    release(playerId);
-                    refundVirtual(playerId, crate, "player disconnected before opening animation");
-                    return;
-                }
 
-                // AnimationManager marks the player active synchronously inside start(). Release the
-                // pending reservation only after that hand-off so there is never an unguarded gap.
-                animations.start(player, crate, reward.get(), null);
+            try {
+                Bukkit.getScheduler().runTask(plugin, () -> finishVirtualOpen(player, crate, reward.get(), consumed, error));
+            } catch (Throwable schedulerFailure) {
                 release(playerId);
-            });
+                if (error == null && Boolean.TRUE.equals(consumed)) {
+                    refundVirtual(playerId, crate, "scheduler rejected opening hand-off");
+                }
+                plugin.getLogger().log(Level.SEVERE, "Could not schedule virtual crate opening", schedulerFailure);
+            }
         });
+    }
+
+    private void finishVirtualOpen(Player player, Crate crate, Reward reward, Boolean consumed, Throwable error) {
+        UUID playerId = player.getUniqueId();
+        if (error != null) {
+            release(playerId);
+            plugin.getLogger().log(Level.SEVERE, "Virtual key transaction failed", error);
+            if (player.isOnline()) player.sendMessage(config.prefix() + "§cThe virtual key transaction failed.");
+            return;
+        }
+        if (!Boolean.TRUE.equals(consumed)) {
+            release(playerId);
+            if (player.isOnline()) player.sendMessage(config.message("no-key", "crate", crate.id()));
+            return;
+        }
+        if (!player.isOnline()) {
+            release(playerId);
+            refundVirtual(playerId, crate, "player disconnected before opening animation");
+            return;
+        }
+
+        try {
+            animations.start(player, crate, reward, null);
+        } catch (Throwable openingFailure) {
+            refundVirtual(playerId, crate, "opening manager failed before animation ownership");
+            plugin.getLogger().log(Level.SEVERE, "Virtual crate opening failed before settlement", openingFailure);
+            player.sendMessage(config.prefix() + "§cThe opening failed safely and your virtual key is being refunded.");
+        } finally {
+            release(playerId);
+        }
     }
 
     public void openPhysical(Player player, Crate crate, Location source) {
@@ -106,6 +117,13 @@ public final class OpeningManager {
 
         try {
             animations.start(player, crate, reward.get(), source);
+        } catch (Throwable openingFailure) {
+            plugin.getLogger().log(Level.SEVERE, "Physical crate opening failed before settlement", openingFailure);
+            keys.refundPhysical(player, crate).exceptionally(refundFailure -> {
+                plugin.getLogger().log(Level.SEVERE, "Physical key refund also failed", refundFailure);
+                return null;
+            });
+            player.sendMessage(config.prefix() + "§cThe opening failed safely and your physical key is being refunded.");
         } finally {
             release(playerId);
         }

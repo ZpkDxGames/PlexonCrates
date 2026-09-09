@@ -3,6 +3,8 @@ name: Build
 on:
   push:
     branches:
+      - main
+      - release/4.5.0
       - agent/revamp-blueprint
       - agent/4.0-exact-items-gui
   pull_request:
@@ -18,18 +20,37 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
       - name: Set up Java 25
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '25'
           cache: maven
+
       - name: Verify
         run: mvn -B -ntp clean verify
+
+      - name: Verify packaged plugin metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR="target/PlexonCrates-4.5.0.jar"
+          test -s "$JAR"
+          unzip -p "$JAR" plugin.yml | grep -F "version: '4.5.0'"
+          unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
+          if jar tf "$JAR" | grep -q '^org/bukkit/'; then
+            echo "Paper/Bukkit API classes must never be shaded into PlexonCrates" >&2
+            exit 1
+          fi
+          sha256sum "$JAR" | tee "target/PlexonCrates-4.5.0.jar.sha256"
+
       - name: Upload JAR
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: PlexonCrates-4.0.0-SNAPSHOT
-          path: target/PlexonCrates-4.0.0-SNAPSHOT.jar
+          name: PlexonCrates-4.5.0
+          path: |
+            target/PlexonCrates-4.5.0.jar
+            target/PlexonCrates-4.5.0.jar.sha256
           if-no-files-found: error

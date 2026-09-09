@@ -24,9 +24,11 @@ public final class KeyManager {
 
     public boolean matchesPhysical(ItemStack candidate, Crate crate) {
         if (!config.physicalKeysEnabled() || candidate == null || candidate.getType().isAir()) return false;
+        ItemStack expected = crate.keyItem();
+        if (candidate.getType() != expected.getType()) return false;
         try {
             // Amount is intentionally excluded from key identity; every other native component is exact.
-            return ItemCodec.exactBytesEqual(ItemCodec.one(candidate), ItemCodec.one(crate.keyItem()));
+            return ItemCodec.exactBytesEqual(ItemCodec.one(candidate), ItemCodec.one(expected));
         } catch (RuntimeException invalidSnapshot) {
             return false;
         }

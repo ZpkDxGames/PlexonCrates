@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import org.bukkit.inventory.ItemStack;
 
+/** Mutable reward definition with display and delivery state kept logically separate. */
 public final class Reward {
     private final String id;
     private boolean enabled;
@@ -18,7 +19,17 @@ public final class Reward {
         this.weight = Math.max(0, weight);
         this.displayItem = Objects.requireNonNull(displayItem, "displayItem").clone();
         this.actions = new ArrayList<>();
-        if (actions != null) actions.forEach(action -> this.actions.add(action.copy()));
+        if (actions != null) {
+            for (RewardAction action : actions) {
+                RewardAction copy = Objects.requireNonNull(action, "reward action").copy();
+                // Pre-4.5 definitions used a null ITEM payload as shorthand for "deliver display item".
+                // Materialize it now so later cosmetic edits can never mutate the canonical reward.
+                if (copy.type() == RewardActionType.ITEM && copy.item() == null) {
+                    copy = new RewardAction(RewardActionType.ITEM, copy.value(), this.displayItem);
+                }
+                this.actions.add(copy);
+            }
+        }
     }
 
     public String id() { return id; }
@@ -32,7 +43,11 @@ public final class Reward {
     public void setDisplayItem(ItemStack item) { this.displayItem = Objects.requireNonNull(item).clone(); }
 
     public void addAction(RewardAction action) {
-        actions.add(Objects.requireNonNull(action).copy());
+        RewardAction copy = Objects.requireNonNull(action).copy();
+        if (copy.type() == RewardActionType.ITEM && copy.item() == null) {
+            copy = new RewardAction(RewardActionType.ITEM, copy.value(), displayItem);
+        }
+        actions.add(copy);
     }
 
     public void clearActions() {

@@ -6,18 +6,19 @@
 
     <groupId>com.plexoncrates</groupId>
     <artifactId>PlexonCrates</artifactId>
-    <version>4.0.0-SNAPSHOT</version>
+    <version>4.5.0</version>
     <name>PlexonCrates</name>
-    <description>Premium GUI-driven crate management and opening system for Paper.</description>
+    <description>Stable GUI-driven crate management and opening system for Paper 26.2.</description>
     <url>https://github.com/ZpkDxGames/PlexonCrates</url>
 
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.build.outputTimestamp>2026-09-09T00:00:00Z</project.build.outputTimestamp>
         <junit.version>5.11.4</junit.version>
         <mockito.version>5.23.0</mockito.version>
         <paper.version>26.2.build.121-stable</paper.version>
-        <sqlite.version>3.46.1.3</sqlite.version>
+        <sqlite.version>3.53.4.0</sqlite.version>
     </properties>
 
     <repositories>
@@ -77,6 +78,7 @@
                 <version>3.5.2</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
+                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
                 </configuration>
             </plugin>
             <plugin>

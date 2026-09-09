@@ -12,6 +12,11 @@ import com.zpkdxgames.plexoncore.api.PlexonCoreAPI;
 import com.zpkdxgames.plexoncore.api.PlexonCoreAPI.CoreVersion;
 import com.zpkdxgames.plexoncore.integration.IntegrationRegistry;
 import com.zpkdxgames.plexoncore.module.ModuleRegistry;
+import com.zpkdxgames.plexoncore.module.ModuleRegistry.ModuleDescriptor;
+import com.zpkdxgames.plexoncore.module.ModuleRegistry.ModuleState;
+import com.zpkdxgames.plexoncore.module.ModuleRegistry.ModuleVersionRange;
+import java.time.Instant;
+import java.util.Set;
 import org.bukkit.plugin.ServicePriority;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,8 +39,8 @@ final class CoreRuntimeIntegrationTest {
     }
 
     @Test
-    void core2RegistersRuntimeModeWhileInteractionsRemainLocal() {
-        PlexonCrates crates = loadWithCore(2, 0, "2.0.0");
+    void core204RegistersRuntimeModeAndFinishesReadyWhileInteractionsRemainLocal() {
+        PlexonCrates crates = loadWithCore(2, 0, "2.0.4");
 
         assertEquals("CORE_RUNTIME", crates.coreBridge().mode());
         assertEquals("LOCAL", crates.coreBridge().interactionOwnership());
@@ -58,6 +63,41 @@ final class CoreRuntimeIntegrationTest {
         assertFalse(crates.coreBridge().compatible());
     }
 
+    @Test
+    void duplicateModuleOwnedByAnotherPluginIsNeitherReplacedNorRemoved() {
+        var corePlugin = MockBukkit.createMockPlugin("PlexonCore");
+        var otherPlugin = MockBukkit.createMockPlugin("OtherCrates");
+        CoreVersion version = CoreVersion.of(2, 0, "2.0.4");
+        ModuleRegistry modules = new ModuleRegistry(version);
+        IntegrationRegistry integrations = new IntegrationRegistry(server.getPluginManager());
+        ModuleDescriptor existing = new ModuleDescriptor(
+                CoreBridge.MODULE_ID,
+                "Other Crates",
+                otherPlugin.getName(),
+                otherPlugin.getPluginMeta().getVersion(),
+                otherPlugin,
+                ModuleVersionRange.parse(CoreBridge.SUPPORTED_API_RANGE),
+                Set.of("other-crate-engine"),
+                ModuleState.READY,
+                "Already registered",
+                Instant.now());
+        assertTrue(modules.register(existing).success());
+
+        PlexonCoreAPI api = mock(PlexonCoreAPI.class);
+        when(api.version()).thenReturn(version);
+        when(api.modules()).thenReturn(modules);
+        when(api.integrations()).thenReturn(integrations);
+        server.getServicesManager().register(PlexonCoreAPI.class, api, corePlugin, ServicePriority.Normal);
+
+        PlexonCrates crates = MockBukkit.load(PlexonCrates.class);
+        assertEquals("STANDALONE", crates.coreBridge().mode());
+        assertSame(otherPlugin, modules.find(CoreBridge.MODULE_ID).orElseThrow().plugin());
+
+        server.getPluginManager().disablePlugin(crates);
+        assertSame(otherPlugin, modules.find(CoreBridge.MODULE_ID).orElseThrow().plugin());
+        assertEquals(ModuleState.READY, modules.find(CoreBridge.MODULE_ID).orElseThrow().state());
+    }
+
     private PlexonCrates loadWithCore(int major, int minor, String pluginVersion) {
         var corePlugin = MockBukkit.createMockPlugin("PlexonCore");
         CoreVersion version = CoreVersion.of(major, minor, pluginVersion);
@@ -74,7 +114,7 @@ final class CoreRuntimeIntegrationTest {
             var descriptor = modules.find("crates").orElseThrow();
             assertSame(crates, descriptor.plugin());
             assertEquals("PlexonCrates", descriptor.displayName());
-            assertEquals(ModuleRegistry.ModuleState.READY, descriptor.state());
+            assertEquals(ModuleState.READY, descriptor.state());
             assertTrue(descriptor.capabilities().contains("crate-open-event"));
             assertTrue(descriptor.capabilities().contains("optimized-local-interactions"));
 

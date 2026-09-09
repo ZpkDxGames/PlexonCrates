@@ -32,7 +32,9 @@ public final class PlexonCoreBridge implements CoreBridge {
             "rerolls",
             "virtual-keys",
             "opening-journal",
-            "phoenix-migration");
+            "phoenix-migration",
+            "core2-runtime-compatible",
+            "optimized-local-interactions");
 
     private final JavaPlugin plugin;
     private final PlexonCoreAPI core;
@@ -54,6 +56,8 @@ public final class PlexonCoreBridge implements CoreBridge {
         this.compatible = ModuleVersionRange.parse(SUPPORTED_API_RANGE).contains(version);
         if (!compatible) {
             detail = "Core API " + version.apiVersion() + " is outside supported range " + SUPPORTED_API_RANGE;
+        } else if (version.apiMajor() >= 2) {
+            detail = "Core 2 runtime detected; PlayerInteract ownership remains LOCAL because Core 2.0 has no mutable interaction gateway";
         }
     }
 
@@ -84,7 +88,8 @@ public final class PlexonCoreBridge implements CoreBridge {
 
     @Override
     public String mode() {
-        return compatible && ownsRegistration ? "CORE" : "STANDALONE";
+        if (!compatible || !ownsRegistration) return "STANDALONE";
+        return version.apiMajor() >= 2 ? "CORE_RUNTIME" : "CORE_LEGACY";
     }
 
     @Override
@@ -129,6 +134,8 @@ public final class PlexonCoreBridge implements CoreBridge {
             plugin.getLogger().warning("PlexonCore API " + version.apiVersion()
                     + " is incompatible with supported range " + SUPPORTED_API_RANGE
                     + "; crate gameplay will continue in standalone compatibility mode.");
+        } else if (version.apiMajor() >= 2) {
+            plugin.getLogger().info("PlexonCore 2 runtime detected. PlexonCrates 4.6 keeps PlayerInteractEvent and block protection local because Core 2.0.0 does not provide equivalent mutable interaction/cancellation semantics.");
         }
     }
 
@@ -148,9 +155,7 @@ public final class PlexonCoreBridge implements CoreBridge {
     }
 
     private void update(ModuleState moduleState, IntegrationState integrationState, String newDetail) {
-        if (!compatible || !ownsRegistration) {
-            return;
-        }
+        if (!compatible || !ownsRegistration) return;
         String resolvedDetail = newDetail == null ? "" : newDetail;
         core.modules().updateState(MODULE_ID, moduleState, resolvedDetail);
         core.integrations().publish(
@@ -166,9 +171,7 @@ public final class PlexonCoreBridge implements CoreBridge {
 
     @Override
     public void unregister() {
-        if (!ownsRegistration) {
-            return;
-        }
+        if (!ownsRegistration) return;
         core.modules().find(MODULE_ID)
                 .filter(descriptor -> descriptor.plugin() == plugin)
                 .ifPresent(descriptor -> core.modules().unregister(MODULE_ID));
@@ -178,9 +181,7 @@ public final class PlexonCoreBridge implements CoreBridge {
 
     @Override
     public ProviderHint providerHint(String integrationId) {
-        if (!compatible) {
-            return ProviderHint.UNKNOWN;
-        }
+        if (!compatible) return ProviderHint.UNKNOWN;
         return core.integrations().get(integrationId).map(view -> switch (view.state()) {
             case READY -> ProviderHint.PRESENT;
             case MISSING -> ProviderHint.MISSING;

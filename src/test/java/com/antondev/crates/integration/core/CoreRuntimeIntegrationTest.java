@@ -1,6 +1,7 @@
 package com.antondev.crates.integration.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -33,37 +34,33 @@ final class CoreRuntimeIntegrationTest {
     }
 
     @Test
-    void compatibleCoreRegistersCratesReadyAndPublishesIntegration() {
-        var corePlugin = MockBukkit.createMockPlugin("PlexonCore");
-        CoreVersion version = CoreVersion.of(1, 0, "1.0.0");
-        ModuleRegistry modules = new ModuleRegistry(version);
-        IntegrationRegistry integrations = new IntegrationRegistry(server.getPluginManager());
-        PlexonCoreAPI api = mock(PlexonCoreAPI.class);
-        when(api.version()).thenReturn(version);
-        when(api.modules()).thenReturn(modules);
-        when(api.integrations()).thenReturn(integrations);
-        server.getServicesManager().register(PlexonCoreAPI.class, api, corePlugin, ServicePriority.Normal);
+    void core2RegistersRuntimeModeWhileInteractionsRemainLocal() {
+        PlexonCrates crates = loadWithCore(2, 0, "2.0.0");
 
-        PlexonCrates crates = MockBukkit.load(PlexonCrates.class);
-
-        assertEquals("CORE", crates.coreBridge().mode());
+        assertEquals("CORE_RUNTIME", crates.coreBridge().mode());
+        assertEquals("LOCAL", crates.coreBridge().interactionOwnership());
+        assertEquals("LOCAL", crates.coreBridge().protectionOwnership());
+        assertFalse(crates.coreBridge().sharedInteractionAvailable());
         assertEquals("READY", crates.coreBridge().registrationState());
-        var descriptor = modules.find("crates").orElseThrow();
-        assertSame(crates, descriptor.plugin());
-        assertEquals("PlexonCrates", descriptor.displayName());
-        assertEquals(ModuleRegistry.ModuleState.READY, descriptor.state());
-        assertTrue(descriptor.capabilities().contains("crate-open-event"));
-        assertTrue(descriptor.capabilities().contains("phoenix-migration"));
-
-        var integration = integrations.get("PLEXON_CRATES").orElseThrow();
-        assertEquals(IntegrationRegistry.IntegrationState.READY, integration.state());
-        assertEquals(crates.getPluginMeta().getVersion(), integration.version());
     }
 
     @Test
-    void incompatibleCoreSafelyKeepsCratesStandalone() {
+    void core1RemainsSupportedAsLegacyMode() {
+        PlexonCrates crates = loadWithCore(1, 0, "1.0.0");
+        assertEquals("CORE_LEGACY", crates.coreBridge().mode());
+        assertTrue(crates.coreBridge().compatible());
+    }
+
+    @Test
+    void futureIncompatibleCoreSafelyKeepsCratesStandalone() {
+        PlexonCrates crates = loadWithCore(3, 0, "3.0.0");
+        assertEquals("STANDALONE", crates.coreBridge().mode());
+        assertFalse(crates.coreBridge().compatible());
+    }
+
+    private PlexonCrates loadWithCore(int major, int minor, String pluginVersion) {
         var corePlugin = MockBukkit.createMockPlugin("PlexonCore");
-        CoreVersion version = CoreVersion.of(2, 0, "2.0.0");
+        CoreVersion version = CoreVersion.of(major, minor, pluginVersion);
         ModuleRegistry modules = new ModuleRegistry(version);
         IntegrationRegistry integrations = new IntegrationRegistry(server.getPluginManager());
         PlexonCoreAPI api = mock(PlexonCoreAPI.class);
@@ -73,8 +70,18 @@ final class CoreRuntimeIntegrationTest {
         server.getServicesManager().register(PlexonCoreAPI.class, api, corePlugin, ServicePriority.Normal);
 
         PlexonCrates crates = MockBukkit.load(PlexonCrates.class);
+        if (major < 3) {
+            var descriptor = modules.find("crates").orElseThrow();
+            assertSame(crates, descriptor.plugin());
+            assertEquals("PlexonCrates", descriptor.displayName());
+            assertEquals(ModuleRegistry.ModuleState.READY, descriptor.state());
+            assertTrue(descriptor.capabilities().contains("crate-open-event"));
+            assertTrue(descriptor.capabilities().contains("optimized-local-interactions"));
 
-        assertEquals("STANDALONE", crates.coreBridge().mode());
-        assertEquals(false, crates.coreBridge().compatible());
+            var integration = integrations.get("PLEXON_CRATES").orElseThrow();
+            assertEquals(IntegrationRegistry.IntegrationState.READY, integration.state());
+            assertEquals(crates.getPluginMeta().getVersion(), integration.version());
+        }
+        return crates;
     }
 }

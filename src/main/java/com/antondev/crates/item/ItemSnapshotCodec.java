@@ -4,6 +4,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
@@ -15,7 +16,7 @@ import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 
 /**
- * Lossless Paper item snapshots used by 3.0 definitions and value-bearing queues.
+ * Lossless Paper item snapshots used by published definitions and value-bearing queues.
  * The stored payload always represents an amount-one template; delivery quantity
  * is explicit metadata and never reconstructed from visible item properties.
  */
@@ -92,15 +93,22 @@ public final class ItemSnapshotCodec {
         byte[] bytes;
         try {
             bytes = captured.serializeAsBytes();
+            validatePayloadSize(bytes);
+            verifyCurrentServerRoundTrip(bytes);
         } catch (RuntimeException error) {
-            throw new IllegalArgumentException("Paper could not serialize this exact item", error);
+            throw new IllegalArgumentException("Paper could not serialize and restore this exact item", error);
         }
-        validatePayloadSize(bytes);
         return new Snapshot(bytes, source.getType().getKey().toString(), amount, bytes.length, sha256(bytes),
                 customData, container, Instant.now());
     }
 
-    /** Restores and verifies the immutable amount-one template. */
+    /**
+     * Restores and verifies the immutable amount-one template.
+     *
+     * <p>The SHA-256 is verified against the stored bytes before Paper decodes them. We deliberately
+     * do not require an older stored payload to reserialize byte-for-byte after decoding because
+     * Paper may legitimately data-fix an item when the server data version changes.</p>
+     */
     public ItemStack restoreTemplate(Snapshot snapshot) {
         Objects.requireNonNull(snapshot, "snapshot");
         byte[] bytes = snapshot.bytes();
@@ -153,6 +161,17 @@ public final class ItemSnapshotCodec {
     private void validatePayloadSize(byte[] bytes) {
         if (bytes == null || bytes.length == 0 || bytes.length > maximumPayloadBytes) {
             throw new IllegalArgumentException("Exact item payload is empty or exceeds " + maximumPayloadBytes + " bytes");
+        }
+    }
+
+    private static void verifyCurrentServerRoundTrip(byte[] bytes) {
+        ItemStack restored = ItemStack.deserializeBytes(bytes.clone());
+        if (restored == null || restored.getType().isAir()) {
+            throw new IllegalArgumentException("Paper decoded the exact item to an empty item");
+        }
+        byte[] roundTrip = restored.serializeAsBytes();
+        if (!Arrays.equals(bytes, roundTrip)) {
+            throw new IllegalArgumentException("Paper native item bytes are not stable on this server build");
         }
     }
 

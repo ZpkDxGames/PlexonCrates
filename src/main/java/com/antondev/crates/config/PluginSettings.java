@@ -55,6 +55,9 @@ public record PluginSettings(
         double particleHorizontalSpread,
         double particleVerticalSpread,
         double particleViewRange,
+        int particleMaxLocationsPerTick,
+        int particleMaxParticlesPerTick,
+        boolean particleStagger,
         int inputTimeoutSeconds,
         int sessionTimeoutMinutes,
         Set<Material> deniedLocationMaterials,
@@ -91,6 +94,8 @@ public record PluginSettings(
         int period = integer(c, "opening.animation-period-ticks", 1, 20);
         int particleInterval = integer(c, "particles.interval-ticks", 1, 1_200);
         int particleCount = integer(c, "particles.count", 0, 1_000);
+        int particleMaxLocations = integer(c, "performance.particles.max-locations-per-tick", 64, 1, 100_000);
+        int particleMaxParticles = integer(c, "performance.particles.max-particles-per-tick", 256, 1, 100_000);
         int lineWidth = integer(c, "holograms.line-width", 20, 2_000);
         float volume = (float) number(c, "opening.sound-volume", 0, 10);
         float pitch = (float) number(c, "opening.sound-pitch", 0, 2);
@@ -142,6 +147,7 @@ public record PluginSettings(
                 c.getBoolean("holograms.see-through"), c.getBoolean("particles.enabled"), particle, particleInterval,
                 particleCount, number(c, "particles.horizontal-spread", 0, 10),
                 number(c, "particles.vertical-spread", 0, 10), number(c, "particles.view-range", 1, 256),
+                particleMaxLocations, particleMaxParticles, c.getBoolean("performance.particles.stagger", true),
                 integer(c, "editing.input-timeout-seconds", 10, 300),
                 integer(c, "editing.session-timeout-minutes", 1, 240), deniedMaterials,
                 lower(c.getStringList("locations.allowed-worlds")), c.getBoolean("integrations.placeholderapi"),
@@ -176,6 +182,11 @@ public record PluginSettings(
         double value = number(c, path, min, max);
         if (value != Math.rint(value)) throw new IllegalArgumentException(path + " must be a whole number");
         return (int) value;
+    }
+
+    private static int integer(YamlConfiguration c, String path, int defaultValue, int min, int max) {
+        if (!c.contains(path)) return defaultValue;
+        return integer(c, path, min, max);
     }
 
     private static double number(YamlConfiguration c, String path, double min, double max) {

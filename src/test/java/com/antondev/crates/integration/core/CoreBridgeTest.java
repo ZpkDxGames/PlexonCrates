@@ -17,12 +17,15 @@ final class CoreBridgeTest {
         assertEquals("NOT_INSTALLED", bridge.registrationState());
         assertEquals("-", bridge.pluginVersion());
         assertEquals("-", bridge.apiVersion());
+        assertEquals("LOCAL", bridge.interactionOwnership());
+        assertEquals("LOCAL", bridge.protectionOwnership());
+        assertFalse(bridge.sharedInteractionAvailable());
         assertEquals(CoreBridge.ProviderHint.UNKNOWN, bridge.providerHint("PLEXON_KEYS"));
     }
 
     @Test
-    void publicCoreContractUsesCratesIdentityAndCoreOneXRange() {
+    void publicCoreContractSupportsCoreOneAndTwoWithoutClaimingSharedInteractions() {
         assertEquals("crates", CoreBridge.MODULE_ID);
-        assertEquals(">=1.0 <2.0", CoreBridge.SUPPORTED_API_RANGE);
+        assertEquals(">=1.0 <3.0", CoreBridge.SUPPORTED_API_RANGE);
     }
 }

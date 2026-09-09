@@ -13,6 +13,13 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemStack;
 
+/**
+ * Item codec used by editable YAML mirrors and legacy/import surfaces.
+ *
+ * <p>When {@code base64} is present, those Paper-native bytes are authoritative. Visible YAML
+ * overlays are deliberately not applied to exact captures because mutating name/lore/glint,
+ * unbreakable state or enchantments after decoding can invalidate foreign-plugin identity.</p>
+ */
 public final class ItemCodec {
     private static final int MAX_CAPTURE_LENGTH = 4_000_000;
 
@@ -34,7 +41,9 @@ public final class ItemCodec {
         if (section == null) throw new IllegalArgumentException("Missing item section");
         if (!section.contains("amount")) return java.util.List.of(read(section, tags));
         int total = section.getInt("amount");
-        if (total < 1 || total > 6_400) throw new IllegalArgumentException("Reward item amount must be between 1 and 6400");
+        if (total < 1 || total > 6_400) {
+            throw new IllegalArgumentException("Reward item amount must be between 1 and 6400");
+        }
         ItemStack template = read(section, 1, tags);
         var stacks = new ArrayList<ItemStack>();
         int remaining = total;
@@ -49,30 +58,40 @@ public final class ItemCodec {
 
     private static ItemStack read(ConfigurationSection section, Integer amountOverride, TagResolver... tags) {
         if (section == null) throw new IllegalArgumentException("Missing item section");
-        ItemStack item;
         String encoded = section.getString("base64", "");
-        if (!encoded.isBlank()) {
-            if (encoded.length() > MAX_CAPTURE_LENGTH) throw new IllegalArgumentException("Captured item data is too large");
+        boolean exactCapture = !encoded.isBlank();
+        ItemStack item;
+        if (exactCapture) {
+            if (encoded.length() > MAX_CAPTURE_LENGTH) {
+                throw new IllegalArgumentException("Captured item data is too large");
+            }
             try {
                 item = ItemStack.deserializeBytes(Base64.getDecoder().decode(encoded));
             } catch (RuntimeException error) {
                 throw new IllegalArgumentException("Invalid captured item data", error);
             }
-            if (item == null || item.getType().isAir()) throw new IllegalArgumentException("Captured item is empty");
+            if (item == null || item.getType().isAir()) {
+                throw new IllegalArgumentException("Captured item is empty");
+            }
         } else {
             item = new ItemStack(material(section.getString("material", "PAPER")));
         }
 
-        int amount = amountOverride != null ? amountOverride : section.contains("amount") ? section.getInt("amount") : item.getAmount();
+        int amount = amountOverride != null
+                ? amountOverride
+                : section.contains("amount") ? section.getInt("amount") : item.getAmount();
         if (amount < 1 || amount > item.getMaxStackSize()) {
             throw new IllegalArgumentException("Item amount must be between 1 and " + item.getMaxStackSize());
         }
         item.setAmount(amount);
 
-        if (section.contains("name") || section.contains("lore") || section.contains("glow") || section.contains("unbreakable")) {
+        // Exact captures must remain byte-derived. These overlays are only valid for buildable items.
+        if (!exactCapture && (section.contains("name") || section.contains("lore")
+                || section.contains("glow") || section.contains("unbreakable"))) {
             item.editMeta(meta -> {
                 if (section.contains("name")) {
-                    meta.displayName(Text.parse(section.getString("name", ""), tags).decoration(TextDecoration.ITALIC, false));
+                    meta.displayName(Text.parse(section.getString("name", ""), tags)
+                            .decoration(TextDecoration.ITALIC, false));
                 }
                 if (section.contains("lore")) {
                     var lore = new ArrayList<net.kyori.adventure.text.Component>();
@@ -87,18 +106,22 @@ public final class ItemCodec {
         }
 
         ConfigurationSection enchantments = section.getConfigurationSection("enchantments");
-        if (enchantments != null) {
+        if (!exactCapture && enchantments != null) {
             for (Map.Entry<String, Object> entry : enchantments.getValues(false).entrySet()) {
                 if (!(entry.getValue() instanceof Number number)) {
                     throw new IllegalArgumentException("Enchantment level must be numeric: " + entry.getKey());
                 }
                 int level = number.intValue();
-                if (level < 1 || level > 255) throw new IllegalArgumentException("Enchantment level must be between 1 and 255");
+                if (level < 1 || level > 255) {
+                    throw new IllegalArgumentException("Enchantment level must be between 1 and 255");
+                }
                 NamespacedKey key = NamespacedKey.fromString(entry.getKey().contains(":")
                         ? entry.getKey().toLowerCase(Locale.ROOT)
                         : "minecraft:" + entry.getKey().toLowerCase(Locale.ROOT));
                 Enchantment enchantment = key == null ? null : Registry.ENCHANTMENT.get(key);
-                if (enchantment == null) throw new IllegalArgumentException("Unknown enchantment: " + entry.getKey());
+                if (enchantment == null) {
+                    throw new IllegalArgumentException("Unknown enchantment: " + entry.getKey());
+                }
                 item.addUnsafeEnchantment(enchantment, level);
             }
         }
@@ -113,7 +136,14 @@ public final class ItemCodec {
         if (item == null || item.getType().isAir()) throw new IllegalArgumentException("Hold an item first");
         ItemStack copy = item.clone();
         if (normalizeAmount) copy.setAmount(1);
-        String encoded = Base64.getEncoder().encodeToString(copy.serializeAsBytes());
+        byte[] bytes;
+        try {
+            bytes = copy.serializeAsBytes();
+            verifyCurrentServerDecode(bytes);
+        } catch (RuntimeException error) {
+            throw new IllegalArgumentException("Paper could not serialize and restore this exact item", error);
+        }
+        String encoded = Base64.getEncoder().encodeToString(bytes);
         if (encoded.length() > MAX_CAPTURE_LENGTH) throw new IllegalArgumentException("This item is too large to capture");
         return encoded;
     }
@@ -136,5 +166,14 @@ public final class ItemCodec {
         ItemStack copy = source.clone();
         copy.setAmount(1);
         return copy;
+    }
+
+    private static void verifyCurrentServerDecode(byte[] bytes) {
+        ItemStack restored = ItemStack.deserializeBytes(bytes.clone());
+        if (restored == null || restored.getType().isAir()) {
+            throw new IllegalArgumentException("Paper decoded the exact item to an empty item");
+        }
+        // Do not demand byte-for-byte reserialization here. Paper/MockBukkit may normalize a
+        // valid native payload during data fixing. The stored Base64 bytes remain authoritative.
     }
 }

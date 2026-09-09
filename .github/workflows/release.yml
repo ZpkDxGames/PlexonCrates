@@ -3,8 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v3.0.0-rc.*'
-      - 'v3.0.0'
+      - 'v4.5.0'
 
 permissions:
   contents: write
@@ -21,29 +20,27 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
       - name: Set up Java 25
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '25'
           cache: maven
+
       - name: Resolve tag version
         id: release
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          if [[ ! "$VERSION" =~ ^3\.0\.0(-rc\.[0-9]+)?$ ]]; then
+          if [[ "$VERSION" != "4.5.0" ]]; then
             echo "Unsupported PlexonCrates release tag: ${GITHUB_REF_NAME}" >&2
             exit 1
           fi
           test -f "releases/${VERSION}.md"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [[ "$VERSION" == *-rc.* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
+
       - name: Provision Plexon API dependencies
         shell: bash
         run: |
@@ -72,12 +69,42 @@ jobs:
             -Dversion=1.2.0 \
             -Dpackaging=jar \
             -DgeneratePom=true
-      - name: Set release version
+
+      - name: Verify tagged source version
         env:
           VERSION: ${{ steps.release.outputs.version }}
-        run: mvn -B -ntp versions:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
+        shell: bash
+        run: |
+          set -euo pipefail
+          POM_VERSION="$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          test "$POM_VERSION" = "$VERSION"
+
       - name: Verify release
         run: mvn -B -ntp clean verify
+
+      - name: Require every discovered test to run
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          skipped = []
+          for path in sorted(glob.glob("target/surefire-reports/TEST-*.xml")):
+              for case in ET.parse(path).getroot().iter("testcase"):
+                  marker = case.find("skipped")
+                  if marker is not None:
+                      skipped.append((case.get("classname"), case.get("name"), marker.get("message", "")))
+          if skipped:
+              print(f"Skipped tests are not allowed: {len(skipped)}")
+              for class_name, name, message in skipped:
+                  print(f"- {class_name}.{name}: {message}")
+              sys.exit(1)
+          print("All discovered release tests ran; skipped=0")
+          PY
+
       - name: Verify release distribution
         id: files
         env:
@@ -90,6 +117,8 @@ jobs:
           jar tf "$JAR" > target/jar-contents.txt
           grep -qx 'plugin.yml' target/jar-contents.txt
           grep -qx 'org/sqlite/JDBC.class' target/jar-contents.txt
+          unzip -p "$JAR" plugin.yml | grep -F "version: '${VERSION}'"
+          unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
           if grep -q '^com/zpkdxgames/plexoncore/' target/jar-contents.txt; then
             echo "PlexonCore runtime classes must not be shaded into PlexonCrates" >&2
             exit 1
@@ -104,11 +133,11 @@ jobs:
             sha256sum --check SHA256SUMS.txt
           )
           echo "jar=$JAR" >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
           JAR: ${{ steps.files.outputs.jar }}
         shell: bash
         run: |
@@ -118,8 +147,7 @@ jobs:
             echo "Release $TAG already exists; keeping its tag and assets immutable."
             exit 0
           fi
-          args=(release create "$TAG" "$JAR" target/SHA256SUMS.txt --verify-tag --title "PlexonCrates ${VERSION}" --notes-file "releases/${VERSION}.md")
-          if [[ "$PRERELEASE" == "true" ]]; then
-            args+=(--prerelease)
-          fi
-          gh "${args[@]}"
+          gh release create "$TAG" "$JAR" target/SHA256SUMS.txt \
+            --verify-tag \
+            --title "PlexonCrates ${VERSION}" \
+            --notes-file "releases/${VERSION}.md"

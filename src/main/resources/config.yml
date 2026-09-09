@@ -82,6 +82,14 @@ particles:
   vertical-spread: 0.18
   view-range: 32.0
 
+# Cosmetic work is intentionally bounded. Exceeding these limits staggers/defer
+# presentation only; crate outcomes, key consumption, and reward delivery are unaffected.
+performance:
+  particles:
+    max-locations-per-tick: 64
+    max-particles-per-tick: 256
+    stagger: true
+
 editing:
   input-timeout-seconds: 60
   session-timeout-minutes: 30

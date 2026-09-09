@@ -135,7 +135,7 @@ public final class PlexonCoreBridge implements CoreBridge {
                     + " is incompatible with supported range " + SUPPORTED_API_RANGE
                     + "; crate gameplay will continue in standalone compatibility mode.");
         } else if (version.apiMajor() >= 2) {
-            plugin.getLogger().info("PlexonCore 2 runtime detected. PlexonCrates 4.6 keeps PlayerInteractEvent and block protection local because Core 2.0.0 does not provide equivalent mutable interaction/cancellation semantics.");
+            plugin.getLogger().info("PlexonCore 2 runtime detected. PlexonCrates 4.6 keeps PlayerInteractEvent and block protection local because Core 2.0 does not provide equivalent mutable interaction/cancellation semantics.");
         }
     }
 
@@ -157,7 +157,16 @@ public final class PlexonCoreBridge implements CoreBridge {
     private void update(ModuleState moduleState, IntegrationState integrationState, String newDetail) {
         if (!compatible || !ownsRegistration) return;
         String resolvedDetail = newDetail == null ? "" : newDetail;
-        core.modules().updateState(MODULE_ID, moduleState, resolvedDetail);
+        if (version.apiMajor() >= 2) {
+            if (!core.modules().updateState(MODULE_ID, plugin, moduleState, resolvedDetail)) {
+                ownsRegistration = false;
+                registrationState = "NOT_REGISTERED";
+                detail = "Core module ownership changed before state update";
+                return;
+            }
+        } else {
+            core.modules().updateState(MODULE_ID, moduleState, resolvedDetail);
+        }
         core.integrations().publish(
                 "PLEXON_CRATES",
                 plugin.getName(),
@@ -172,9 +181,13 @@ public final class PlexonCoreBridge implements CoreBridge {
     @Override
     public void unregister() {
         if (!ownsRegistration) return;
-        core.modules().find(MODULE_ID)
-                .filter(descriptor -> descriptor.plugin() == plugin)
-                .ifPresent(descriptor -> core.modules().unregister(MODULE_ID));
+        if (version.apiMajor() >= 2) {
+            core.modules().unregisterOwnedBy(plugin);
+        } else {
+            core.modules().find(MODULE_ID)
+                    .filter(descriptor -> descriptor.plugin() == plugin)
+                    .ifPresent(descriptor -> core.modules().unregister(MODULE_ID));
+        }
         ownsRegistration = false;
         registrationState = "UNREGISTERED";
     }

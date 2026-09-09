@@ -4,6 +4,7 @@ import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.domain.opening.OpenSource;
+import com.antondev.crates.service.PortableCrateService;
 import java.util.List;
 import org.bukkit.block.Block;
 import org.bukkit.Bukkit;
@@ -36,13 +37,16 @@ public final class CrateListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void interact(PlayerInteractEvent event) {
         if (event.getHand() != EquipmentSlot.HAND) return;
-        if (plugin.portables() != null && plugin.portables().isPortable(event.getItem())) {
-            event.setCancelled(true);
-            if (event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_AIR
-                    || event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK) {
-                handlePortable(event.getPlayer(), event.getItem());
+        if (plugin.portables() != null) {
+            PortableCrateService.Inspection inspection = plugin.portables().inspect(event.getItem());
+            if (inspection.portable()) {
+                event.setCancelled(true);
+                if (event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_AIR
+                        || event.getAction() == org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK) {
+                    handlePortable(event.getPlayer(), inspection);
+                }
+                return;
             }
-            return;
         }
         if (event.getClickedBlock() == null) return;
         var link = plugin.locations().at(event.getClickedBlock()).orElse(null);
@@ -83,14 +87,13 @@ public final class CrateListener implements Listener {
         }
     }
 
-    private void handlePortable(org.bukkit.entity.Player player, org.bukkit.inventory.ItemStack item) {
+    private void handlePortable(org.bukkit.entity.Player player, PortableCrateService.Inspection inspection) {
         if (!plugin.settings().portableCratesEnabled()
                 || plugin.portables() == null || !plugin.portables().ready()) {
             plugin.messages().send(player, "opening-state-changed");
             return;
         }
-        org.bukkit.inventory.ItemStack expected = item == null ? null : item.clone();
-        plugin.portables().verify(expected).whenComplete((issue, error) -> {
+        plugin.portables().verify(inspection).whenComplete((issue, error) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!player.isOnline()) return;

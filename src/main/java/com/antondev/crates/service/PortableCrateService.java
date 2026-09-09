@@ -11,6 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
@@ -33,6 +34,11 @@ public final class PortableCrateService {
     private final NamespacedKey schema;
     private final NamespacedKey tokenKey;
     private final AtomicReference<byte[]> secret = new AtomicReference<>();
+    private final LongAdder materialFastRejects = new LongAdder();
+    private final LongAdder metadataAcquisitions = new LongAdder();
+    private final LongAdder envelopeHits = new LongAdder();
+    private final LongAdder malformedIdentities = new LongAdder();
+    private final LongAdder durableVerificationAttempts = new LongAdder();
     private volatile CompletableFuture<byte[]> secretLoad = CompletableFuture.failedFuture(
             new IllegalStateException("Portable signing secret has not started"));
 
@@ -116,9 +122,7 @@ public final class PortableCrateService {
             throw new IllegalArgumentException("Portable issuance amount must be between 1 and " + MAX_BATCH);
         }
         var futures = new ArrayList<CompletableFuture<ItemStack>>(amount);
-        for (int index = 0; index < amount; index++) {
-            futures.add(issue(crate, policy, pinnedRevision, issuedTo, issuedBy));
-        }
+        for (int index = 0; index < amount; index++) futures.add(issue(crate, policy, pinnedRevision, issuedTo, issuedBy));
         return CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
                 .thenApply(ignored -> futures.stream().map(CompletableFuture::join).toList());
     }
@@ -146,31 +150,42 @@ public final class PortableCrateService {
         return item;
     }
 
+    /** Cheap envelope-only identification. It never authenticates issuance. */
     public boolean isPortable(ItemStack item) {
-        if (item == null || item.getType().isAir() || !item.hasItemMeta()) return false;
-        var pdc = item.getItemMeta().getPersistentDataContainer();
-        return pdc.has(marker, PersistentDataType.BYTE)
-                && pdc.getOrDefault(schema, PersistentDataType.INTEGER, 0) == PortableCrateCodec.VERSION
-                && pdc.has(tokenKey, PersistentDataType.STRING);
+        return inspectEnvelope(item).isPresent();
+    }
+
+    /**
+     * Performs the complete synchronous item inspection exactly once. The
+     * portable flag only means a structurally valid Crates envelope was found;
+     * the optional token is present only when HMAC verification also succeeds.
+     */
+    public Inspection inspect(ItemStack item) {
+        Optional<PortableEnvelope> envelope = inspectEnvelope(item);
+        if (envelope.isEmpty()) return Inspection.notPortable();
+        byte[] key = secret.get();
+        if (key == null) return new Inspection(true, Optional.empty());
+        try {
+            return new Inspection(true, Optional.of(PortableCrateCodec.decodeAndVerify(envelope.get().encodedToken(), key)));
+        } catch (RuntimeException invalid) {
+            malformedIdentities.increment();
+            return new Inspection(true, Optional.empty());
+        }
     }
 
     /** Verifies the envelope signature without touching the database. */
     public Optional<PortableCrateCodec.Token> decode(ItemStack item) {
-        if (!isPortable(item) || !ready()) return Optional.empty();
-        String encoded = item.getItemMeta().getPersistentDataContainer()
-                .get(tokenKey, PersistentDataType.STRING);
-        try {
-            return Optional.of(PortableCrateCodec.decodeAndVerify(encoded, secret.get()));
-        } catch (RuntimeException invalid) {
-            return Optional.empty();
-        }
+        return inspect(item).token();
     }
 
-    /** Verifies the envelope and compares it with the durable issuance row. */
-    public CompletableFuture<Optional<DatabaseService.PortableIssue>> verify(ItemStack item) {
-        Optional<PortableCrateCodec.Token> decoded = decode(item);
-        if (decoded.isEmpty()) return CompletableFuture.completedFuture(Optional.empty());
-        PortableCrateCodec.Payload payload = decoded.get().payload();
+    /** Verifies an already-inspected token against the durable issuance row. */
+    public CompletableFuture<Optional<DatabaseService.PortableIssue>> verify(Inspection inspection) {
+        Objects.requireNonNull(inspection, "inspection");
+        if (!inspection.portable() || inspection.token().isEmpty()) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        durableVerificationAttempts.increment();
+        PortableCrateCodec.Payload payload = inspection.token().get().payload();
         return plugin.database().loadPortableIssue(payload.issueId()).thenApply(row -> row.filter(issue ->
                 issue.crateId().equals(payload.crateId())
                         && issue.revisionPolicy().equals(payload.revisionPolicy().name())
@@ -179,9 +194,19 @@ public final class PortableCrateService {
                         && issue.signatureVersion() == PortableCrateCodec.VERSION));
     }
 
+    /** Backward-compatible verification entry point for non-listener callers. */
+    public CompletableFuture<Optional<DatabaseService.PortableIssue>> verify(ItemStack item) {
+        return verify(inspect(item));
+    }
+
     /** Returns a stable token string only for an authentic item. */
     public Optional<String> encoded(ItemStack item) {
         return decode(item).map(PortableCrateCodec.Token::encoded);
+    }
+
+    public Diagnostics diagnostics() {
+        return new Diagnostics(materialFastRejects.sum(), metadataAcquisitions.sum(), envelopeHits.sum(),
+                malformedIdentities.sum(), durableVerificationAttempts.sum());
     }
 
     /** Removes exactly one item from a main-hand stack after external validation. */
@@ -194,4 +219,39 @@ public final class PortableCrateService {
         else held.setAmount(held.getAmount() - 1);
         return true;
     }
+
+    private Optional<PortableEnvelope> inspectEnvelope(ItemStack item) {
+        if (item == null || item.getType() != Material.CHEST || !item.hasItemMeta()) {
+            materialFastRejects.increment();
+            return Optional.empty();
+        }
+        metadataAcquisitions.increment();
+        var pdc = item.getItemMeta().getPersistentDataContainer();
+        if (!pdc.has(marker, PersistentDataType.BYTE)
+                || pdc.getOrDefault(schema, PersistentDataType.INTEGER, 0) != PortableCrateCodec.VERSION) {
+            return Optional.empty();
+        }
+        String encoded = pdc.get(tokenKey, PersistentDataType.STRING);
+        if (encoded == null || encoded.isBlank()) {
+            malformedIdentities.increment();
+            return Optional.empty();
+        }
+        envelopeHits.increment();
+        return Optional.of(new PortableEnvelope(PortableCrateCodec.VERSION, encoded));
+    }
+
+    private record PortableEnvelope(int schema, String encodedToken) {}
+
+    public record Inspection(boolean portable, Optional<PortableCrateCodec.Token> token) {
+        public Inspection {
+            token = token == null ? Optional.empty() : token;
+        }
+
+        public static Inspection notPortable() {
+            return new Inspection(false, Optional.empty());
+        }
+    }
+
+    public record Diagnostics(long materialFastRejects, long metadataAcquisitions, long envelopeHits,
+                              long malformedIdentities, long durableVerificationAttempts) {}
 }

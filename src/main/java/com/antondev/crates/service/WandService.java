@@ -10,6 +10,7 @@ import com.antondev.crates.model.Crate;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.atomic.LongAdder;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -26,10 +27,15 @@ import org.bukkit.persistence.PersistentDataType;
 
 /** PDC-identified protected wand for selecting, linking, inspecting, and unlinking crates. */
 public final class WandService implements Listener {
+    private static final int WAND_SCHEMA = 2;
+
     private final PlexonCrates plugin;
     private final NamespacedKey marker;
     private final NamespacedKey selectedCrate;
     private final NamespacedKey schema;
+    private final LongAdder materialFastRejects = new LongAdder();
+    private final LongAdder metadataAcquisitions = new LongAdder();
+    private final LongAdder identityHits = new LongAdder();
 
     public WandService(PlexonCrates plugin) {
         this.plugin = plugin;
@@ -50,7 +56,7 @@ public final class WandService implements Listener {
                     Text.parse("<dark_gray>Selected:</dark_gray> <white>" + (crateId == null || crateId.isBlank() ? "none" : crateId) + "</white>")));
             meta.setEnchantmentGlintOverride(true);
             meta.getPersistentDataContainer().set(marker, PersistentDataType.BYTE, (byte) 1);
-            meta.getPersistentDataContainer().set(schema, PersistentDataType.INTEGER, 2);
+            meta.getPersistentDataContainer().set(schema, PersistentDataType.INTEGER, WAND_SCHEMA);
             if (crateId != null && !crateId.isBlank()) {
                 meta.getPersistentDataContainer().set(selectedCrate, PersistentDataType.STRING, crateId.toLowerCase(Locale.ROOT));
             }
@@ -65,19 +71,20 @@ public final class WandService implements Listener {
     }
 
     public boolean isWand(ItemStack item) {
-        return item != null && !item.getType().isAir()
-                && item.getItemMeta().getPersistentDataContainer().has(marker, PersistentDataType.BYTE);
+        return inspectWand(item).isPresent();
     }
 
     public Optional<String> selected(ItemStack item) {
-        if (!isWand(item)) return Optional.empty();
-        return Optional.ofNullable(item.getItemMeta().getPersistentDataContainer()
-                .get(selectedCrate, PersistentDataType.STRING));
+        return inspectWand(item).map(WandIdentity::selectedCrate).filter(value -> value != null && !value.isBlank());
+    }
+
+    public Diagnostics diagnostics() {
+        return new Diagnostics(materialFastRejects.sum(), metadataAcquisitions.sum(), identityHits.sum());
     }
 
     public void select(Player player, String crateId) {
         ItemStack held = player.getInventory().getItemInMainHand();
-        if (!isWand(held)) {
+        if (inspectWand(held).isEmpty()) {
             give(player, crateId);
             return;
         }
@@ -89,7 +96,10 @@ public final class WandService implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
     public void interact(PlayerInteractEvent event) {
-        if (event.getHand() != EquipmentSlot.HAND || !isWand(event.getItem())) return;
+        if (event.getHand() != EquipmentSlot.HAND) return;
+        WandIdentity identity = inspectWand(event.getItem()).orElse(null);
+        if (identity == null) return;
+
         event.setCancelled(true);
         Player player = event.getPlayer();
         if (!player.hasPermission("plexoncrates.admin.locations")) {
@@ -113,7 +123,7 @@ public final class WandService implements Listener {
             else player.sendActionBar(Text.parse("<yellow>Already linked:</yellow> <white>" + link.crateId() + "</white>"));
             return;
         }
-        String crateId = selected(event.getItem()).orElse("");
+        String crateId = identity.selectedCrate() == null ? "" : identity.selectedCrate();
         Crate crate = plugin.crates().find(crateId).orElse(null);
         if (crate == null || crate.state() == CrateState.ARCHIVED) {
             player.sendActionBar(Text.parse("<yellow>Select a valid crate with right-click first.</yellow>"));
@@ -154,6 +164,21 @@ public final class WandService implements Listener {
         return true;
     }
 
+    private Optional<WandIdentity> inspectWand(ItemStack item) {
+        if (item == null || item.getType() != Material.BLAZE_ROD || !item.hasItemMeta()) {
+            materialFastRejects.increment();
+            return Optional.empty();
+        }
+        metadataAcquisitions.increment();
+        var pdc = item.getItemMeta().getPersistentDataContainer();
+        if (!pdc.has(marker, PersistentDataType.BYTE)
+                || pdc.getOrDefault(schema, PersistentDataType.INTEGER, 0) != WAND_SCHEMA) {
+            return Optional.empty();
+        }
+        identityHits.increment();
+        return Optional.of(new WandIdentity(pdc.get(selectedCrate, PersistentDataType.STRING)));
+    }
+
     private boolean allowed(Block block) {
         if (plugin.settings().deniedLocationMaterials().contains(block.getType())
                 || block.getType().isAir() || !block.getType().isSolid()) return false;
@@ -162,4 +187,8 @@ public final class WandService implements Listener {
                 ? plugin.settings().allows(block.getWorld())
                 : plugin.settings().allowedLocationWorlds().contains(world);
     }
+
+    private record WandIdentity(String selectedCrate) {}
+
+    public record Diagnostics(long materialFastRejects, long metadataAcquisitions, long identityHits) {}
 }

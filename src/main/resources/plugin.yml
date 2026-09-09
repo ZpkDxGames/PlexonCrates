@@ -1,7 +1,7 @@
 name: PlexonCrates
 version: '${project.version}'
 main: com.plexoncrates.core.PlexonCrates
-api-version: '1.20'
+api-version: '26.2'
 author: Tonim
 website: https://github.com/ZpkDxGames/PlexonCrates
 description: Premium GUI-driven crates, animations, physical blocks, virtual keys and durable claims.

@@ -1,0 +1,147 @@
+name: Publish PlexonCrates 4.5.0 Once
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plexoncrates-publish-v4.5.0-once
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v5
+        with:
+          ref: f5c65adbf21ddd546ff0ffe6ede91dc6316e6691
+          fetch-depth: 0
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Provision Plexon API dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_jar="${RUNNER_TEMP}/PlexonCore-1.0.0.jar"
+          keys_jar="${RUNNER_TEMP}/PlexonKeys-1.2.0.jar"
+          curl --fail --location --silent --show-error \
+            --output "${core_jar}" \
+            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v1.0.0/PlexonCore-1.0.0.jar"
+          echo "4abce6de93293e21b31cb874734430d5bdc77de17a4c3b98fd6a9006e1f13018  ${core_jar}" | sha256sum --check
+          curl --fail --location --silent --show-error \
+            --output "${keys_jar}" \
+            "https://github.com/ZpkDxGames/PlexonKeys/releases/download/v1.2.0/PlexonKeys-1.2.0.jar"
+          echo "c961c08749edc67a679af19adbb1e625032477a7a3f91553ef27ae737f544d05  ${keys_jar}" | sha256sum --check
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile="${core_jar}" \
+            -DgroupId=com.zpkdxgames \
+            -DartifactId=PlexonCore \
+            -Dversion=1.0.0 \
+            -Dpackaging=jar \
+            -DgeneratePom=true
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile="${keys_jar}" \
+            -DgroupId=com.antondev \
+            -DartifactId=PlexonKeys \
+            -Dversion=1.2.0 \
+            -Dpackaging=jar \
+            -DgeneratePom=true
+
+      - name: Verify tagged source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          POM_VERSION="$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          test "$POM_VERSION" = "4.5.0"
+
+      - name: Verify release
+        run: mvn -B -ntp clean verify
+
+      - name: Require every discovered test to run
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          skipped = []
+          for path in sorted(glob.glob("target/surefire-reports/TEST-*.xml")):
+              for case in ET.parse(path).getroot().iter("testcase"):
+                  marker = case.find("skipped")
+                  if marker is not None:
+                      skipped.append((case.get("classname"), case.get("name"), marker.get("message", "")))
+          if skipped:
+              print(f"Skipped tests are not allowed: {len(skipped)}")
+              for class_name, name, message in skipped:
+                  print(f"- {class_name}.{name}: {message}")
+              sys.exit(1)
+          print("All discovered release tests ran; skipped=0")
+          PY
+
+      - name: Verify release distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR="target/PlexonCrates-4.5.0.jar"
+          test -s "$JAR"
+          jar tf "$JAR" > target/jar-contents.txt
+          grep -qx 'plugin.yml' target/jar-contents.txt
+          grep -qx 'org/sqlite/JDBC.class' target/jar-contents.txt
+          unzip -p "$JAR" plugin.yml | grep -F "version: '4.5.0'"
+          unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
+          if grep -q '^com/zpkdxgames/plexoncore/' target/jar-contents.txt; then
+            echo "PlexonCore runtime classes must not be shaded into PlexonCrates" >&2
+            exit 1
+          fi
+          if grep -q '^com/antondev/keys/' target/jar-contents.txt; then
+            echo "PlexonKeys runtime classes must not be shaded into PlexonCrates" >&2
+            exit 1
+          fi
+          (
+            cd target
+            sha256sum PlexonCrates-4.5.0.jar > SHA256SUMS.txt
+            sha256sum --check SHA256SUMS.txt
+          )
+
+      - name: Create immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin refs/tags/v4.5.0 >/dev/null 2>&1; then
+            echo "v4.5.0 already exists; refusing to move it."
+          else
+            git tag v4.5.0 f5c65adbf21ddd546ff0ffe6ede91dc6316e6691
+            git push origin refs/tags/v4.5.0
+          fi
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v4.5.0 >/dev/null 2>&1; then
+            echo "Release v4.5.0 already exists; refusing to mutate immutable assets."
+            exit 0
+          fi
+          gh release create v4.5.0 \
+            target/PlexonCrates-4.5.0.jar \
+            target/SHA256SUMS.txt \
+            --verify-tag \
+            --title "PlexonCrates 4.5.0" \
+            --notes-file releases/4.5.0.md

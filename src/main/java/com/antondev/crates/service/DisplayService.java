@@ -26,6 +26,11 @@ public final class DisplayService {
     private final NamespacedKey marker;
     private final Map<String, UUID> holograms = new HashMap<>();
     private BukkitTask particles;
+    private int particleCursor;
+    private long particleCandidateLocations;
+    private long particleEmittedLocations;
+    private long particleEmittedParticles;
+    private long particleBudgetDeferrals;
 
     public DisplayService(PlexonCrates plugin) {
         this.plugin = plugin;
@@ -34,6 +39,7 @@ public final class DisplayService {
 
     public void refresh() {
         stop();
+        particleCursor = 0;
         if (plugin.settings().hologramsEnabled()) {
             // Reconcile only currently loaded chunks. Stored links in unloaded chunks remain index-only
             // and are materialized naturally by chunkLoaded().
@@ -78,6 +84,22 @@ public final class DisplayService {
 
     public int activeHolograms() {
         return holograms.size();
+    }
+
+    public long particleCandidateLocations() {
+        return particleCandidateLocations;
+    }
+
+    public long particleEmittedLocations() {
+        return particleEmittedLocations;
+    }
+
+    public long particleEmittedParticles() {
+        return particleEmittedParticles;
+    }
+
+    public long particleBudgetDeferrals() {
+        return particleBudgetDeferrals;
     }
 
     private void spawn(LocationStore.Link link) {
@@ -138,7 +160,19 @@ public final class DisplayService {
             }
         }
 
-        for (LocationStore.Link link : candidates.values()) {
+        if (candidates.isEmpty()) return;
+        List<LocationStore.Link> candidateList = new ArrayList<>(candidates.values());
+        particleCandidateLocations += candidateList.size();
+
+        int total = candidateList.size();
+        int processCount = Math.min(total, plugin.settings().particleMaxLocationsPerTick());
+        if (total > processCount) particleBudgetDeferrals += total - processCount;
+        int start = plugin.settings().particleStagger() ? Math.floorMod(particleCursor, total) : 0;
+        int remainingParticles = plugin.settings().particleMaxParticlesPerTick();
+        int processed = 0;
+
+        for (; processed < processCount && remainingParticles > 0; processed++) {
+            LocationStore.Link link = candidateList.get((start + processed) % total);
             BlockPosition position = link.position();
             World world = position.loadedWorld();
             if (world == null || !world.isChunkLoaded(position.x() >> 4, position.z() >> 4)) continue;
@@ -147,10 +181,19 @@ public final class DisplayService {
             Location center = position.center(1.12);
             List<Player> viewers = viewersByWorld.get(world.getUID());
             if (center == null || viewers == null || !hasNearbyPlayer(viewers, center, rangeSquared)) continue;
-            world.spawnParticle(plugin.settings().particle(), center, plugin.settings().particleCount(),
+
+            int emitCount = Math.min(plugin.settings().particleCount(), remainingParticles);
+            if (emitCount <= 0) break;
+            world.spawnParticle(plugin.settings().particle(), center, emitCount,
                     plugin.settings().particleHorizontalSpread(), plugin.settings().particleVerticalSpread(),
                     plugin.settings().particleHorizontalSpread(), 0.01);
+            remainingParticles -= emitCount;
+            particleEmittedLocations++;
+            particleEmittedParticles += emitCount;
         }
+
+        if (processed < processCount) particleBudgetDeferrals += processCount - processed;
+        if (plugin.settings().particleStagger()) particleCursor = (start + Math.max(1, processCount)) % total;
     }
 
     private static boolean hasNearbyPlayer(List<Player> players, Location location, double rangeSquared) {

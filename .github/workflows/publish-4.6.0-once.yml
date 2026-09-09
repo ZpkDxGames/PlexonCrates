@@ -87,8 +87,7 @@ jobs:
           javap -verbose -classpath "$JAR" com.antondev.crates.PlexonCrates | grep -F 'major version: 69'
           if grep -q '^com/zpkdxgames/plexoncore/' target/jar-contents.txt; then exit 1; fi
           if grep -q '^com/antondev/keys/' target/jar-contents.txt; then exit 1; fi
-          sha256sum "$JAR" > target/SHA256SUMS.txt
-          (cd target && sha256sum --check SHA256SUMS.txt)
+          (cd target && sha256sum PlexonCrates-4.6.0.jar > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
 
       - name: Publish immutable v4.6.0 release
         env:

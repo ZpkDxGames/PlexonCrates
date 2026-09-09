@@ -180,7 +180,7 @@ public final class AnimationManager {
     private void fountain(Location center) {
         World world = center.getWorld();
         if (world == null) return;
-        world.spawnParticle(Particle.ENCHANTMENT_TABLE, center.clone().add(0, 1.0D, 0),
+        world.spawnParticle(Particle.ENCHANT, center.clone().add(0, 1.0D, 0),
                 4, 0.35D, 0.6D, 0.35D, 0.05D);
         if (((int) (phase * 10)) % 3 == 0) {
             world.spawnParticle(Particle.END_ROD, center.clone().add(0, 1.25D, 0),
@@ -206,7 +206,7 @@ public final class AnimationManager {
         double radius = 0.35D + ((Math.sin(phase * 1.5D) + 1D) * 0.25D);
         for (int point = 0; point < 8; point++) {
             double angle = Math.PI * 2D * point / 8D;
-            world.spawnParticle(Particle.FIREWORKS_SPARK,
+            world.spawnParticle(Particle.FIREWORK,
                     center.clone().add(Math.cos(angle) * radius, 0.65D, Math.sin(angle) * radius),
                     1, 0, 0, 0, 0.01D);
         }
@@ -227,8 +227,8 @@ public final class AnimationManager {
             entity.setRightArmPose(new EulerAngle(Math.toRadians(270), 0, 0));
             if (entity.getEquipment() != null) entity.getEquipment().setItemInMainHand(shown);
         });
-        world.spawnParticle(Particle.EXPLOSION_LARGE, spawn, 1);
-        world.spawnParticle(Particle.FIREWORKS_SPARK, spawn, 20, 0.35D, 0.35D, 0.35D, 0.08D);
+        world.spawnParticle(Particle.EXPLOSION, spawn, 1);
+        world.spawnParticle(Particle.FIREWORK, spawn, 20, 0.35D, 0.35D, 0.35D, 0.08D);
         if (config.soundsEnabled()) world.playSound(spawn, Sound.ENTITY_FIREWORK_ROCKET_BLAST, 1.0F, 1.25F);
 
         final int[] tick = {0};
@@ -237,7 +237,7 @@ public final class AnimationManager {
             if (!stand.isValid() || tick[0]++ >= 25) {
                 if (stand.isValid()) {
                     Location end = stand.getLocation();
-                    world.spawnParticle(Particle.TOTEM, end, 20, 0.35D, 0.35D, 0.35D, 0.05D);
+                    world.spawnParticle(Particle.TOTEM_OF_UNDYING, end, 20, 0.35D, 0.35D, 0.35D, 0.05D);
                     stand.remove();
                 }
                 task[0].cancel();

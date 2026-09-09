@@ -9,7 +9,7 @@ description: Premium GUI-driven crates, animations, physical blocks, virtual key
 commands:
   crates:
     description: Open PlexonCrates, preview crates, administer crates, keys and rewards.
-    usage: /crates [admin|preview|open|claims|link|unlink|key|reward|migrate|reload]
+    usage: /crates [admin|preview|open|claims|link|unlink|key|reward|item|migrate|reload]
     aliases: [crate, pcrates]
 
 permissions:

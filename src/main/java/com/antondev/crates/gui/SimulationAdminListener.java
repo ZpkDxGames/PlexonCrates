@@ -1,6 +1,6 @@
 package com.antondev.crates.gui;
 
-import com.antondev.crates.PlexonCratesPremium;
+import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.config.Text;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
@@ -14,13 +14,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.UUID;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
-import org.bukkit.entity.HumanEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -34,12 +34,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.jetbrains.annotations.NotNull;
 
-/**
- * Additive 5.0 admin simulation surface. It deliberately does not bind an
- * action into the mature AdminMenuService router; the existing router sees an
- * unbound editor slot and safely ignores it while this listener handles the
- * marked item independently.
- */
+/** Additive, non-granting Phase 2 admin Test Lab. */
 public final class SimulationAdminListener implements Listener {
     private static final int[] EDITOR_SLOTS = {43, 44};
     private static final int[] REPORT_SLOTS = {
@@ -48,29 +43,28 @@ public final class SimulationAdminListener implements Listener {
         28, 29, 30, 31, 32, 33, 34,
         37, 38, 39, 40, 41, 42, 43
     };
-    private static final int REPORT_PAGE_SIZE = REPORT_SLOTS.length;
 
-    private final PlexonCratesPremium plugin;
+    private final PlexonCrates plugin;
     private final CrateSimulationService simulations;
-    private final NamespacedKey editorMarker;
+    private final NamespacedKey marker;
 
-    public SimulationAdminListener(PlexonCratesPremium plugin, CrateSimulationService simulations) {
+    public SimulationAdminListener(PlexonCrates plugin, CrateSimulationService simulations) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.simulations = Objects.requireNonNull(simulations, "simulations");
-        this.editorMarker = new NamespacedKey(plugin, "phase2_simulation");
+        this.marker = new NamespacedKey(plugin, "phase2_simulation");
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void decorateEditor(InventoryOpenEvent event) {
-        if (!(event.getPlayer() instanceof Player player)) return;
-        if (!player.hasPermission("plexoncrates.admin.simulate")) return;
+        if (!(event.getPlayer() instanceof Player player)
+                || !player.hasPermission("plexoncrates.admin.simulate")) return;
         if (!(event.getInventory().getHolder() instanceof MenuHolder holder)
                 || holder.kind() != MenuHolder.Kind.EDITOR) return;
         for (int slot : EDITOR_SLOTS) {
             ItemStack current = event.getInventory().getItem(slot);
             if (current != null && !current.getType().isAir()) continue;
             event.getInventory().setItem(slot, editorButton());
-            return;
+            break;
         }
     }
 
@@ -80,37 +74,29 @@ public final class SimulationAdminListener implements Listener {
         if (top.getHolder() instanceof MenuHolder holder && holder.kind() == MenuHolder.Kind.EDITOR) {
             if (event.getClickedInventory() != top || !marked(event.getCurrentItem())) return;
             event.setCancelled(true);
-            if (!(event.getWhoClicked() instanceof Player player)
-                    || !player.hasPermission("plexoncrates.admin.simulate")) return;
-            openHub(player, holder.crateId(), Mode.CONFIGURED);
+            if (event.getWhoClicked() instanceof Player player
+                    && player.hasPermission("plexoncrates.admin.simulate")) {
+                openHub(player, holder.crateId(), Mode.CONFIGURED);
+            }
             return;
         }
         if (!(top.getHolder() instanceof SimulationHolder holder)) return;
         event.setCancelled(true);
-        if (!(event.getWhoClicked() instanceof Player player)) return;
-        if (!holder.playerId.equals(player.getUniqueId())) return;
-        if (event.getClickedInventory() != top) return;
-        handleSimulationClick(player, holder, event.getRawSlot());
+        if (!(event.getWhoClicked() instanceof Player player)
+                || !holder.playerId.equals(player.getUniqueId())
+                || event.getClickedInventory() != top) return;
+        route(player, holder, event.getRawSlot());
     }
 
-    private void handleSimulationClick(Player player, SimulationHolder holder, int slot) {
-        if (slot == 22 && holder.view == View.HUB) {
-            backToEditor(player, holder.crateId);
-            return;
-        }
+    private void route(Player player, SimulationHolder holder, int slot) {
         if (holder.view == View.HUB) {
-            if (slot == 10) {
-                runDrySelection(player, holder.snapshot);
-            } else if (slot == 12) {
-                runSimulation(player, holder.snapshot, 1_000);
-            } else if (slot == 13) {
-                runSimulation(player, holder.snapshot, CrateSimulationService.DEFAULT_SAMPLES);
-            } else if (slot == 14) {
-                runSimulation(player, holder.snapshot, CrateSimulationService.MAX_SAMPLES);
-            } else if (slot == 16) {
-                Mode next = holder.snapshot.mode() == Mode.CONFIGURED ? Mode.PLAYER_CONTEXT : Mode.CONFIGURED;
-                openHub(player, holder.crateId, next);
-            }
+            if (slot == 10) runDry(player, holder.snapshot);
+            else if (slot == 12) runSimulation(player, holder.snapshot, 1_000);
+            else if (slot == 13) runSimulation(player, holder.snapshot, CrateSimulationService.DEFAULT_SAMPLES);
+            else if (slot == 14) runSimulation(player, holder.snapshot, CrateSimulationService.MAX_SAMPLES);
+            else if (slot == 16) openHub(player, holder.crateId,
+                    holder.snapshot.mode() == Mode.CONFIGURED ? Mode.PLAYER_CONTEXT : Mode.CONFIGURED);
+            else if (slot == 22) backToEditor(player, holder.crateId);
             return;
         }
         if (holder.view == View.DRY) {
@@ -120,7 +106,7 @@ public final class SimulationAdminListener implements Listener {
         if (holder.view == View.REPORT && holder.report != null) {
             if (slot == 45 && holder.page > 0) openReport(player, holder.report, holder.page - 1);
             else if (slot == 49) openHub(player, holder.crateId, holder.snapshot.mode());
-            else if (slot == 53 && (holder.page + 1) * REPORT_PAGE_SIZE < holder.report.outcomes().size()) {
+            else if (slot == 53 && (holder.page + 1) * REPORT_SLOTS.length < holder.report.outcomes().size()) {
                 openReport(player, holder.report, holder.page + 1);
             }
         }
@@ -134,32 +120,29 @@ public final class SimulationAdminListener implements Listener {
             return;
         }
         Snapshot snapshot = snapshot(player, crate, mode);
-        SimulationHolder holder = new SimulationHolder(player, crateId, View.HUB, snapshot, null, 0);
+        SimulationHolder holder = new SimulationHolder(player.getUniqueId(), crate.id(), View.HUB, snapshot, null, 0);
         Inventory inventory = Bukkit.createInventory(holder, 27,
-                Text.parse("<gradient:#8CDFFF:#D8F6FF><bold>CRATE TEST LAB</bold></gradient> <dark_gray>•</dark_gray> <white>" + crate.id() + "</white>"));
+                Text.parse("<gradient:#8CDFFF:#D8F6FF><bold>CRATE TEST LAB</bold></gradient> <dark_gray>•</dark_gray> <white>"
+                        + crate.id() + "</white>"));
         holder.attach(inventory);
         fill(inventory);
 
-        List<Component> readinessLore = new ArrayList<>();
-        readinessLore.add(line("Enabled rewards", Integer.toString(snapshot.enabledRewardCount())));
-        readinessLore.add(line("Disabled rewards", Integer.toString(snapshot.disabledRewardCount())));
-        readinessLore.add(line("Configured total", percent(snapshot.configuredBasisPointTotal())));
-        readinessLore.add(line("Eligible source total", percent(snapshot.eligibleBasisPointTotal())));
-        readinessLore.add(Component.empty());
+        List<Component> readiness = new ArrayList<>();
+        readiness.add(line("Enabled rewards", snapshot.enabledRewardCount()));
+        readiness.add(line("Disabled rewards", snapshot.disabledRewardCount()));
+        readiness.add(line("Configured total", percent(snapshot.configuredBasisPointTotal())));
+        readiness.add(line("Eligible source total", percent(snapshot.eligibleBasisPointTotal())));
+        readiness.add(Component.empty());
         if (snapshot.publicationReady()) {
-            readinessLore.add(Component.text("Publication checks pass.", NamedTextColor.GREEN));
+            readiness.add(Component.text("Publication checks pass.", NamedTextColor.GREEN));
         } else {
-            readinessLore.add(Component.text("Publication issues: " + snapshot.publicationIssues().size(), NamedTextColor.YELLOW));
+            readiness.add(Component.text("Publication issues: " + snapshot.publicationIssues().size(), NamedTextColor.YELLOW));
             snapshot.publicationIssues().stream().limit(4)
-                    .forEach(issue -> readinessLore.add(Component.text("• " + issue, NamedTextColor.GRAY)));
-            if (snapshot.publicationIssues().size() > 4) {
-                readinessLore.add(Component.text("• …and " + (snapshot.publicationIssues().size() - 4) + " more", NamedTextColor.DARK_GRAY));
-            }
+                    .forEach(issue -> readiness.add(Component.text("• " + issue, NamedTextColor.GRAY)));
         }
         inventory.setItem(4, item(snapshot.publicationReady() ? Material.LIME_CONCRETE : Material.YELLOW_CONCRETE,
                 snapshot.publicationReady() ? "<green><bold>Publication Ready</bold></green>"
-                        : "<yellow><bold>Readiness Warnings</bold></yellow>", readinessLore));
-
+                        : "<yellow><bold>Readiness Warnings</bold></yellow>", readiness));
         inventory.setItem(10, item(Material.TARGET, "<aqua><bold>Dry Selection</bold></aqua>", List.of(
                 Component.text("One deterministic analytical selection.", NamedTextColor.GRAY),
                 Component.text("Consumes no key and grants nothing.", NamedTextColor.GREEN))));
@@ -171,47 +154,43 @@ public final class SimulationAdminListener implements Listener {
                 Component.text(snapshot.contextNote(), NamedTextColor.GRAY),
                 Component.text("Click to switch mode.", NamedTextColor.DARK_GRAY))));
         inventory.setItem(18, item(Material.CLOCK, "<white>Async Analysis Runtime</white>", List.of(
-                line("Active", Integer.toString(simulations.activeRequests())),
-                line("Queued", Integer.toString(simulations.queuedRequests())),
+                line("Active", simulations.activeRequests()),
+                line("Queued", simulations.queuedRequests()),
                 Component.text("One bounded worker • no per-player task", NamedTextColor.DARK_GRAY))));
         inventory.setItem(22, item(Material.ARROW, "<gray>Back to Crate Editor</gray>", List.of()));
         player.openInventory(inventory);
     }
 
-    private void runDrySelection(Player player, Snapshot snapshot) {
+    private void runDry(Player player, Snapshot snapshot) {
         if (!current(player, snapshot)) {
-            stale(player, snapshot.crateId(), snapshot.mode());
+            stale(player, snapshot);
             return;
         }
         try {
             long seed = stableSeed(snapshot, 1);
             String selected = simulations.dryRun(snapshot, seed);
-            openDryResult(player, snapshot, selected, seed);
+            showDry(player, snapshot, selected, seed);
         } catch (RuntimeException error) {
             player.sendActionBar(Text.parse("<red>Dry run unavailable:</red> <gray>" + safe(error.getMessage()) + "</gray>"));
         }
     }
 
-    private void openDryResult(Player player, Snapshot snapshot, String selectedId, long seed) {
+    private void showDry(Player player, Snapshot snapshot, String selectedId, long seed) {
         if (!current(player, snapshot)) {
-            stale(player, snapshot.crateId(), snapshot.mode());
+            stale(player, snapshot);
             return;
         }
         Crate crate = plugin.crates().find(snapshot.crateId()).orElse(null);
         if (crate == null) return;
-        SimulationHolder holder = new SimulationHolder(player, crate.id(), View.DRY, snapshot, null, 0);
-        Inventory inventory = Bukkit.createInventory(holder, 27,
-                Text.parse("<aqua><bold>NON-GRANTING DRY RUN</bold></aqua>"));
+        SimulationHolder holder = new SimulationHolder(player.getUniqueId(), crate.id(), View.DRY, snapshot, null, 0);
+        Inventory inventory = Bukkit.createInventory(holder, 27, Text.parse("<aqua><bold>NON-GRANTING DRY RUN</bold></aqua>"));
         holder.attach(inventory);
         fill(inventory);
         CrateReward reward = crate.rewards().get(selectedId);
         ItemStack display = reward == null ? new ItemStack(Material.CHEST) : reward.displayCopy();
         appendLore(display, List.of(
-                Component.empty(),
-                line("Selected reward", selectedId),
-                line("Mode", modeLabel(snapshot.mode())),
-                line("Seed", Long.toUnsignedString(seed)),
-                Component.empty(),
+                Component.empty(), line("Selected reward", selectedId), line("Mode", modeLabel(snapshot.mode())),
+                line("Seed", Long.toUnsignedString(seed)), Component.empty(),
                 Component.text("ANALYTICAL ONLY — nothing was granted.", NamedTextColor.GREEN)));
         inventory.setItem(13, display);
         inventory.setItem(4, item(Material.BOOK, "<white>Dry-Run Contract</white>", List.of(
@@ -224,7 +203,7 @@ public final class SimulationAdminListener implements Listener {
 
     private void runSimulation(Player player, Snapshot snapshot, int samples) {
         if (!current(player, snapshot)) {
-            stale(player, snapshot.crateId(), snapshot.mode());
+            stale(player, snapshot);
             return;
         }
         long seed = stableSeed(snapshot, samples);
@@ -236,58 +215,54 @@ public final class SimulationAdminListener implements Listener {
                 if (error != null) {
                     player.sendActionBar(Text.parse("<red>Simulation failed:</red> <gray>" + safe(rootMessage(error)) + "</gray>"));
                     openHub(player, snapshot.crateId(), snapshot.mode());
-                    return;
+                } else if (!current(player, report.snapshot())) {
+                    stale(player, report.snapshot());
+                } else {
+                    openReport(player, report, 0);
                 }
-                if (!current(player, report.snapshot())) {
-                    stale(player, snapshot.crateId(), snapshot.mode());
-                    return;
-                }
-                openReport(player, report, 0);
             });
         });
     }
 
-    private void openReport(Player player, Report report, int page) {
+    private void openReport(Player player, Report report, int requestedPage) {
         if (!current(player, report.snapshot())) {
-            stale(player, report.snapshot().crateId(), report.snapshot().mode());
+            stale(player, report.snapshot());
             return;
         }
         Crate crate = plugin.crates().find(report.snapshot().crateId()).orElse(null);
         if (crate == null) return;
-        int pages = Math.max(1, (report.outcomes().size() + REPORT_PAGE_SIZE - 1) / REPORT_PAGE_SIZE);
-        int boundedPage = Math.max(0, Math.min(page, pages - 1));
-        SimulationHolder holder = new SimulationHolder(player, crate.id(), View.REPORT,
-                report.snapshot(), report, boundedPage);
+        int pages = Math.max(1, (report.outcomes().size() + REPORT_SLOTS.length - 1) / REPORT_SLOTS.length);
+        int page = Math.max(0, Math.min(requestedPage, pages - 1));
+        SimulationHolder holder = new SimulationHolder(player.getUniqueId(), crate.id(), View.REPORT,
+                report.snapshot(), report, page);
         Inventory inventory = Bukkit.createInventory(holder, 54,
                 Text.parse("<gradient:#8CDFFF:#D8F6FF><bold>SIMULATION REPORT</bold></gradient> <dark_gray>•</dark_gray> <gray>"
-                        + (boundedPage + 1) + "/" + pages + "</gray>"));
+                        + (page + 1) + "/" + pages + "</gray>"));
         holder.attach(inventory);
         fill(inventory);
-        int start = boundedPage * REPORT_PAGE_SIZE;
-        for (int index = 0; index < REPORT_PAGE_SIZE && start + index < report.outcomes().size(); index++) {
+        int start = page * REPORT_SLOTS.length;
+        for (int index = 0; index < REPORT_SLOTS.length && start + index < report.outcomes().size(); index++) {
             Outcome outcome = report.outcomes().get(start + index);
             CrateReward reward = crate.rewards().get(outcome.id());
             ItemStack display = reward == null ? new ItemStack(Material.PAPER) : reward.displayCopy();
-            appendLore(display, List.of(
-                    Component.empty(),
+            appendLore(display, List.of(Component.empty(),
                     line("Base chance", format(outcome.baseBasisPoints() / 100.0) + "%"),
                     line("Expected effective", format(outcome.expectedBasisPoints() / 100.0) + "%"),
                     line("Observed", format(outcome.observedPercent()) + "%"),
                     line("Absolute deviation", format(outcome.deviationPercentagePoints()) + " pp"),
-                    line("Observed hits", Integer.toString(outcome.observedCount()))));
+                    line("Observed hits", outcome.observedCount())));
             inventory.setItem(REPORT_SLOTS[index], display);
         }
         inventory.setItem(4, item(Material.FILLED_MAP, "<white><bold>Expected vs Observed</bold></white>", List.of(
-                line("Rolls", Integer.toString(report.samples())),
-                line("Seed", Long.toUnsignedString(report.seed())),
-                line("Mode", modeLabel(report.snapshot().mode())),
-                line("Dry selection", report.drySelection()),
-                line("Publication", report.snapshot().publicationReady() ? "ready" : "issues: " + report.snapshot().publicationIssues().size()),
+                line("Rolls", report.samples()), line("Seed", Long.toUnsignedString(report.seed())),
+                line("Mode", modeLabel(report.snapshot().mode())), line("Dry selection", report.drySelection()),
+                line("Publication", report.snapshot().publicationReady() ? "ready"
+                        : "issues: " + report.snapshot().publicationIssues().size()),
                 Component.text("Δ is absolute percentage-point deviation.", NamedTextColor.DARK_GRAY),
                 Component.text("Simulation is deterministic and non-granting.", NamedTextColor.GREEN))));
-        if (boundedPage > 0) inventory.setItem(45, item(Material.ARROW, "<gray>Previous</gray>", List.of()));
+        if (page > 0) inventory.setItem(45, item(Material.ARROW, "<gray>Previous</gray>", List.of()));
         inventory.setItem(49, item(Material.OAK_DOOR, "<gray>Back to Test Lab</gray>", List.of()));
-        if ((boundedPage + 1) * REPORT_PAGE_SIZE < report.outcomes().size()) {
+        if ((page + 1) * REPORT_SLOTS.length < report.outcomes().size()) {
             inventory.setItem(53, item(Material.ARROW, "<gray>Next</gray>", List.of()));
         }
         player.openInventory(inventory);
@@ -295,17 +270,14 @@ public final class SimulationAdminListener implements Listener {
 
     private Snapshot snapshot(Player player, Crate crate, Mode mode) {
         long revision = currentRevision(player, crate.id());
-        List<Probability> probabilities = crate.orderedRewards().stream().map(reward -> new Probability(
-                reward.id(), reward.chanceBasisPoints(), reward.enabled(), reward.eligible(player))).toList();
+        List<Probability> probabilities = crate.orderedRewards().stream()
+                .map(reward -> new Probability(reward.id(), reward.chanceBasisPoints(), reward.enabled(), reward.eligible(player)))
+                .toList();
         List<String> issues = plugin.crates().publishingIssues(crate.id(), plugin.keys());
         String note = mode == Mode.CONFIGURED
                 ? "Enabled configured rewards; permission/date eligibility is not applied."
                 : "Player permission/date eligibility snapshot; dynamic limits and alternative fallbacks are not simulated.";
         return new Snapshot(crate.id(), revision, mode, probabilities, issues, note);
-    }
-
-    private boolean current(Player player, Snapshot snapshot) {
-        return CrateSimulationService.isCurrent(snapshot, currentRevision(player, snapshot.crateId()));
     }
 
     private long currentRevision(Player player, String crateId) {
@@ -314,15 +286,18 @@ public final class SimulationAdminListener implements Listener {
                 .orElseGet(() -> plugin.definitionRevision(crateId));
     }
 
-    private void stale(Player player, String crateId, Mode mode) {
+    private boolean current(Player player, Snapshot snapshot) {
+        return CrateSimulationService.isCurrent(snapshot, currentRevision(player, snapshot.crateId()));
+    }
+
+    private void stale(Player player, Snapshot snapshot) {
         player.sendActionBar(Text.parse("<yellow>Simulation result discarded: the crate revision changed.</yellow>"));
-        openHub(player, crateId, mode);
+        openHub(player, snapshot.crateId(), snapshot.mode());
     }
 
     private void backToEditor(Player player, String crateId) {
         plugin.crates().find(crateId).ifPresentOrElse(
-                crate -> plugin.adminMenus().openCrateEditor(player, crate),
-                player::closeInventory);
+                crate -> plugin.adminMenus().openCrateEditor(player, crate), player::closeInventory);
     }
 
     private ItemStack editorButton() {
@@ -332,14 +307,14 @@ public final class SimulationAdminListener implements Listener {
                 Component.text("No key, reward, journal or player state is mutated.", NamedTextColor.GREEN),
                 Component.text("Click to open the Test Lab.", NamedTextColor.DARK_GRAY)));
         ItemMeta meta = item.getItemMeta();
-        meta.getPersistentDataContainer().set(editorMarker, PersistentDataType.BYTE, (byte) 1);
+        meta.getPersistentDataContainer().set(marker, PersistentDataType.BYTE, (byte) 1);
         item.setItemMeta(meta);
         return item;
     }
 
     private boolean marked(ItemStack item) {
-        if (item == null || item.getType().isAir() || !item.hasItemMeta()) return false;
-        return item.getItemMeta().getPersistentDataContainer().has(editorMarker, PersistentDataType.BYTE);
+        return item != null && !item.getType().isAir() && item.hasItemMeta()
+                && item.getItemMeta().getPersistentDataContainer().has(marker, PersistentDataType.BYTE);
     }
 
     private static ItemStack sampleButton(int samples) {
@@ -366,9 +341,9 @@ public final class SimulationAdminListener implements Listener {
         item.setItemMeta(meta);
     }
 
-    private static Component line(String label, String value) {
+    private static Component line(String label, Object value) {
         return Component.text(label + ": ", NamedTextColor.GRAY)
-                .append(Component.text(value, NamedTextColor.WHITE));
+                .append(Component.text(String.valueOf(value), NamedTextColor.WHITE));
     }
 
     private static String modeLabel(Mode mode) {
@@ -412,7 +387,7 @@ public final class SimulationAdminListener implements Listener {
     private enum View { HUB, DRY, REPORT }
 
     private static final class SimulationHolder implements InventoryHolder {
-        private final java.util.UUID playerId;
+        private final UUID playerId;
         private final String crateId;
         private final View view;
         private final Snapshot snapshot;
@@ -420,8 +395,8 @@ public final class SimulationAdminListener implements Listener {
         private final int page;
         private Inventory inventory;
 
-        private SimulationHolder(Player player, String crateId, View view, Snapshot snapshot, Report report, int page) {
-            this.playerId = player.getUniqueId();
+        private SimulationHolder(UUID playerId, String crateId, View view, Snapshot snapshot, Report report, int page) {
+            this.playerId = playerId;
             this.crateId = crateId;
             this.view = view;
             this.snapshot = snapshot;
@@ -429,9 +404,7 @@ public final class SimulationAdminListener implements Listener {
             this.page = page;
         }
 
-        private void attach(Inventory inventory) {
-            this.inventory = inventory;
-        }
+        private void attach(Inventory inventory) { this.inventory = inventory; }
 
         @Override
         public @NotNull Inventory getInventory() {

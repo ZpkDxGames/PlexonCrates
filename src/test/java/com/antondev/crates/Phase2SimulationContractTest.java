@@ -31,11 +31,12 @@ class Phase2SimulationContractTest {
 
     @Test
     void editorIntegrationIsAdditiveAndRejectsStaleAsyncOutput() throws Exception {
-        String bootstrap = source("PlexonCratesPremium.java");
+        String lifecycle = source("gui/GuiSessionService.java");
         String listener = source("gui/SimulationAdminListener.java");
-        assertTrue(bootstrap.contains("extends PlexonCrates"));
-        assertTrue(bootstrap.contains("new SimulationAdminListener"));
-        assertTrue(listener.contains("holder.action") == false);
+        assertTrue(lifecycle.contains("new CrateSimulationService()"));
+        assertTrue(lifecycle.contains("new SimulationAdminListener(plugin, simulations)"));
+        assertTrue(lifecycle.contains("simulations.close()"));
+        assertFalse(listener.contains("holder.action"));
         assertTrue(listener.contains("simulateAsync(snapshot"));
         assertTrue(listener.contains("CrateSimulationService.isCurrent"));
         assertTrue(listener.contains("Simulation result discarded: the crate revision changed"));
@@ -49,7 +50,8 @@ class Phase2SimulationContractTest {
     @Test
     void distributionVerificationTargetsTheRcArtifactAndNonShadedContracts() throws Exception {
         String workflow = Files.readString(Path.of(".github/workflows/build.yml"));
-        assertTrue(workflow.contains("PlexonCrates-5.0.0-rc.1.jar"));
+        assertTrue(workflow.contains("PLUGIN_VERSION: '5.0.0-rc.1'"));
+        assertTrue(workflow.contains("PlexonCrates-${PLUGIN_VERSION}.jar"));
         assertTrue(workflow.contains("major version: 69"));
         assertTrue(workflow.contains("com/zpkdxgames/plexoncore/"));
         assertTrue(workflow.contains("com/antondev/keys/"));

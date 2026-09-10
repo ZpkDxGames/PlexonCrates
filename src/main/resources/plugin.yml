@@ -1,6 +1,6 @@
 name: PlexonCrates
 version: '${project.version}'
-main: com.antondev.crates.PlexonCratesPremium
+main: com.antondev.crates.PlexonCrates
 api-version: '26.2'
 description: Exact-item, percentage-first crates with native PlexonKeys compatibility.
 author: Tonim (ZpkDxGames)

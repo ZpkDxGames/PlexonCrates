@@ -50,20 +50,16 @@ jobs:
           set -euo pipefail
           core_jar="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"
           keys_jar="${RUNNER_TEMP}/PlexonKeys-1.3.0.jar"
-          curl --fail --location --silent --show-error \
-            --output "$core_jar" \
+          curl --fail --location --silent --show-error --output "$core_jar" \
             "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar"
           echo "61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  $core_jar" | sha256sum --check
-          curl --fail --location --silent --show-error \
-            --output "$keys_jar" \
+          curl --fail --location --silent --show-error --output "$keys_jar" \
             "https://github.com/ZpkDxGames/PlexonKeys/releases/download/v1.3.0/PlexonKeys-1.3.0.jar"
           echo "301ead99d56ed48b96a8983e68837b6f04d4629d8a9dec90db0ef090fa3b0796  $keys_jar" | sha256sum --check
           mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
-            -Dfile="$core_jar" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
-            -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
+            -Dfile="$core_jar" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
           mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
-            -Dfile="$keys_jar" -DgroupId=com.antondev -DartifactId=PlexonKeys \
-            -Dversion=1.3.0 -Dpackaging=jar -DgeneratePom=true
+            -Dfile="$keys_jar" -DgroupId=com.antondev -DartifactId=PlexonKeys -Dversion=1.3.0 -Dpackaging=jar -DgeneratePom=true
 
       - name: Full release-candidate verification
         shell: bash
@@ -74,9 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import glob
-          import sys
-          import xml.etree.ElementTree as ET
+          import glob, sys, xml.etree.ElementTree as ET
           count = 0
           skipped = []
           for path in sorted(glob.glob("target/surefire-reports/TEST-*.xml")):
@@ -102,15 +96,15 @@ jobs:
           test -s "$JAR"
           jar tf "$JAR" > target/jar-contents.txt
           grep -qx 'plugin.yml' target/jar-contents.txt
-          grep -qx 'com/antondev/crates/PlexonCratesPremium.class' target/jar-contents.txt
+          grep -qx 'com/antondev/crates/PlexonCrates.class' target/jar-contents.txt
           grep -qx 'com/antondev/crates/service/CrateSimulationService.class' target/jar-contents.txt
           grep -qx 'com/antondev/crates/gui/SimulationAdminListener.class' target/jar-contents.txt
           grep -qx 'com/antondev/crates/api/event/CrateOpenEvent.class' target/jar-contents.txt
           grep -qx 'org/sqlite/JDBC.class' target/jar-contents.txt
           unzip -p "$JAR" plugin.yml | grep -F "version: '${PLUGIN_VERSION}'"
-          unzip -p "$JAR" plugin.yml | grep -F 'main: com.antondev.crates.PlexonCratesPremium'
+          unzip -p "$JAR" plugin.yml | grep -F 'main: com.antondev.crates.PlexonCrates'
           unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -F "Implementation-Version: ${PLUGIN_VERSION}"
-          javap -verbose -classpath "$JAR" com.antondev.crates.PlexonCratesPremium | grep -F 'major version: 69'
+          javap -verbose -classpath "$JAR" com.antondev.crates.PlexonCrates | grep -F 'major version: 69'
           if grep -q '^com/zpkdxgames/plexoncore/' target/jar-contents.txt; then
             echo "PlexonCore must remain provided/non-shaded" >&2
             exit 1
@@ -142,8 +136,5 @@ jobs:
             exit 1
           fi
           gh release create "${RELEASE_TAG}" "$JAR" target/SHA256SUMS.txt \
-            --verify-tag \
-            --prerelease \
-            --target "${GITHUB_SHA}" \
-            --title "PlexonCrates ${PLUGIN_VERSION}" \
-            --notes-file "releases/${PLUGIN_VERSION}.md"
+            --verify-tag --prerelease --target "${GITHUB_SHA}" \
+            --title "PlexonCrates ${PLUGIN_VERSION}" --notes-file "releases/${PLUGIN_VERSION}.md"

@@ -116,6 +116,16 @@ public final class ClaimService {
                     if (!plugin.isEnabled()) return;
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (completionError != null || completed == null || completed.isEmpty()) {
+                            plugin.database().markClaimReview(claim.claimId(), attempt,
+                                            "Virtual-key credit completed but claim finalization was uncertain")
+                                    .whenComplete((reviewed, reviewError) -> {
+                                        if (reviewError != null) {
+                                            plugin.getLogger().log(Level.SEVERE,
+                                                    "Could not move credited virtual-key claim " + claim.claimId()
+                                                            + " to manual review",
+                                                    reviewError);
+                                        }
+                                    });
                             player.sendMessage(Text.parse("<red>The virtual-key claim was credited but needs administrator review.</red>"));
                         } else if (player.isOnline()) {
                             player.sendMessage(Text.parse("<green>Virtual-key claim delivered exactly.</green>"));

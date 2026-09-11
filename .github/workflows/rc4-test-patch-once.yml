@@ -1,0 +1,36 @@
+name: Apply RC4 test expectation patch once
+
+on:
+  push:
+    branches:
+      - release/5.0.0-rc.4
+    paths:
+      - .github/workflows/rc4-test-patch-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: release/5.0.0-rc.4
+      - name: Update regression expectation
+        run: python3 scripts/rc4_test_expectation_patch.py
+      - name: Remove helpers and verify diff
+        run: |
+          set -euo pipefail
+          git rm -f scripts/rc4_test_expectation_patch.py
+          git rm -f .github/workflows/rc4-test-patch-once.yml
+          git diff --check
+      - name: Commit test contract update
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Align compatibility preview regression with RC4 UX'
+          git push origin HEAD:release/5.0.0-rc.4

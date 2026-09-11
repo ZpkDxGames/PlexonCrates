@@ -48,13 +48,15 @@ class Phase2SimulationContractTest {
     }
 
     @Test
-    void distributionVerificationTargetsTheRcArtifactAndNonShadedContracts() throws Exception {
+    void distributionVerificationTargetsStableArtifactAndNonShadedContracts() throws Exception {
         String workflow = Files.readString(Path.of(".github/workflows/build.yml"));
-        assertTrue(workflow.contains("PLUGIN_VERSION: '5.0.0-rc.4'"));
+        assertTrue(workflow.contains("ACCEPTED_RC4_SHA: '1d4118673f250af72cecbec3ab91eb81cfa8830d'"));
+        assertTrue(workflow.contains("echo \"PLUGIN_VERSION=$version\""));
         assertTrue(workflow.contains("PlexonCrates-${PLUGIN_VERSION}.jar"));
         assertTrue(workflow.contains("major version: 69"));
         assertTrue(workflow.contains("com/zpkdxgames/plexoncore/"));
         assertTrue(workflow.contains("com/antondev/keys/"));
         assertTrue(workflow.contains("sha256sum --check SHA256SUMS.txt"));
+        assertTrue(workflow.contains("runtime_certification=NOT_EXECUTED"));
     }
 }

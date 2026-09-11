@@ -1,12 +1,20 @@
 # PlexonCrates Phase 3 — Player UX
 
-## Dependency boundary
+## Accepted boundary
 
-This UX layer is stacked on the accepted reliability branch `phase3/runtime-reliability` at exact commit `c1b84c76430fd7196acc6ea4d45976e1b0740786`.
+The player UX is stacked on the accepted reliability lineage at exact commit:
 
-It does not redesign schema 4, the opening journal, payment durability, grant durability, recovery classification, pending reward persistence, PlexonKeys identity, or exact ItemStack reward authority.
+`c1b84c76430fd7196acc6ea4d45976e1b0740786`
 
-The ordinary `/crates` command surface is routed into the Phase 3 player UI. Direct `MenuService` compatibility calls, physical crate blocks, portable flows and admin tooling retain their existing behavior.
+The accepted Phase 3 UX ancestor is:
+
+`f1bcb27186489b47c8692d126e0b1974e25881fa`
+
+The final RC4 source boundary integrated into stable 5.0 is:
+
+`1d4118673f250af72cecbec3ab91eb81cfa8830d`
+
+Stable `5.0.0` preserves schema 4, the opening journal, payment/grant durability, recovery classification, Claim Inbox custody, PlexonKeys identity, exact ItemStack authority, statistics, limits, pity, replay protection and migration behavior. The stable source audit adds only the fail-closed virtual-key claim finalization correction documented in `releases/5.0.0.md`.
 
 ## Player journey
 
@@ -20,7 +28,7 @@ The ordinary `/crates` command surface is routed into the Phase 3 player UI. Dir
      -> Pending Rewards
 ```
 
-The Hall and Preview are non-consuming. Payment is only submitted through an explicit Open or Confirm action.
+The Hall and Preview are non-consuming. Payment is submitted only through an explicit Open or Confirm action.
 
 ## Shared layout
 
@@ -50,7 +58,7 @@ Preview shows the crate identity, payment requirement, opening mode, availabilit
 
 Reward cards preserve the configured exact display ItemStack for presentation. Player lore summarizes rarity, item amount, money, experience and server-delivered extras without printing command strings, serialized data, reward IDs, transaction IDs, schema values or journal enums.
 
-For random crates, chance text uses the effective current eligible pool probability and keeps configured base chance distinct when it differs. For selective crates, cards say `Selective choice`; no random percentage is fabricated. Pity membership is described as guaranteed-pool context without inventing a pity-adjusted percentage.
+For random crates, chance text uses the effective current eligible-pool probability and keeps configured base chance distinct when it differs. For selective crates, cards say `Selective choice`; no random percentage is fabricated. Pity membership is described as guaranteed-pool context without inventing a pity-adjusted percentage.
 
 ## Payment presentation
 
@@ -72,7 +80,9 @@ Selective Preview is non-consuming. A reward card opens a confirmation screen. C
 
 ## Pending Rewards
 
-The player recovery surface is named **Pending Rewards**. It uses existing `ClaimService.list(...)` and `ClaimService.claim(...)`. Claim IDs remain hidden routing state. Exact pending ItemStacks are decoded only for safe presentation. Full inventory behavior, durable reservation/release and no-world-drop recovery remain owned by `ClaimService`.
+The player recovery surface is named **Pending Rewards**. It uses existing `ClaimService.list(...)` and `ClaimService.claim(...)`. Claim IDs remain hidden routing state. Exact pending ItemStacks are decoded only for safe presentation.
+
+Claim reservation/release and side-effect uncertainty remain owned by `ClaimService`. Stable 5.0 immediately moves a credited virtual-key claim to `REVIEW` if durable claim completion becomes uncertain, matching the existing fail-closed exact-item path. No uncertain claim is automatically retried.
 
 ## Session and stale-state behavior
 
@@ -82,7 +92,7 @@ A stale player action is rejected and refreshed with player language: `This crat
 
 ## Performance boundaries
 
-The player layer adds no repeating GUI task, inventory tick refresh, database query per reward card, simulation during player rendering, payment consume check during render, or unbounded GUI cache. Hall/reward lists are bounded to the current page. Virtual payment reads are snapshot-scoped.
+The player layer adds no repeating GUI task, inventory tick refresh, database query per reward card, simulation during player rendering, payment consume check during render or unbounded GUI cache. Hall/reward lists are bounded to the current page. Virtual payment reads are snapshot-scoped.
 
 ## Runtime validation matrix
 
@@ -102,16 +112,17 @@ The player layer adds no repeating GUI task, inventory tick refresh, database qu
 14. Successful opening/result summary identifies crate and reward safely.
 15. Pending Rewards lists durable pending delivery entries.
 16. Full inventory preserves a pending reward for later claim and performs no world-drop recovery.
-17. Rapid duplicate Open/Confirm/Claim clicks do not multiply one accepted GUI submission.
-18. Stale crate revision/session rejects the action and refreshes the player view.
-19. Reconnect retains authoritative persisted state.
-20. Normal restart retains authoritative persisted state.
-21. Existing legacy MANUAL_REVIEW rows remain unchanged.
-22. `/pcrates diagnose` remains accurate for administrators.
-23. Observe PlexonKeys durable-consume latency without changing its authority.
-24. Profile repeated Hall/Preview/pagination navigation with Spark/MSPT.
-25. Include PlexonCrates in the later integrated >=30-minute soak.
+17. Virtual-key credit plus uncertain claim completion moves the claim to manual review without automatic retry.
+18. Rapid duplicate Open/Confirm/Claim clicks do not multiply one accepted GUI submission.
+19. Stale crate revision/session rejects the action and refreshes the player view.
+20. Reconnect retains authoritative persisted state.
+21. Normal restart retains authoritative persisted state.
+22. Existing legacy `MANUAL_REVIEW` rows remain unchanged.
+23. `/pcrates diagnose` remains accurate for administrators.
+24. Observe PlexonKeys durable-consume latency without changing its authority.
+25. Profile repeated Hall/Preview/pagination navigation with Spark/MSPT.
+26. Include PlexonCrates in an integrated soak when performing deployment certification.
 
-## Release gate
+## Stable/runtime boundary
 
-This branch is source/CI UX work only. Do not merge independently, publish another RC, modify `v5.0.0-rc.2`, or promote stable until the coordinated runtime gate is complete.
+Phase 3 source and UX work is integrated into stable `5.0.0`. GitHub stable publication is gated by exact-source CI, lineage, package and release-byte verification. Live PlexonCraft runtime/soak certification remains a post-release deployment operation and may be recorded as `NOT_EXECUTED` in release provenance.

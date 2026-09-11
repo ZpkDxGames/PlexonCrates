@@ -583,7 +583,7 @@ public final class OpeningService {
         String reservation = "attempt=" + attempt + ",status=COST_RESERVED,type="
                 + decision.policy.costType() + ",amount=" + decision.policy.cost()
                 + ",candidate=" + replacementId;
-        plugin.database().updateJournal(decision.transactionId, "REROLL_COST_RESERVED",
+        plugin.database().markManualReview(decision.transactionId, "REROLL_COST_RESERVED",
                 transactionDetail(opening) + ";" + reservation).whenComplete((ignored, error) -> {
                     if (!plugin.isEnabled()) return;
                     Bukkit.getScheduler().runTask(plugin, () -> {
@@ -621,7 +621,7 @@ public final class OpeningService {
         opening = opening.withAudit("decision=ACCEPT,candidate=" + decision.offer.candidate()
                 + ",reason=" + acceptedReason);
         pending.put(decision.transactionId, opening);
-        plugin.database().updateJournal(decision.transactionId, "REROLL_ACCEPTED", transactionDetail(opening));
+        plugin.database().markManualReview(decision.transactionId, "REROLL_ACCEPTED", transactionDetail(opening));
         boolean bypassLimits = opening.plan().source() == OpenSource.ADMIN_FORCE
                 || player.hasPermission("plexoncrates.bypass.limit");
         beginDelivery(decision.transactionId, opening, player, opening.crate(), bypassLimits);
@@ -648,7 +648,7 @@ public final class OpeningService {
         pending.put(transactionId, offered);
         rerollDecisions.put(player.getUniqueId(), decision);
         scheduleRerollTimeout(player.getUniqueId(), decision);
-        plugin.database().updateJournal(transactionId, "AWAITING_DECISION", transactionDetail(offered))
+        plugin.database().markManualReview(transactionId, "AWAITING_DECISION", transactionDetail(offered))
                 .whenComplete((ignored, error) -> {
                     if (!plugin.isEnabled()) return;
                     Bukkit.getScheduler().runTask(plugin, () -> {
@@ -755,7 +755,7 @@ public final class OpeningService {
                 + ",status=COST_CONSUMED,type=" + decision.policy.costType()
                 + ",amount=" + decision.policy.cost()
                 + ",candidate=" + replacement.rewards().getLast().id();
-        plugin.database().updateJournal(decision.transactionId, "REROLL_COST_CONSUMED", detail)
+        plugin.database().markManualReview(decision.transactionId, "REROLL_COST_CONSUMED", detail)
                 .whenComplete((ignored, error) -> {
                     if (!plugin.isEnabled()) return;
                     Bukkit.getScheduler().runTask(plugin, () -> {
@@ -782,7 +782,7 @@ public final class OpeningService {
                         decision.processing = false;
                         Bukkit.getPluginManager().callEvent(new CrateRewardSelectEvent(
                                 player, updated.plan(), updated.plan().deliveries().getLast()));
-                        plugin.database().updateJournal(decision.transactionId, "AWAITING_DECISION",
+                        plugin.database().markManualReview(decision.transactionId, "AWAITING_DECISION",
                                 transactionDetail(updated));
                         scheduleRerollTimeout(player.getUniqueId(), decision);
                         plugin.menus().openReroll(player);
@@ -835,7 +835,7 @@ public final class OpeningService {
             opening = opening.withAudit("attempt=" + (decision.offer.rerollsUsed() + 1)
                     + ",status=FAILED,reason=" + reason.replace(';', ','));
             pending.put(decision.transactionId, opening);
-            plugin.database().updateJournal(decision.transactionId, "AWAITING_DECISION",
+            plugin.database().markManualReview(decision.transactionId, "AWAITING_DECISION",
                     transactionDetail(opening));
         }
         player.sendActionBar(Text.parse("<red>Reroll failed:</red> <gray>" + reason + ".</gray>"));
@@ -899,7 +899,7 @@ public final class OpeningService {
             if (player != null) acceptReroll(player, "TIMEOUT");
             else {
                 PendingOpening opening = pending.get(decision.transactionId);
-                plugin.database().updateJournal(decision.transactionId, "FAILED",
+                plugin.database().markManualReview(decision.transactionId, "FAILED",
                         (opening == null ? "" : transactionDetail(opening) + ";")
                                 + "consumed opening lost its online player; manual review required");
                 rerollDecisions.remove(playerId);
@@ -950,7 +950,7 @@ public final class OpeningService {
         for (var entry : List.copyOf(pending.entrySet())) {
             PendingOpening opening = entry.getValue();
             if (opening.paymentConsumed()) {
-                plugin.database().updateJournal(entry.getKey(), "FAILED",
+                plugin.database().markManualReview(entry.getKey(), "FAILED",
                         transactionDetail(opening)
                                 + ";consumed opening requires manual recovery after plugin stop");
                 continue;

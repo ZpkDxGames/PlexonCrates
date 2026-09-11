@@ -15,7 +15,7 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * Direct adapter for the stable PlexonKeys 1.2 Bukkit service API.
+ * Direct adapter for the stable PlexonKeys 2.0 Bukkit service API.
  * Loaded reflectively by {@link PlexonKeysKeyProvider} so PlexonCrates remains
  * linkage-safe when PlexonKeys is absent or an older release is installed.
  */
@@ -36,6 +36,11 @@ public final class PlexonKeysServiceAdapter {
             result.put(tier.id(), new ExternalKeyDescriptor(tier.id(), "plexonkeys", ItemCodec.one(template.get())));
         }
         return Map.copyOf(result);
+    }
+
+    /** True only when the runtime service needed for authoritative wallet operations is registered. */
+    public static boolean available(JavaPlugin owner) {
+        return owner.getServer().getServicesManager().getRegistration(PlexonKeysAPI.class) != null;
     }
 
     /** Reads the authoritative PlexonKeys wallet on the provider's required primary thread. */

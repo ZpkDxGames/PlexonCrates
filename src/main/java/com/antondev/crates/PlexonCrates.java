@@ -394,7 +394,9 @@ public class PlexonCrates extends JavaPlugin {
                     + entry.crateId() + "@" + entry.crateRevision() + "</white> <gray>stage=</gray><white>"
                     + entry.stage() + "</white> <gray>payment=</gray><white>" + entry.paymentState()
                     + "</white> <gray>grant=</gray><white>" + entry.grantState()
-                    + "</white> <gray>recovery=</gray><white>" + entry.recoveryClassification() + "</white>"));
+                    + "</white> <gray>recovery=</gray><white>" + entry.recoveryClassification()
+                    + "</white> <gray>created=</gray><white>" + entry.createdAt()
+                    + "</white> <gray>updated=</gray><white>" + entry.updatedAt() + "</white>"));
         }
         sender.sendMessage(Text.parse("<gray>PlexonKeys durable consume latency:</gray> <white>"
                 + openings.plexonKeysLatencyDiagnostic() + "</white>"));

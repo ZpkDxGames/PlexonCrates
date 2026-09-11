@@ -2320,7 +2320,10 @@ public final class DatabaseService implements AutoCloseable {
             try (PreparedStatement statement = connection.prepareStatement("""
                     UPDATE opening_journal SET stage='GRANT_ATTEMPTED', grant_state='ATTEMPTED',
                         recovery_classification='MANUAL_REVIEW', detail=?, updated_at=?
-                    WHERE transaction_id=? AND journal_version >= 2 AND stage='CONSUMED'
+                    WHERE transaction_id=? AND journal_version >= 2
+                      AND payment_state IN ('COMMITTED','NOT_REQUIRED')
+                      AND grant_state='NOT_STARTED'
+                      AND stage NOT IN ('COMPLETED','CANCELLED')
                     """)) {
                 statement.setString(1, detail == null ? "" : detail);
                 statement.setLong(2, System.currentTimeMillis());

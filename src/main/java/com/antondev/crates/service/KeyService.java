@@ -257,7 +257,8 @@ public final class KeyService {
         KeyDefinition definition = definitions.get(normalize(keyId));
         return definition != null && definition.enabled()
                 && definition.source() == KeySource.PLEXONKEYS
-                && plugin.settings().plexonKeysEnabled();
+                && plugin.settings().plexonKeysEnabled()
+                && PlexonKeysServiceAdapter.available(plugin);
     }
 
     public long plexonKeysBalance(UUID playerId, String keyId) {

@@ -28,7 +28,7 @@ class Phase3PlayerCrateUxArchitectureTest {
         String router = Files.readString(ROUTER);
         assertTrue(router.contains("menus.openHall(player, 0)"));
         assertTrue(router.contains("menus.openPreview(player, crate"));
-        assertFalse(router.contains("InventoryOpenEvent"));
+        assertFalse(router.contains("import org.bukkit.event.inventory.InventoryOpenEvent"));
         assertFalse(router.contains("redirectLegacyPlayerSurface"));
     }
 

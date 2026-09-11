@@ -12,6 +12,9 @@ import com.antondev.crates.domain.key.KeySource;
 import com.antondev.crates.domain.key.ProviderStatus;
 import com.antondev.crates.domain.key.ResolvedKey;
 import com.antondev.crates.integration.plexonkeys.PlexonKeysKeyProvider;
+import com.antondev.crates.integration.plexonkeys.PlexonKeysServiceAdapter;
+import com.antondev.keys.api.KeyConsumeResult;
+import java.util.UUID;
 import com.antondev.crates.item.ItemSnapshotCodec;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -247,6 +250,30 @@ public final class KeyService {
         accepted.add(resolved.get().template());
         accepted.addAll(definition.legacyTemplates());
         return Optional.of(new KeyTransaction(definition, resolved.get(), accepted));
+    }
+
+    /** True only for a live PlexonKeys-backed definition whose external wallet is authoritative. */
+    public boolean usesPlexonKeysWallet(String keyId) {
+        KeyDefinition definition = definitions.get(normalize(keyId));
+        return definition != null && definition.enabled()
+                && definition.source() == KeySource.PLEXONKEYS
+                && plugin.settings().plexonKeysEnabled();
+    }
+
+    public long plexonKeysBalance(UUID playerId, String keyId) {
+        KeyDefinition definition = definitions.get(normalize(keyId));
+        if (definition == null || definition.source() != KeySource.PLEXONKEYS) {
+            throw new IllegalArgumentException("Key is not backed by PlexonKeys: " + keyId);
+        }
+        return PlexonKeysServiceAdapter.balance(plugin, playerId, definition.externalId());
+    }
+
+    public KeyConsumeResult consumePlexonKeys(UUID playerId, String keyId, long amount, String transactionId) {
+        KeyDefinition definition = definitions.get(normalize(keyId));
+        if (definition == null || definition.source() != KeySource.PLEXONKEYS) {
+            throw new IllegalArgumentException("Key is not backed by PlexonKeys: " + keyId);
+        }
+        return PlexonKeysServiceAdapter.consume(plugin, playerId, definition.externalId(), amount, transactionId);
     }
 
     public Optional<ItemStack> template(String id) {

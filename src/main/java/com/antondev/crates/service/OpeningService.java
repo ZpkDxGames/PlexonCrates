@@ -20,6 +20,7 @@ import com.antondev.crates.domain.opening.RewardDelivery;
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.integration.PlaceholderBridge;
 import com.antondev.crates.integration.VaultEconomyBridge;
+import com.antondev.keys.api.KeyConsumeResult;
 import com.antondev.crates.item.ItemSnapshotCodec;
 import com.antondev.crates.model.BlockPosition;
 import com.antondev.crates.model.Crate;
@@ -62,6 +63,10 @@ public final class OpeningService {
     private final Map<UUID, Map<String, Long>> cooldowns = new HashMap<>();
     /** Reserved portable requests waiting to be attached to the journal transaction. */
     private final Map<UUID, PortableContext> portableRequests = new HashMap<>();
+    private long plexonKeysConsumeCount;
+    private long plexonKeysConsumeTotalNanos;
+    private long plexonKeysConsumeMaxNanos;
+    private long plexonKeysConsumeLastNanos;
 
     public OpeningService(PlexonCrates plugin, OpeningLog log) {
         this.plugin = plugin;
@@ -258,7 +263,7 @@ public final class OpeningService {
             boolean consumeKey = !forced && !bypassingKey && crate.keyCost() > 0;
             PaymentChoice free = new PaymentChoice(null,
                     portable ? "PORTABLE" : crate.keyId().isBlank() ? "FREE" : crate.keyId(),
-                    0, 0, 0, crate.paymentPolicy());
+                    0, 0, 0, crate.paymentPolicy(), false);
             if (!consumeKey) return planAndPrepare(player, crate, amount, source, location, free,
                     selectedRewardId);
 
@@ -356,9 +361,13 @@ public final class OpeningService {
         PendingOpening opening = new PendingOpening(plan, crate, rewardPlan, payment, milestonePlan,
                 portableContext, plannedAt, false, List.of());
         pending.put(transactionId, opening);
+        String paymentTransactionId = payment.plexonKeysVirtual()
+                ? plexonKeysPaymentTransactionId(transactionId)
+                : payment.virtualAmount() > 0 ? "opening-payment:" + transactionId : "";
         DatabaseService.JournalRecord journal = new DatabaseService.JournalRecord(transactionId,
                 player.getUniqueId(), player.getName(), crate.id(), payment.keyId(), payment.total(),
-                requested, source.name(), String.join(",", plan.rewardIds()), plan.createdAt());
+                requested, source.name(), String.join(",", plan.rewardIds()), plan.runtimeRevision(),
+                payment.sourceLabel(), paymentTransactionId, plan.createdAt());
         plugin.database().prepareJournal(journal, transactionDetail(opening))
                 .whenComplete((ignored, error) -> {
                     if (!plugin.isEnabled()) return;
@@ -391,10 +400,21 @@ public final class OpeningService {
             KeyService.KeyTransaction transaction = plugin.keys().begin(keyId).orElse(null);
             int physical = transaction == null ? 0 : plugin.keys().count(player, transaction);
             int sourcePriority = priority++;
-            futures.add(plugin.database().loadVirtualKeyBalance(player.getUniqueId(), keyId)
-                    .thenApply(balance -> new PaymentOption(transaction,
-                            new KeyPaymentPlanner.Availability(keyId, physical, balance.balance(), sourcePriority),
-                            balance.revision())));
+            if (plugin.keys().usesPlexonKeysWallet(keyId)) {
+                long balance;
+                try { balance = plugin.keys().plexonKeysBalance(player.getUniqueId(), keyId); }
+                catch (RuntimeException error) {
+                    plugin.getLogger().log(Level.WARNING, "Could not read PlexonKeys virtual balance for " + keyId, error);
+                    balance = 0L;
+                }
+                futures.add(CompletableFuture.completedFuture(new PaymentOption(transaction,
+                        new KeyPaymentPlanner.Availability(keyId, physical, balance, sourcePriority), 0L, true)));
+            } else {
+                futures.add(plugin.database().loadVirtualKeyBalance(player.getUniqueId(), keyId)
+                        .thenApply(balance -> new PaymentOption(transaction,
+                                new KeyPaymentPlanner.Availability(keyId, physical, balance.balance(), sourcePriority),
+                                balance.revision(), false)));
+            }
         }
         CompletableFuture<?>[] all = futures.toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(all).thenApply(ignored -> paymentPlan(crate, required, preference,
@@ -412,7 +432,7 @@ public final class OpeningService {
                 candidate.availability().keyId().equals(value.keyId())).findFirst().orElseThrow();
         if (value.usesPhysical() && option.transaction() == null) return Optional.empty();
         return Optional.of(new PaymentChoice(option.transaction(), value.keyId(), value.physical(),
-                value.virtual(), option.virtualRevision(), value.policy()));
+                value.virtual(), option.virtualRevision(), value.policy(), option.plexonKeysVirtual()));
     }
 
     private boolean insufficientPayment(Player player, Crate crate) {
@@ -590,20 +610,9 @@ public final class OpeningService {
                 + ",reason=" + acceptedReason);
         pending.put(decision.transactionId, opening);
         plugin.database().updateJournal(decision.transactionId, "REROLL_ACCEPTED", transactionDetail(opening));
-        try {
-            boolean bypassLimits = opening.plan().source() == OpenSource.ADMIN_FORCE
-                    || player.hasPermission("plexoncrates.bypass.limit");
-            finishDelivery(decision.transactionId, opening, player, opening.crate(), bypassLimits);
-        } catch (RuntimeException error) {
-            plugin.getLogger().log(Level.SEVERE,
-                    "Consumed reroll opening " + decision.transactionId + " could not be delivered", error);
-            plugin.database().updateJournal(decision.transactionId, "FAILED",
-                    transactionDetail(opening) + ";manual-review=" + concise(error));
-            plugin.messages().send(player, "opening-failed", Text.value("transaction", decision.transactionId));
-        } finally {
-            pending.remove(decision.transactionId);
-            locks.remove(player.getUniqueId());
-        }
+        boolean bypassLimits = opening.plan().source() == OpenSource.ADMIN_FORCE
+                || player.hasPermission("plexoncrates.bypass.limit");
+        beginDelivery(decision.transactionId, opening, player, opening.crate(), bypassLimits);
         return true;
     }
 
@@ -1027,12 +1036,8 @@ public final class OpeningService {
                 beginVirtualCommit(transactionId, opening, player, current, eligibility, bypassLimits);
                 return;
             }
-            if (!consumePhysical(player, opening)) {
-                abortPrepared(transactionId, "Exact key revalidation failed", false);
-                plugin.messages().send(player, "insufficient-payment", Text.component("key", keyName(current)));
-                return;
-            }
-            deferred = afterPaymentConsumed(transactionId, opening, player, current, bypassLimits);
+            deferred = true;
+            beginPhysicalCommit(transactionId, opening, player, current, bypassLimits);
         } catch (RuntimeException error) {
             plugin.getLogger().log(Level.SEVERE, "Opening " + transactionId + " failed during the main-thread commit", error);
             plugin.database().updateJournal(transactionId, "FAILED", concise(error));
@@ -1048,10 +1053,17 @@ public final class OpeningService {
     private void beginVirtualCommit(UUID transactionId, PendingOpening opening, Player player, Crate current,
                                     Function<CrateReward, AlternativeRewardResolver.Reason> eligibility,
                                     boolean bypassLimits) {
+        if (opening.payment().plexonKeysVirtual()) {
+            beginPlexonKeysVirtualCommit(transactionId, opening, player, current, eligibility, bypassLimits);
+            return;
+        }
         PaymentChoice payment = opening.payment();
         String debitToken = "opening-payment:" + transactionId;
-        plugin.database().debitVirtualKeys(player.getUniqueId(), payment.keyId(), payment.virtualAmount(),
-                debitToken, "OPENING", transactionId.toString(), null, payment.virtualRevision())
+        plugin.database().markPaymentAttempted(transactionId, payment.sourceLabel(), debitToken,
+                transactionDetail(opening) + ";payment=ATTEMPTED")
+                .thenCompose(ignored -> plugin.database().debitVirtualKeys(player.getUniqueId(), payment.keyId(),
+                        payment.virtualAmount(), debitToken, "OPENING", transactionId.toString(), null,
+                        payment.virtualRevision()))
                 .whenComplete((mutation, error) -> {
                     if (!plugin.isEnabled()) {
                         if (error == null && mutation != null && mutation.applied()) {
@@ -1063,6 +1075,8 @@ public final class OpeningService {
                         if (error != null || mutation == null || !mutation.applied()) {
                             if (error != null) plugin.getLogger().log(Level.WARNING,
                                     "Virtual-key debit failed for opening " + transactionId, error);
+                            plugin.database().markPaymentRejected(transactionId,
+                                    "Local virtual payment did not commit; " + conciseNullable(error));
                             abortPrepared(transactionId, "Virtual-key balance changed before consumption", error != null);
                             plugin.messages().send(player, "insufficient-payment",
                                     Text.component("key", keyName(current)));
@@ -1099,20 +1113,101 @@ public final class OpeningService {
                                 refundVirtualAndAbort(opening, "Physical-key consumption failed after virtual debit");
                                 return;
                             }
-                            boolean awaitingDecision = afterPaymentConsumed(transactionId, opening, player,
-                                    current, bypassLimits);
-                            if (!awaitingDecision) {
-                                pending.remove(transactionId);
-                                locks.remove(player.getUniqueId());
-                            }
+                            afterPaymentConsumed(transactionId, opening, player, current, bypassLimits);
                         } catch (RuntimeException failure) {
-                            plugin.getLogger().log(Level.SEVERE,
-                                    "Opening " + transactionId + " failed after virtual-key consumption", failure);
-                            plugin.database().updateJournal(transactionId, "FAILED", concise(failure));
-                            plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+                            failAfterPaymentAttempt(transactionId, opening, player, failure);
+                        }
+                    });
+                });
+    }
+
+    private void beginPlexonKeysVirtualCommit(UUID transactionId, PendingOpening opening, Player player,
+                                              Crate current,
+                                              Function<CrateReward, AlternativeRewardResolver.Reason> eligibility,
+                                              boolean bypassLimits) {
+        PaymentChoice payment = opening.payment();
+        String stableId = plexonKeysPaymentTransactionId(transactionId);
+        plugin.database().markPaymentAttempted(transactionId, "PLEXONKEYS", stableId,
+                transactionDetail(opening) + ";payment=ATTEMPTED;keys-tx=" + stableId)
+                .whenComplete((ignored, journalError) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (journalError != null) {
+                            failAfterPaymentAttempt(transactionId, opening, player, journalError);
+                            return;
+                        }
+                        KeyConsumeResult result;
+                        long started = System.nanoTime();
+                        try {
+                            result = plugin.keys().consumePlexonKeys(player.getUniqueId(), payment.keyId(),
+                                    payment.virtualAmount(), stableId);
+                        } catch (RuntimeException failure) {
+                            recordPlexonKeysLatency(System.nanoTime() - started);
+                            failAfterPaymentAttempt(transactionId, opening, player, failure);
+                            return;
+                        }
+                        recordPlexonKeysLatency(System.nanoTime() - started);
+                        if (result.status() == KeyConsumeResult.Status.INSUFFICIENT) {
+                            plugin.database().markPaymentRejected(transactionId,
+                                    transactionDetail(opening) + ";keys-result=INSUFFICIENT");
                             pending.remove(transactionId);
                             locks.remove(player.getUniqueId());
+                            plugin.messages().send(player, "insufficient-payment",
+                                    Text.component("key", keyName(current)));
+                            return;
                         }
+                        if (result.status() == KeyConsumeResult.Status.DUPLICATE) {
+                            // RC2's duplicate result does not expose whether the original replay row represented
+                            // SUCCESS or INSUFFICIENT. Never guess after an ambiguous retry.
+                            plugin.database().markManualReview(transactionId, "PAYMENT_AMBIGUOUS",
+                                    transactionDetail(opening) + ";keys-result=DUPLICATE;keys-tx=" + stableId);
+                            pending.remove(transactionId);
+                            locks.remove(player.getUniqueId());
+                            plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+                            return;
+                        }
+                        if (!player.isOnline()) {
+                            plugin.database().markManualReview(transactionId, "PAYMENT_COMMITTED",
+                                    transactionDetail(opening) + ";keys-result=SUCCESS;player-disconnected");
+                            pending.remove(transactionId);
+                            locks.remove(player.getUniqueId());
+                            return;
+                        }
+                        if (payment.physicalAmount() > 0 && !consumePhysical(player, opening)) {
+                            plugin.database().markManualReview(transactionId, "PAYMENT_COMMITTED",
+                                    transactionDetail(opening) + ";keys-result=SUCCESS;physical-part=FAILED");
+                            pending.remove(transactionId);
+                            locks.remove(player.getUniqueId());
+                            plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+                            return;
+                        }
+                        afterPaymentConsumed(transactionId, opening, player, current, bypassLimits);
+                    });
+                });
+    }
+
+    private void beginPhysicalCommit(UUID transactionId, PendingOpening opening, Player player,
+                                     Crate current, boolean bypassLimits) {
+        PaymentChoice payment = opening.payment();
+        plugin.database().markPaymentAttempted(transactionId, "PHYSICAL", "",
+                transactionDetail(opening) + ";payment=ATTEMPTED")
+                .whenComplete((ignored, error) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (error != null) {
+                            failAfterPaymentAttempt(transactionId, opening, player, error);
+                            return;
+                        }
+                        if (!consumePhysical(player, opening)) {
+                            plugin.database().markPaymentRejected(transactionId,
+                                    transactionDetail(opening) + ";physical=NOT_CONSUMED");
+                            pending.remove(transactionId);
+                            locks.remove(player.getUniqueId());
+                            plugin.messages().send(player, "insufficient-payment",
+                                    Text.component("key", keyName(current)));
+                            return;
+                        }
+                        afterPaymentConsumed(transactionId, opening, player, current, bypassLimits);
                     });
                 });
     }
@@ -1124,27 +1219,108 @@ public final class OpeningService {
                 && plugin.keys().consume(player, payment.physicalTransaction(), payment.physicalAmount());
     }
 
-    /** Enters the durable post-payment boundary and either opens a decision or delivers directly. */
+    /** Enters the durable post-payment boundary and only continues after the journal commit succeeds. */
     private boolean afterPaymentConsumed(UUID transactionId, PendingOpening opening, Player player,
                                          Crate current, boolean bypassLimits) {
-        opening = opening.withPaymentConsumed("payment=CONSUMED");
-        pending.put(transactionId, opening);
-        OpeningPlan plan = opening.plan();
-        if (opening.payment().physicalAmount() > 0) {
+        PendingOpening consumed = opening.withPaymentConsumed("payment=CONSUMED");
+        pending.put(transactionId, consumed);
+        OpeningPlan plan = consumed.plan();
+        if (consumed.payment().physicalAmount() > 0) {
             Bukkit.getPluginManager().callEvent(new CrateKeyConsumeEvent(player, plan));
         }
-        plugin.database().updateJournal(transactionId, "CONSUMED", transactionDetail(opening));
-        if (beginRerollDecision(transactionId, opening, player, current, bypassLimits)) return true;
-        finishDelivery(transactionId, opening, player, current, bypassLimits);
-        return false;
+        plugin.database().markPaymentCommitted(transactionId, transactionDetail(consumed))
+                .whenComplete((ignored, error) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (error != null) {
+                            failAfterPaymentAttempt(transactionId, consumed, player, error);
+                            return;
+                        }
+                        if (beginRerollDecision(transactionId, consumed, player, current, bypassLimits)) return;
+                        beginDelivery(transactionId, consumed, player, current, bypassLimits);
+                    });
+                });
+        return true;
+    }
+
+    private void beginDelivery(UUID transactionId, PendingOpening opening, Player player, Crate current,
+                               boolean bypassLimits) {
+        plugin.database().markGrantAttempted(transactionId, transactionDetail(opening) + ";grant=ATTEMPTED")
+                .whenComplete((ignored, error) -> {
+                    if (!plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (error != null) {
+                            failAfterPaymentAttempt(transactionId, opening, player, error);
+                            return;
+                        }
+                        try {
+                            finishDelivery(transactionId, opening, player, current, bypassLimits,
+                                    () -> {
+                                        pending.remove(transactionId);
+                                        locks.remove(player.getUniqueId());
+                                    });
+                        } catch (RuntimeException failure) {
+                            plugin.database().markManualReview(transactionId, "GRANT_FAILED",
+                                    transactionDetail(opening) + ";grant-error=" + concise(failure));
+                            plugin.getLogger().log(Level.SEVERE,
+                                    "Opening " + transactionId + " failed after the durable grant-attempt boundary", failure);
+                            plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+                            pending.remove(transactionId);
+                            locks.remove(player.getUniqueId());
+                        }
+                    });
+                });
+    }
+
+    private void failAfterPaymentAttempt(UUID transactionId, PendingOpening opening, Player player, Throwable error) {
+        plugin.database().markManualReview(transactionId, "FAILED",
+                transactionDetail(opening) + ";failure=" + conciseNullable(error));
+        plugin.getLogger().log(Level.SEVERE, "Opening " + transactionId + " requires manual review", error);
+        if (player != null && player.isOnline()) {
+            plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+        }
+        pending.remove(transactionId);
+        locks.remove(opening.plan().playerId());
     }
 
     private void finishDelivery(UUID transactionId, PendingOpening opening, Player player, Crate current,
                                 boolean bypassLimits) {
+        finishDelivery(transactionId, opening, player, current, bypassLimits, () -> { });
+    }
+
+    private void finishDelivery(UUID transactionId, PendingOpening opening, Player player, Crate current,
+                                boolean bypassLimits, Runnable terminalCleanup) {
+        OpeningPlan plan = opening.plan();
+        DeliveryResult delivered = deliver(player, current, opening.selected(), plan, true);
+        if (!delivered.claimWrites().isEmpty()) {
+            CompletableFuture.allOf(delivered.claimWrites().toArray(CompletableFuture[]::new))
+                    .whenComplete((ignored, claimError) -> {
+                        if (!plugin.isEnabled()) return;
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (claimError != null) {
+                                plugin.database().markManualReview(transactionId, "GRANT_AMBIGUOUS",
+                                        transactionDetail(opening) + ";pending-claim-persistence=FAILED");
+                                plugin.getLogger().log(Level.SEVERE,
+                                        "Opening " + transactionId + " delivered partially but its exact overflow claim failed", claimError);
+                                plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+                                terminalCleanup.run();
+                                return;
+                            }
+                            finalizeDeliveredOpening(transactionId, opening, player, current, bypassLimits,
+                                    delivered.overflowCount(), terminalCleanup);
+                        });
+                    });
+            return;
+        }
+        finalizeDeliveredOpening(transactionId, opening, player, current, bypassLimits,
+                delivered.overflowCount(), terminalCleanup);
+    }
+
+    private void finalizeDeliveredOpening(UUID transactionId, PendingOpening opening, Player player, Crate current,
+                                          boolean bypassLimits, int overflowCount, Runnable terminalCleanup) {
         OpeningPlan plan = opening.plan();
         Function<CrateReward, AlternativeRewardResolver.Reason> eligibility =
                 baseIneligibility(player, opening.stateAt());
-        DeliveryResult delivered = deliver(player, current, opening.selected(), plan, true);
         DatabaseService.RewardStateCommit rewardState = plugin.rewardStates().applyResolved(player.getUniqueId(),
                 current, opening.rewardPlan(), plan.source(), eligibility,
                 plugin.settings().alternativeRewardsEnabled(), bypassLimits, opening.stateAt());
@@ -1156,23 +1332,26 @@ public final class OpeningService {
         DatabaseService.OpeningRecord record = new DatabaseService.OpeningRecord(transactionId,
                 player.getUniqueId(), player.getName(), current.id(), plan.keyId(), plan.keyAmount(),
                 plan.openingCount(), plan.source().name(), String.join(",", plan.rewardIds()),
-                locationText(plan.location()), delivered.overflowCount(), transactionDetail(opening),
-                Instant.now());
+                locationText(plan.location()), overflowCount, transactionDetail(opening), Instant.now());
         DatabaseService.MilestoneProgressCommit frozenMilestones = milestoneState;
         plugin.database().completeOpening(record, rewardState, frozenMilestones).whenComplete((ignored, error) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (error != null) {
-                    plugin.getLogger().log(Level.SEVERE,
-                            "Atomic opening finalization failed for " + transactionId, error);
+                    plugin.database().markManualReview(transactionId, "FINALIZATION_FAILED",
+                            transactionDetail(opening) + ";finalization=FAILED");
+                    plugin.getLogger().log(Level.SEVERE, "Atomic opening finalization failed for " + transactionId, error);
+                    plugin.messages().send(player, "opening-failed", Text.value("transaction", transactionId));
+                    terminalCleanup.run();
                     return;
                 }
                 completeMilestones(player, opening, milestoneClaims);
+                Bukkit.getPluginManager().callEvent(new CrateOpenEvent(player, plan, overflowCount));
+                if (overflowCount > 0) notifyOverflow(player);
+                showResult(player, current, opening.selected(), plan);
+                terminalCleanup.run();
             });
         });
-        Bukkit.getPluginManager().callEvent(new CrateOpenEvent(player, plan, delivered.overflowCount()));
-        if (delivered.overflowCount() > 0) notifyOverflow(player);
-        showResult(player, current, opening.selected(), plan);
     }
 
     private List<DatabaseService.MilestoneItemClaim> freezeMilestoneClaims(PendingOpening opening) {
@@ -1256,7 +1435,10 @@ public final class OpeningService {
             plugin.messages().send(player, "opening-state-changed");
             return;
         }
-        plugin.database().consumePortableIssue(context.issueId(), context.reservationToken()).whenComplete((consumed, error) -> {
+        plugin.database().markPaymentAttempted(transactionId, "PORTABLE", context.issueId().toString(),
+                transactionDetail(opening) + ";portable=ATTEMPTED")
+                .thenCompose(ignored -> plugin.database().consumePortableIssue(context.issueId(), context.reservationToken()))
+                .whenComplete((consumed, error) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (error != null || consumed == null || consumed.isEmpty()) {
@@ -1295,12 +1477,13 @@ public final class OpeningService {
                                    boolean recordOpeningLog) {
         int overflow = 0;
         int itemIndex = 0;
+        var claimWrites = new ArrayList<CompletableFuture<DatabaseService.ClaimEntry>>();
         OverflowPolicy overflowPolicy = plugin.settings().overflowPolicy();
         for (CrateReward reward : selected) {
             for (ItemStack item : reward.itemCopies()) {
                 if (overflowPolicy == OverflowPolicy.CLAIM_ALL) {
                     overflow += item.getAmount();
-                    queueClaim(player, crate, reward, plan, item, itemIndex++);
+                    claimWrites.add(queueClaim(player, crate, reward, plan, item, itemIndex++));
                     continue;
                 }
                 var leftovers = player.getInventory().addItem(item).values();
@@ -1308,22 +1491,22 @@ public final class OpeningService {
                     overflow += leftover.getAmount();
                     switch (overflowPolicy) {
                         case DROP -> player.getWorld().dropItemNaturally(player.getLocation(), leftover);
-                        case CLAIM, CLAIM_ALL, REJECT -> queueClaim(player, crate, reward, plan, leftover, itemIndex++);
+                        case CLAIM, CLAIM_ALL, REJECT ->
+                                claimWrites.add(queueClaim(player, crate, reward, plan, leftover, itemIndex++));
                     }
                 }
             }
             if (reward.experiencePoints() > 0) player.giveExp(reward.experiencePoints(), true);
             if (reward.experienceLevels() > 0) player.giveExpLevels(reward.experienceLevels());
             if (reward.money() > 0 && !economy.deposit(player, reward.money())) {
-                plugin.getLogger().severe("Vault rejected money reward " + reward.id() + " in transaction " + plan.transactionId());
-                plugin.database().updateJournal(plan.transactionId(), "DELIVERY_WARNING", "Vault rejected money reward " + reward.id());
+                throw new IllegalStateException("Vault rejected money reward " + reward.id());
             }
             for (String command : reward.commands()) dispatchRewardCommand(player, crate, reward, command, plan.location());
             if (!reward.personalMessage().isBlank()) player.sendMessage(plugin.messages().parseRaw(reward.personalMessage(), tags(player, crate, reward)));
             present(player, crate, reward);
             if (recordOpeningLog) log.record(player, crate, reward);
         }
-        return new DeliveryResult(overflow);
+        return new DeliveryResult(overflow, claimWrites);
     }
 
     private void notifyOverflow(Player player) {
@@ -1336,22 +1519,19 @@ public final class OpeningService {
         }
     }
 
-    private void queueClaim(Player player, Crate crate, CrateReward reward, OpeningPlan plan,
-                            ItemStack item, int itemIndex) {
+    private CompletableFuture<DatabaseService.ClaimEntry> queueClaim(
+            Player player, Crate crate, CrateReward reward, OpeningPlan plan, ItemStack item, int itemIndex) {
         String token = "opening:" + plan.transactionId() + ":" + reward.id() + ":" + itemIndex;
         try {
-            plugin.claims().enqueueItem(player.getUniqueId(), "OPENING", plan.transactionId().toString(),
+            return plugin.claims().enqueueItem(player.getUniqueId(), "OPENING", plan.transactionId().toString(),
                     crate.id(), reward.id(), token, item).whenComplete((claim, error) -> {
-                if (error == null) return;
-                plugin.getLogger().log(Level.SEVERE,
-                        "Could not persist exact overflow claim " + token + "; dropping the unchanged stack", error);
-                if (plugin.isEnabled()) Bukkit.getScheduler().runTask(plugin,
-                        () -> player.getWorld().dropItemNaturally(player.getLocation(), item.clone()));
+                if (error != null) plugin.getLogger().log(Level.SEVERE,
+                        "Could not persist exact overflow claim " + token + "; opening remains manual-review eligible", error);
             });
         } catch (RuntimeException error) {
             plugin.getLogger().log(Level.SEVERE,
-                    "Could not queue exact overflow claim " + token + "; dropping the unchanged stack", error);
-            player.getWorld().dropItemNaturally(player.getLocation(), item.clone());
+                    "Could not queue exact overflow claim " + token + "; no world-drop recovery was attempted", error);
+            return CompletableFuture.failedFuture(error);
         }
     }
 
@@ -1534,6 +1714,35 @@ public final class OpeningService {
         return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
+    private static String conciseNullable(Throwable error) {
+        return error == null ? "none" : concise(error);
+    }
+
+    static String plexonKeysPaymentTransactionId(UUID openingId) {
+        return "plexoncrates:opening:" + java.util.Objects.requireNonNull(openingId, "openingId");
+    }
+
+    private void recordPlexonKeysLatency(long nanos) {
+        long bounded = Math.max(0L, nanos);
+        plexonKeysConsumeCount++;
+        plexonKeysConsumeLastNanos = bounded;
+        plexonKeysConsumeTotalNanos += bounded;
+        plexonKeysConsumeMaxNanos = Math.max(plexonKeysConsumeMaxNanos, bounded);
+        if (bounded >= 25_000_000L) {
+            plugin.getLogger().warning("PlexonKeys durable consume blocked the primary thread for "
+                    + String.format(Locale.ROOT, "%.2f", bounded / 1_000_000.0) + "ms");
+        }
+    }
+
+    public String plexonKeysLatencyDiagnostic() {
+        if (plexonKeysConsumeCount == 0) return "count=0";
+        return "count=" + plexonKeysConsumeCount
+                + ",lastMs=" + String.format(Locale.ROOT, "%.2f", plexonKeysConsumeLastNanos / 1_000_000.0)
+                + ",avgMs=" + String.format(Locale.ROOT, "%.2f",
+                (plexonKeysConsumeTotalNanos / (double) plexonKeysConsumeCount) / 1_000_000.0)
+                + ",maxMs=" + String.format(Locale.ROOT, "%.2f", plexonKeysConsumeMaxNanos / 1_000_000.0);
+    }
+
     private static String transactionDetail(PendingOpening opening) {
         return opening.payment().detail() + ";" + opening.rewardPlan().outcomeDetail()
                 + ";rerolls[" + String.join(";", opening.decisionAudit()) + "]";
@@ -1608,7 +1817,7 @@ public final class OpeningService {
 
     private record PaymentOption(KeyService.KeyTransaction transaction,
                                  KeyPaymentPlanner.Availability availability,
-                                 long virtualRevision) {
+                                 long virtualRevision, boolean plexonKeysVirtual) {
         private PaymentOption {
             availability = java.util.Objects.requireNonNull(availability, "availability");
             if (virtualRevision < 0) throw new IllegalArgumentException("Virtual-key revision cannot be negative");
@@ -1617,7 +1826,7 @@ public final class OpeningService {
 
     private record PaymentChoice(KeyService.KeyTransaction physicalTransaction, String keyId,
                                  int physicalAmount, int virtualAmount, long virtualRevision,
-                                 KeyPaymentPolicy policy) {
+                                 KeyPaymentPolicy policy, boolean plexonKeysVirtual) {
         private PaymentChoice {
             keyId = java.util.Objects.requireNonNull(keyId, "keyId");
             policy = java.util.Objects.requireNonNull(policy, "policy");
@@ -1633,9 +1842,19 @@ public final class OpeningService {
             return Math.addExact(physicalAmount, virtualAmount);
         }
 
+        private String sourceLabel() {
+            if (plexonKeysVirtual && physicalAmount > 0) return "PLEXONKEYS_MIXED";
+            if (plexonKeysVirtual) return "PLEXONKEYS";
+            if (virtualAmount > 0 && physicalAmount > 0) return "LOCAL_VIRTUAL_MIXED";
+            if (virtualAmount > 0) return "LOCAL_VIRTUAL";
+            if (physicalAmount > 0) return "PHYSICAL";
+            return "NONE";
+        }
+
         private String detail() {
             return "payment-policy=" + policy + ";key=" + keyId + ";physical=" + physicalAmount
-                    + ";virtual=" + virtualAmount + ";virtual-revision=" + virtualRevision;
+                    + ";virtual=" + virtualAmount + ";virtual-revision=" + virtualRevision
+                    + ";wallet=" + (plexonKeysVirtual ? "PLEXONKEYS" : "LOCAL");
         }
     }
 
@@ -1648,5 +1867,8 @@ public final class OpeningService {
 
         @Override public ItemStack expectedItem() { return expectedItem.clone(); }
     }
-    private record DeliveryResult(int overflowCount) {}
+    private record DeliveryResult(int overflowCount,
+                                  List<CompletableFuture<DatabaseService.ClaimEntry>> claimWrites) {
+        private DeliveryResult { claimWrites = List.copyOf(claimWrites); }
+    }
 }

@@ -41,7 +41,7 @@ import org.bukkit.inventory.ItemStack;
  * Bukkit objects never cross into this class; runtime calls use immutable DTOs.
  */
 public final class DatabaseService implements AutoCloseable {
-    public static final int SCHEMA_VERSION = 3;
+    public static final int SCHEMA_VERSION = 4;
 
     public record StoredLocation(
             UUID worldUuid, String worldName, int x, int y, int z, String crateId, Instant updatedAt) {}
@@ -65,7 +65,37 @@ public final class DatabaseService implements AutoCloseable {
             int openingCount,
             String source,
             String rewardIds,
-            Instant createdAt) {}
+            long crateRevision,
+            String paymentSource,
+            String paymentTransactionId,
+            Instant createdAt) {
+        public JournalRecord(UUID transactionId, UUID playerId, String playerName, String crateId,
+                             String keyId, int keyAmount, int openingCount, String source,
+                             String rewardIds, Instant createdAt) {
+            this(transactionId, playerId, playerName, crateId, keyId, keyAmount, openingCount, source,
+                    rewardIds, 0L, "LEGACY_UNKNOWN", "", createdAt);
+        }
+
+        public JournalRecord {
+            transactionId = java.util.Objects.requireNonNull(transactionId, "transactionId");
+            playerId = java.util.Objects.requireNonNull(playerId, "playerId");
+            createdAt = java.util.Objects.requireNonNull(createdAt, "createdAt");
+            if (crateRevision < 0) throw new IllegalArgumentException("crateRevision cannot be negative");
+            paymentSource = paymentSource == null || paymentSource.isBlank() ? "NONE" : paymentSource.trim().toUpperCase(java.util.Locale.ROOT);
+            paymentTransactionId = paymentTransactionId == null ? "" : paymentTransactionId.trim();
+        }
+    }
+
+    /** Safe, payload-free support view of an unresolved opening journal row. */
+    public record JournalDiagnostic(
+            UUID transactionId, String stage, String crateId, long crateRevision, String paymentSource,
+            String paymentState, String grantState, String recoveryClassification,
+            Instant createdAt, Instant updatedAt) {}
+
+    public record JournalHealth(
+            int unresolved, int manualReview, int paymentNotConsumed, int paymentCommitted,
+            int rewardPending, int completed, long oldestUnresolvedAgeSeconds,
+            int startupRecovered, int startupCompacted) {}
 
     public record OpeningRecord(
             UUID transactionId,
@@ -616,14 +646,18 @@ public final class DatabaseService implements AutoCloseable {
     }
 
     private final Logger logger;
+    private final Path databaseFile;
     private final String jdbcUrl;
     private final ThreadPoolExecutor writer;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private int startupRecoveredJournals;
+    private int startupCompactedJournals;
 
     public DatabaseService(Logger logger, Path file, int maximumQueuedWrites) throws Exception {
         this.logger = logger;
         Files.createDirectories(file.getParent());
-        this.jdbcUrl = "jdbc:sqlite:" + file.toAbsolutePath();
+        this.databaseFile = file.toAbsolutePath().normalize();
+        this.jdbcUrl = "jdbc:sqlite:" + databaseFile;
         Class.forName("org.sqlite.JDBC");
         this.writer = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(Math.max(64, maximumQueuedWrites)), runnable -> {
@@ -642,6 +676,13 @@ public final class DatabaseService implements AutoCloseable {
                         value TEXT NOT NULL
                     )
                     """);
+            int existingSchema = readSchemaVersion(connection);
+            if (existingSchema > SCHEMA_VERSION) {
+                throw new SQLException("Database schema " + existingSchema + " is newer than supported " + SCHEMA_VERSION);
+            }
+            if (existingSchema > 0 && existingSchema < SCHEMA_VERSION) {
+                createPreMigrationBackup(connection, existingSchema);
+            }
             statement.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS locations (
                         world_uuid TEXT,
@@ -690,9 +731,32 @@ public final class DatabaseService implements AutoCloseable {
                         stage TEXT NOT NULL,
                         detail TEXT NOT NULL DEFAULT '',
                         created_at INTEGER NOT NULL,
-                        updated_at INTEGER NOT NULL
+                        updated_at INTEGER NOT NULL,
+                        journal_version INTEGER NOT NULL DEFAULT 2,
+                        crate_revision INTEGER NOT NULL DEFAULT 0,
+                        payment_source TEXT NOT NULL DEFAULT 'NONE',
+                        payment_transaction_id TEXT NOT NULL DEFAULT '',
+                        payment_state TEXT NOT NULL DEFAULT 'NOT_CONSUMED',
+                        grant_state TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                        recovery_classification TEXT NOT NULL DEFAULT 'PAYMENT_NOT_CONSUMED'
                     )
                     """);
+            ensureColumn(connection, "opening_journal", "journal_version",
+                    "ALTER TABLE opening_journal ADD COLUMN journal_version INTEGER NOT NULL DEFAULT 1");
+            ensureColumn(connection, "opening_journal", "crate_revision",
+                    "ALTER TABLE opening_journal ADD COLUMN crate_revision INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(connection, "opening_journal", "payment_source",
+                    "ALTER TABLE opening_journal ADD COLUMN payment_source TEXT NOT NULL DEFAULT 'LEGACY_UNKNOWN'");
+            ensureColumn(connection, "opening_journal", "payment_transaction_id",
+                    "ALTER TABLE opening_journal ADD COLUMN payment_transaction_id TEXT NOT NULL DEFAULT ''");
+            ensureColumn(connection, "opening_journal", "payment_state",
+                    "ALTER TABLE opening_journal ADD COLUMN payment_state TEXT NOT NULL DEFAULT 'LEGACY_UNKNOWN'");
+            ensureColumn(connection, "opening_journal", "grant_state",
+                    "ALTER TABLE opening_journal ADD COLUMN grant_state TEXT NOT NULL DEFAULT 'LEGACY_UNKNOWN'");
+            ensureColumn(connection, "opening_journal", "recovery_classification",
+                    "ALTER TABLE opening_journal ADD COLUMN recovery_classification TEXT NOT NULL DEFAULT 'MANUAL_REVIEW'");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS opening_journal_recovery "
+                    + "ON opening_journal(recovery_classification, stage, updated_at)");
             statement.executeUpdate("""
                     CREATE TABLE IF NOT EXISTS opening_history (
                         transaction_id TEXT PRIMARY KEY,
@@ -770,6 +834,8 @@ public final class DatabaseService implements AutoCloseable {
                         imported_at INTEGER NOT NULL
                     )
                     """);
+            startupRecoveredJournals = recoverSafePreparedJournals(connection);
+            startupCompactedJournals = compactTerminalJournals(connection, 1000, Duration.ofDays(30));
             try (PreparedStatement upsert = connection.prepareStatement(
                     "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")) {
                 upsert.setString(1, Integer.toString(SCHEMA_VERSION));
@@ -1092,6 +1158,57 @@ public final class DatabaseService implements AutoCloseable {
                 + "ON locations(world_uuid, x, z, y)");
     }
 
+    private int readSchemaVersion(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT value FROM schema_meta WHERE key='schema_version'");
+             ResultSet rows = statement.executeQuery()) {
+            if (!rows.next()) return 0;
+            try { return Integer.parseInt(rows.getString(1)); }
+            catch (NumberFormatException error) { throw new SQLException("Invalid schema_version metadata", error); }
+        }
+    }
+
+    private void createPreMigrationBackup(Connection connection, int sourceSchema) throws SQLException {
+        Path backup = databaseFile.resolveSibling(databaseFile.getFileName() + ".pre-v4.bak");
+        if (Files.exists(backup)) return;
+        String escaped = backup.toString().replace("'", "''");
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("VACUUM INTO '" + escaped + "'");
+        }
+        logger.info("Created immutable pre-schema-4 database backup from schema " + sourceSchema + ": " + backup.getFileName());
+    }
+
+    private static int recoverSafePreparedJournals(Connection connection) throws SQLException {
+        long now = System.currentTimeMillis();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                UPDATE opening_journal
+                SET stage='CANCELLED', recovery_classification='PAYMENT_NOT_CONSUMED',
+                    detail=detail || CASE WHEN detail='' THEN '' ELSE ';' END || 'startup=SAFE_PREPAYMENT_CANCEL',
+                    updated_at=?
+                WHERE journal_version >= 2 AND stage='PREPARED'
+                  AND payment_state IN ('NOT_CONSUMED','NOT_REQUIRED')
+                  AND grant_state='NOT_STARTED'
+                """)) {
+            statement.setLong(1, now);
+            return statement.executeUpdate();
+        }
+    }
+
+    private static int compactTerminalJournals(Connection connection, int limit, Duration retention) throws SQLException {
+        long cutoff = System.currentTimeMillis() - retention.toMillis();
+        try (PreparedStatement statement = connection.prepareStatement("""
+                DELETE FROM opening_journal WHERE transaction_id IN (
+                    SELECT transaction_id FROM opening_journal
+                    WHERE stage IN ('COMPLETED','CANCELLED') AND updated_at < ?
+                    ORDER BY updated_at LIMIT ?
+                )
+                """)) {
+            statement.setLong(1, cutoff);
+            statement.setInt(2, Math.max(1, Math.min(limit, 1000)));
+            return statement.executeUpdate();
+        }
+    }
+
     private static void ensureColumn(Connection connection, String table, String column, String alteration)
             throws SQLException {
         if (!table.matches("[a-z0-9_]+") || !column.matches("[a-z0-9_]+")) {
@@ -1223,6 +1340,58 @@ public final class DatabaseService implements AutoCloseable {
             return rows.next() ? rows.getInt(1) : 0;
         }
     }
+
+    public JournalHealth journalHealth() throws SQLException {
+        int unresolved = 0, manual = 0, notConsumed = 0, committed = 0, rewardPending = 0, completed = 0;
+        long oldest = 0L;
+        long now = System.currentTimeMillis();
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT stage, recovery_classification, MIN(created_at), COUNT(*)
+                FROM opening_journal GROUP BY stage, recovery_classification
+                """); ResultSet rows = statement.executeQuery()) {
+            long oldestCreated = Long.MAX_VALUE;
+            while (rows.next()) {
+                String stage = rows.getString(1);
+                String classification = rows.getString(2);
+                long created = rows.getLong(3);
+                int count = rows.getInt(4);
+                if ("COMPLETED".equals(stage)) completed += count;
+                else if (!"CANCELLED".equals(stage)) {
+                    unresolved += count;
+                    oldestCreated = Math.min(oldestCreated, created);
+                }
+                if ("MANUAL_REVIEW".equals(classification)) manual += count;
+                if ("PAYMENT_NOT_CONSUMED".equals(classification) || "SAFE_TO_RETRY".equals(classification)) notConsumed += count;
+                if ("PAYMENT_COMMITTED".equals(classification)) committed += count;
+                if ("REWARD_PENDING".equals(classification)) rewardPending += count;
+            }
+            if (oldestCreated != Long.MAX_VALUE) oldest = Math.max(0L, (now - oldestCreated) / 1000L);
+        }
+        return new JournalHealth(unresolved, manual, notConsumed, committed, rewardPending, completed, oldest,
+                startupRecoveredJournals, startupCompactedJournals);
+    }
+
+    public List<JournalDiagnostic> journalDiagnostics(int limit) throws SQLException {
+        var result = new ArrayList<JournalDiagnostic>();
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT transaction_id, stage, crate_id, crate_revision, payment_source, payment_state,
+                       grant_state, recovery_classification, created_at, updated_at
+                FROM opening_journal WHERE stage NOT IN ('COMPLETED','CANCELLED')
+                ORDER BY created_at, transaction_id LIMIT ?
+                """)) {
+            statement.setInt(1, Math.max(1, Math.min(limit, 50)));
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) result.add(new JournalDiagnostic(UUID.fromString(rows.getString(1)),
+                        rows.getString(2), rows.getString(3), rows.getLong(4), rows.getString(5), rows.getString(6),
+                        rows.getString(7), rows.getString(8), Instant.ofEpochMilli(rows.getLong(9)),
+                        Instant.ofEpochMilli(rows.getLong(10))));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    public int startupRecoveredJournals() { return startupRecoveredJournals; }
+    public int startupCompactedJournals() { return startupCompactedJournals; }
 
     public int schemaVersion() throws SQLException {
         try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(
@@ -2063,10 +2232,14 @@ public final class DatabaseService implements AutoCloseable {
 
     public CompletableFuture<Void> prepareJournal(JournalRecord journal, String detail) {
         return submit("prepare opening journal", connection -> {
+            String paymentState = journal.keyAmount() > 0 ? "NOT_CONSUMED" : "NOT_REQUIRED";
+            String recovery = journal.keyAmount() > 0 ? "PAYMENT_NOT_CONSUMED" : "SAFE_TO_RETRY";
             try (PreparedStatement statement = connection.prepareStatement("""
                     INSERT INTO opening_journal(transaction_id, player_uuid, player_name, crate_id, key_id,
-                        key_amount, opening_count, source, reward_ids, stage, detail, created_at, updated_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'PREPARED', ?, ?, ?)
+                        key_amount, opening_count, source, reward_ids, stage, detail, created_at, updated_at,
+                        journal_version, crate_revision, payment_source, payment_transaction_id, payment_state,
+                        grant_state, recovery_classification)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'PREPARED', ?, ?, ?, 2, ?, ?, ?, ?, 'NOT_STARTED', ?)
                     ON CONFLICT(transaction_id) DO NOTHING
                     """)) {
                 statement.setString(1, journal.transactionId().toString());
@@ -2081,6 +2254,92 @@ public final class DatabaseService implements AutoCloseable {
                 statement.setString(10, detail == null ? "" : detail);
                 statement.setLong(11, journal.createdAt().toEpochMilli());
                 statement.setLong(12, journal.createdAt().toEpochMilli());
+                statement.setLong(13, journal.crateRevision());
+                statement.setString(14, journal.paymentSource());
+                statement.setString(15, journal.paymentTransactionId());
+                statement.setString(16, paymentState);
+                statement.setString(17, recovery);
+                statement.executeUpdate();
+            }
+        });
+    }
+
+    public CompletableFuture<Void> markPaymentAttempted(UUID transactionId, String paymentSource,
+                                                         String paymentTransactionId, String detail) {
+        return submit("mark opening payment attempted", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE opening_journal SET stage='PAYMENT_ATTEMPTED', payment_source=?,
+                        payment_transaction_id=?, payment_state='ATTEMPTED', grant_state='NOT_STARTED',
+                        recovery_classification='MANUAL_REVIEW', detail=?, updated_at=?
+                    WHERE transaction_id=? AND journal_version >= 2 AND stage='PREPARED'
+                    """)) {
+                statement.setString(1, requiredText(paymentSource, "paymentSource"));
+                statement.setString(2, paymentTransactionId == null ? "" : paymentTransactionId);
+                statement.setString(3, detail == null ? "" : detail);
+                statement.setLong(4, System.currentTimeMillis());
+                statement.setString(5, transactionId.toString());
+                if (statement.executeUpdate() != 1) throw new SQLException("Opening was not in PREPARED payment state");
+            }
+        });
+    }
+
+    public CompletableFuture<Void> markPaymentCommitted(UUID transactionId, String detail) {
+        return submit("mark opening payment committed", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE opening_journal SET stage='CONSUMED',
+                        payment_state=CASE WHEN key_amount=0 THEN 'NOT_REQUIRED' ELSE 'COMMITTED' END,
+                        recovery_classification='PAYMENT_COMMITTED', detail=?, updated_at=?
+                    WHERE transaction_id=? AND journal_version >= 2
+                      AND payment_state IN ('ATTEMPTED','NOT_REQUIRED','NOT_CONSUMED')
+                    """)) {
+                statement.setString(1, detail == null ? "" : detail);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.setString(3, transactionId.toString());
+                if (statement.executeUpdate() != 1) throw new SQLException("Opening payment transition was not valid");
+            }
+        });
+    }
+
+    public CompletableFuture<Void> markPaymentRejected(UUID transactionId, String detail) {
+        return submit("mark opening payment rejected", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE opening_journal SET stage='CANCELLED', payment_state='NOT_CONSUMED',
+                        recovery_classification='PAYMENT_NOT_CONSUMED', detail=?, updated_at=?
+                    WHERE transaction_id=? AND journal_version >= 2 AND grant_state='NOT_STARTED'
+                    """)) {
+                statement.setString(1, detail == null ? "" : detail);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.setString(3, transactionId.toString());
+                if (statement.executeUpdate() != 1) throw new SQLException("Opening payment rejection transition was not valid");
+            }
+        });
+    }
+
+    public CompletableFuture<Void> markGrantAttempted(UUID transactionId, String detail) {
+        return submit("mark opening reward grant attempted", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE opening_journal SET stage='GRANT_ATTEMPTED', grant_state='ATTEMPTED',
+                        recovery_classification='MANUAL_REVIEW', detail=?, updated_at=?
+                    WHERE transaction_id=? AND journal_version >= 2 AND stage='CONSUMED'
+                    """)) {
+                statement.setString(1, detail == null ? "" : detail);
+                statement.setLong(2, System.currentTimeMillis());
+                statement.setString(3, transactionId.toString());
+                if (statement.executeUpdate() != 1) throw new SQLException("Opening was not ready for reward grant");
+            }
+        });
+    }
+
+    public CompletableFuture<Void> markManualReview(UUID transactionId, String stage, String detail) {
+        return submit("mark opening manual review", connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE opening_journal SET stage=?, recovery_classification='MANUAL_REVIEW',
+                        detail=?, updated_at=? WHERE transaction_id=? AND stage NOT IN ('COMPLETED','CANCELLED')
+                    """)) {
+                statement.setString(1, requiredText(stage, "stage"));
+                statement.setString(2, detail == null ? "" : detail);
+                statement.setLong(3, System.currentTimeMillis());
+                statement.setString(4, transactionId.toString());
                 statement.executeUpdate();
             }
         });
@@ -2124,7 +2383,7 @@ public final class DatabaseService implements AutoCloseable {
                     // The finalization was already committed for this transaction.
                     // Treat a repeated completion call as an idempotent no-op and
                     // never apply statistics, limits, or pity a second time.
-                    updateJournal(connection, record.transactionId(), "COMPLETED", record.outcomeDetail());
+                    completeJournal(connection, record.transactionId(), record.outcomeDetail());
                     return;
                 }
             }
@@ -2221,7 +2480,7 @@ public final class DatabaseService implements AutoCloseable {
                     insertMilestoneClaim(connection, record, claim);
                 }
             }
-            updateJournal(connection, record.transactionId(), "COMPLETED", record.outcomeDetail());
+            completeJournal(connection, record.transactionId(), record.outcomeDetail());
         });
     }
 
@@ -3272,6 +3531,18 @@ public final class DatabaseService implements AutoCloseable {
             statement.setString(2, detail == null ? "" : detail);
             statement.setLong(3, System.currentTimeMillis());
             statement.setString(4, transactionId.toString());
+            statement.executeUpdate();
+        }
+    }
+
+    private static void completeJournal(Connection connection, UUID transactionId, String detail) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                UPDATE opening_journal SET stage='COMPLETED', grant_state='COMPLETED',
+                    recovery_classification='COMPLETED', detail=?, updated_at=? WHERE transaction_id=?
+                """)) {
+            statement.setString(1, detail == null ? "" : detail);
+            statement.setLong(2, System.currentTimeMillis());
+            statement.setString(3, transactionId.toString());
             statement.executeUpdate();
         }
     }

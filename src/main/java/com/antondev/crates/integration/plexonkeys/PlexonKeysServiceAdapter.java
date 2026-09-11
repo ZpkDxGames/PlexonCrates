@@ -2,7 +2,10 @@ package com.antondev.crates.integration.plexonkeys;
 
 import com.antondev.crates.config.ItemCodec;
 import com.antondev.crates.domain.key.ExternalKeyDescriptor;
+import com.antondev.keys.api.KeyConsumeResult;
 import com.antondev.keys.api.PlexonKeysAPI;
+import java.util.UUID;
+import org.bukkit.Bukkit;
 import com.antondev.keys.model.KeyTier;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -33,5 +36,36 @@ public final class PlexonKeysServiceAdapter {
             result.put(tier.id(), new ExternalKeyDescriptor(tier.id(), "plexonkeys", ItemCodec.one(template.get())));
         }
         return Map.copyOf(result);
+    }
+
+    /** Reads the authoritative PlexonKeys wallet on the provider's required primary thread. */
+    public static long balance(JavaPlugin owner, UUID playerId, String keyId) {
+        requirePrimaryThread();
+        PlexonKeysAPI api = api(owner);
+        return api.balance(playerId, KeyTier.parse(keyId));
+    }
+
+    /**
+     * Invokes PlexonKeys' crash-durable consume boundary. RC2 requires the primary thread, so callers
+     * must treat this as a measured low-frequency durability boundary rather than moving it illegally
+     * to an async worker.
+     */
+    public static KeyConsumeResult consume(JavaPlugin owner, UUID playerId, String keyId,
+                                           long amount, String transactionId) {
+        requirePrimaryThread();
+        return api(owner).consumeKey(playerId, keyId, amount, transactionId);
+    }
+
+    private static PlexonKeysAPI api(JavaPlugin owner) {
+        RegisteredServiceProvider<PlexonKeysAPI> registration =
+                owner.getServer().getServicesManager().getRegistration(PlexonKeysAPI.class);
+        if (registration == null) throw new IllegalStateException("PlexonKeysAPI service is not registered");
+        return registration.getProvider();
+    }
+
+    private static void requirePrimaryThread() {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("PlexonKeysAPI requires the primary server thread");
+        }
     }
 }

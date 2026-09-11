@@ -5,7 +5,7 @@
 
   <groupId>com.antondev</groupId>
   <artifactId>PlexonCrates</artifactId>
-  <version>5.0.0-rc.1</version>
+  <version>5.0.0-rc.2</version>
   <name>PlexonCrates</name>
   <description>Exact-item, percentage-first crates for Paper with native Plexon integrations.</description>
   <url>https://github.com/ZpkDxGames/PlexonCrates</url>
@@ -30,10 +30,10 @@
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <project.build.outputTimestamp>2026-09-10T00:00:00Z</project.build.outputTimestamp>
+    <project.build.outputTimestamp>2026-09-11T00:00:00Z</project.build.outputTimestamp>
     <paper.version>26.2.build.121-stable</paper.version>
     <plexoncore.version>2.0.4</plexoncore.version>
-    <plexonkeys.version>1.3.0</plexonkeys.version>
+    <plexonkeys.version>2.0.0-rc.2</plexonkeys.version>
   </properties>
 
   <repositories>

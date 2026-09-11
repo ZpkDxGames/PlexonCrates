@@ -118,4 +118,16 @@ class Phase3OpeningReliabilityTest {
         int delivery = source.indexOf("finishDelivery(transactionId, opening, player, current, bypassLimits,");
         assertTrue(barrier >= 0 && delivery > barrier);
     }
+
+    @Test
+    void creditedVirtualKeyClaimMovesToReviewWhenFinalizationIsUncertain() throws Exception {
+        String source = Files.readString(Path.of("src/main/java/com/antondev/crates/service/ClaimService.java"));
+        int completion = source.indexOf("completeClaim(claim.claimId(), attempt)");
+        int uncertainty = source.indexOf("Virtual-key credit completed but claim finalization was uncertain");
+        int review = source.lastIndexOf("markClaimReview(claim.claimId(), attempt", uncertainty);
+        assertTrue(completion >= 0);
+        assertTrue(uncertainty > completion);
+        assertTrue(review > completion && review < uncertainty,
+                "A credited virtual-key claim must be moved to REVIEW before warning the player");
+    }
 }

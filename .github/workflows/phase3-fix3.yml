@@ -1,0 +1,42 @@
+name: Phase 3 Fix 3
+
+on:
+  push:
+    branches:
+      - 'phase3/runtime-reliability'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ contains(github.event.head_commit.message, '[run-fix3]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: phase3/runtime-reliability
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Apply bounded async test synchronization
+        run: python3 tools/phase3_fix3.py
+      - name: Verify patch shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -F 'for (int pass = 0; pass < 12; pass++)' src/test/java/com/antondev/crates/PluginIntegrationTest.java
+          grep -F 'for (int pass = 0; pass < 12; pass++)' src/test/java/com/antondev/crates/OpeningPipelineIntegrationTest.java
+          grep -F 'for (int pass = 0; pass < 12; pass++)' src/test/java/com/antondev/crates/PlexonKeysIntegrationTest.java
+          grep -F 'for (int pass = 0; pass < 14; pass++)' src/test/java/com/antondev/crates/PluginIntegrationTest.java
+      - name: Commit synchronization repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/test/java
+          git commit -m 'test: await schema-4 durability continuations [fix3-applied]'
+          git push origin HEAD:phase3/runtime-reliability

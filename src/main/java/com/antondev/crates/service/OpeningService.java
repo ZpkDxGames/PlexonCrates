@@ -387,7 +387,7 @@ public final class OpeningService {
             KeyService.KeyTransaction transaction = plugin.keys().begin(keyId).orElse(null);
             int physical = transaction == null ? 0 : plugin.keys().count(player, transaction);
             options.add(new PaymentOption(transaction,
-                    new KeyPaymentPlanner.Availability(keyId, physical, 0, priority++), 0));
+                    new KeyPaymentPlanner.Availability(keyId, physical, 0, priority++), 0, false));
         }
         return paymentPlan(crate, required, preference, options);
     }
@@ -478,8 +478,20 @@ public final class OpeningService {
                 capacities.add(CompletableFuture.completedFuture(paymentCapacity(crate, physical, 0)));
                 continue;
             }
-            capacities.add(plugin.database().loadVirtualKeyBalance(player.getUniqueId(), keyId)
-                    .thenApply(balance -> paymentCapacity(crate, physical, balance.balance())));
+            if (plugin.keys().usesPlexonKeysWallet(keyId)) {
+                long providerBalance;
+                try {
+                    providerBalance = plugin.keys().plexonKeysBalance(player.getUniqueId(), keyId);
+                } catch (RuntimeException error) {
+                    plugin.getLogger().log(Level.WARNING,
+                            "Could not read PlexonKeys capacity for " + keyId, error);
+                    providerBalance = 0L;
+                }
+                capacities.add(CompletableFuture.completedFuture(paymentCapacity(crate, physical, providerBalance)));
+            } else {
+                capacities.add(plugin.database().loadVirtualKeyBalance(player.getUniqueId(), keyId)
+                        .thenApply(balance -> paymentCapacity(crate, physical, balance.balance())));
+            }
         }
         if (capacities.isEmpty()) return CompletableFuture.completedFuture(0);
         CompletableFuture<?>[] all = capacities.toArray(CompletableFuture[]::new);
@@ -1718,7 +1730,7 @@ public final class OpeningService {
         return error == null ? "none" : concise(error);
     }
 
-    static String plexonKeysPaymentTransactionId(UUID openingId) {
+    public static String plexonKeysPaymentTransactionId(UUID openingId) {
         return "plexoncrates:opening:" + java.util.Objects.requireNonNull(openingId, "openingId");
     }
 

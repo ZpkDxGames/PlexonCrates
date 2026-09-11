@@ -50,7 +50,7 @@ class Phase2SimulationContractTest {
     @Test
     void distributionVerificationTargetsTheRcArtifactAndNonShadedContracts() throws Exception {
         String workflow = Files.readString(Path.of(".github/workflows/build.yml"));
-        assertTrue(workflow.contains("PLUGIN_VERSION: '5.0.0-rc.2'"));
+        assertTrue(workflow.contains("PLUGIN_VERSION: '5.0.0-rc.3'"));
         assertTrue(workflow.contains("PlexonCrates-${PLUGIN_VERSION}.jar"));
         assertTrue(workflow.contains("major version: 69"));
         assertTrue(workflow.contains("com/zpkdxgames/plexoncore/"));

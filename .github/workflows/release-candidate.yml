@@ -17,6 +17,7 @@ env:
   PLUGIN_VERSION: '5.0.0-rc.2'
   RELEASE_TAG: 'v5.0.0-rc.2'
   PHASE3_BRANCH: 'phase3/runtime-reliability'
+  PHASE2_BRANCH: 'phase2/5.0.0-premium-overhaul'
   PHASE2_SHA: 'ec9623857dd09437c29a251c4f1fb01f5b4fd98e'
   PLEXONKEYS_VERSION: '2.0.0-rc.2'
   PLEXONKEYS_SHA256: '0cc87449754b7e5dec34e57091f856f2bfa98a3c256eb41617b510911cbe0ee4'
@@ -55,7 +56,7 @@ jobs:
             echo "${RELEASE_TAG} already exists; refusing to move or replace an RC tag." >&2
             exit 1
           fi
-          gh pr list --head "$PHASE3_BRANCH" --base main --state open --json number,isDraft,headRefOid > target-pr.json
+          gh pr list --head "$PHASE3_BRANCH" --base "$PHASE2_BRANCH" --state open --json number,isDraft,headRefOid > target-pr.json
           python3 - <<'PY'
           import json, os
           prs=json.load(open('target-pr.json', encoding='utf-8'))
@@ -150,6 +151,7 @@ jobs:
           cat > target/PROVENANCE.txt <<EOF
           repository=ZpkDxGames/PlexonCrates
           phase3_branch=${PHASE3_BRANCH}
+          phase2_branch=${PHASE2_BRANCH}
           release_branch=${GITHUB_REF_NAME}
           candidate_sha=${GITHUB_SHA}
           version=${PLUGIN_VERSION}

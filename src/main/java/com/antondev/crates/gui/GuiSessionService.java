@@ -1,7 +1,7 @@
 package com.antondev.crates.gui;
 
 import com.antondev.crates.PlexonCrates;
-import com.antondev.crates.gui.player.PlayerCrateMenuService;
+import com.antondev.crates.gui.player.PlayerCrateCommandRouter;
 import com.antondev.crates.service.CrateSimulationService;
 import com.antondev.crates.service.DraftSessionService;
 import java.util.Objects;
@@ -40,8 +40,8 @@ public final class GuiSessionService {
         }
         simulations = new CrateSimulationService();
         Bukkit.getPluginManager().registerEvents(new SimulationAdminListener(plugin, simulations), plugin);
-        // Player UX is a projection over this same session authority, not a second session system.
-        Bukkit.getPluginManager().registerEvents(new PlayerCrateMenuService(plugin), plugin);
+        // The player UX reuses this authority but is routed only through the ordinary command/menu surface.
+        Bukkit.getPluginManager().registerEvents(new PlayerCrateCommandRouter(plugin), plugin);
     }
 
     public void activate(UUID playerId, MenuHolder holder) {

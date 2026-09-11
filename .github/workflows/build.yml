@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: ['**']
+    tags-ignore: ['v*']
   pull_request:
 
 permissions:
@@ -10,7 +11,10 @@ permissions:
   statuses: write
 
 env:
-  PLUGIN_VERSION: '5.0.0-rc.1'
+  PLUGIN_VERSION: '5.0.0-rc.2'
+  PHASE2_SHA: 'ec9623857dd09437c29a251c4f1fb01f5b4fd98e'
+  PLEXONKEYS_VERSION: '2.0.0-rc.2'
+  PLEXONKEYS_SHA256: '0cc87449754b7e5dec34e57091f856f2bfa98a3c256eb41617b510911cbe0ee4'
 
 jobs:
   verify:
@@ -19,7 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Set up Java 25
         uses: actions/setup-java@v5
@@ -28,151 +32,125 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - name: Provision Plexon API dependencies
+      - name: Provision immutable Plexon API dependencies
         shell: bash
         run: |
           set -euo pipefail
           core_jar="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"
-          keys_jar="${RUNNER_TEMP}/PlexonKeys-1.3.0.jar"
+          keys_jar="${RUNNER_TEMP}/PlexonKeys-${PLEXONKEYS_VERSION}.jar"
           curl --fail --location --silent --show-error --output "${core_jar}" \
             "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar"
           echo "61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  ${core_jar}" | sha256sum --check
           curl --fail --location --silent --show-error --output "${keys_jar}" \
-            "https://github.com/ZpkDxGames/PlexonKeys/releases/download/v1.3.0/PlexonKeys-1.3.0.jar"
-          echo "301ead99d56ed48b96a8983e68837b6f04d4629d8a9dec90db0ef090fa3b0796  ${keys_jar}" | sha256sum --check
+            "https://github.com/ZpkDxGames/PlexonKeys/releases/download/v${PLEXONKEYS_VERSION}/PlexonKeys-${PLEXONKEYS_VERSION}.jar"
+          echo "${PLEXONKEYS_SHA256}  ${keys_jar}" | sha256sum --check
           mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
             -Dfile="${core_jar}" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
             -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
           mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
             -Dfile="${keys_jar}" -DgroupId=com.antondev -DartifactId=PlexonKeys \
-            -Dversion=1.3.0 -Dpackaging=jar -DgeneratePom=true
+            -Dversion="${PLEXONKEYS_VERSION}" -Dpackaging=jar -DgeneratePom=true
 
       - name: Verify dependency and candidate contract
         shell: bash
         run: |
           set -euo pipefail
           test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexoncore.version)" = "2.0.4"
-          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexonkeys.version)" = "1.3.0"
+          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexonkeys.version)" = "${PLEXONKEYS_VERSION}"
           test "$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)" = "${PLUGIN_VERSION}"
+          test -f "releases/${PLUGIN_VERSION}.md"
+          test "$(git merge-base "${PHASE2_SHA}" HEAD)" = "${PHASE2_SHA}"
 
-      - name: Verify
-        id: verify
+      - name: Test and package
+        run: mvn -B -ntp clean verify
+
+      - name: Build exact test summary
         shell: bash
         run: |
-          set +e
-          mvn -B -ntp clean verify 2>&1 | tee build.log
-          code=${PIPESTATUS[0]}
-          echo "exit_code=${code}" >> "${GITHUB_OUTPUT}"
-          exit 0
-
-      - name: Require every discovered test to run
-        id: skipped
-        if: steps.verify.outputs.exit_code == '0'
-        shell: bash
-        run: |
-          set +e
+          set -euo pipefail
           python3 - <<'PY'
-          import glob, sys, xml.etree.ElementTree as ET
-          skipped = []
-          count = 0
-          for path in sorted(glob.glob("target/surefire-reports/TEST-*.xml")):
-              for case in ET.parse(path).getroot().iter("testcase"):
-                  count += 1
-                  marker = case.find("skipped")
-                  if marker is not None:
-                      skipped.append((case.get("classname"), case.get("name"), marker.get("message", "")))
-          if count == 0:
-              print("No tests were discovered")
-              sys.exit(1)
-          if skipped:
-              print(f"Skipped tests are not allowed: {len(skipped)}")
-              for class_name, name, message in skipped:
-                  print(f"- {class_name}.{name}: {message}")
-              sys.exit(1)
-          print(f"All discovered tests ran; total={count}; skipped=0")
+          import glob, pathlib, xml.etree.ElementTree as ET
+          tests = failures = errors = skipped = 0
+          for path in sorted(glob.glob('target/surefire-reports/TEST-*.xml')):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  tests += 1
+                  failures += case.find('failure') is not None
+                  errors += case.find('error') is not None
+                  skipped += case.find('skipped') is not None
+          if tests == 0:
+              raise SystemExit('No tests discovered')
+          pathlib.Path('target/TEST_SUMMARY.txt').write_text(
+              f'tests={tests}\nfailures={failures}\nerrors={errors}\nskipped={skipped}\n', encoding='utf-8')
+          if failures or errors or skipped:
+              raise SystemExit(f'Candidate suite not clean: {tests=} {failures=} {errors=} {skipped=}')
+          print(f'Tests: {tests}; failures=0; errors=0; skipped=0')
           PY
-          code=$?
-          echo "exit_code=${code}" >> "${GITHUB_OUTPUT}"
-          exit 0
 
       - name: Verify distribution
-        id: distribution
-        if: steps.verify.outputs.exit_code == '0'
         shell: bash
         run: |
-          set +e
-          (
-            set -euo pipefail
-            JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"
-            test -s "$JAR"
-            jar tf "$JAR" > target/jar-contents.txt
-            grep -qx 'plugin.yml' target/jar-contents.txt
-            grep -qx 'com/antondev/crates/PlexonCrates.class' target/jar-contents.txt
-            grep -qx 'com/antondev/crates/service/CrateSimulationService.class' target/jar-contents.txt
-            grep -qx 'com/antondev/crates/gui/SimulationAdminListener.class' target/jar-contents.txt
-            grep -qx 'com/antondev/crates/integration/core/PlexonCoreBridge.class' target/jar-contents.txt
-            grep -qx 'com/antondev/crates/api/event/CrateOpenEvent.class' target/jar-contents.txt
-            grep -qx 'org/sqlite/JDBC.class' target/jar-contents.txt
-            unzip -p "$JAR" plugin.yml | grep -F "version: '${PLUGIN_VERSION}'"
-            unzip -p "$JAR" plugin.yml | grep -F 'main: com.antondev.crates.PlexonCrates'
-            unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
-            unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -F "Implementation-Version: ${PLUGIN_VERSION}"
-            javap -verbose -classpath "$JAR" com.antondev.crates.PlexonCrates | grep -F 'major version: 69'
-            if grep -q '^com/zpkdxgames/plexoncore/' target/jar-contents.txt; then
-              echo "PlexonCore runtime classes must not be shaded into PlexonCrates" >&2
+          set -euo pipefail
+          JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"
+          test -s "$JAR"
+          jar tf "$JAR" > target/jar-contents.txt
+          for required in \
+            plugin.yml \
+            com/antondev/crates/PlexonCrates.class \
+            com/antondev/crates/service/OpeningService.class \
+            com/antondev/crates/service/ClaimService.class \
+            com/antondev/crates/service/CrateSimulationService.class \
+            com/antondev/crates/integration/plexonkeys/PlexonKeysServiceAdapter.class \
+            com/antondev/crates/api/event/CrateOpenEvent.class \
+            org/sqlite/JDBC.class; do
+            grep -qx "$required" target/jar-contents.txt
+          done
+          unzip -p "$JAR" plugin.yml | grep -F "version: '${PLUGIN_VERSION}'"
+          unzip -p "$JAR" plugin.yml | grep -F 'main: com.antondev.crates.PlexonCrates'
+          unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
+          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -F "Implementation-Version: ${PLUGIN_VERSION}"
+          javap -verbose -classpath "$JAR" com.antondev.crates.PlexonCrates | grep -F 'major version: 69'
+          for prefix in 'com/zpkdxgames/plexoncore/' 'com/antondev/keys/'; do
+            if grep -q "^${prefix}" target/jar-contents.txt; then
+              echo "Provided integration classes must not be shaded: ${prefix}" >&2
               exit 1
             fi
-            if grep -q '^com/antondev/keys/' target/jar-contents.txt; then
-              echo "PlexonKeys runtime classes must not be shaded into PlexonCrates" >&2
-              exit 1
-            fi
-            (cd target && sha256sum "PlexonCrates-${PLUGIN_VERSION}.jar" > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
-          ) 2>&1 | tee distribution.log
-          code=${PIPESTATUS[0]}
-          echo "exit_code=${code}" >> "${GITHUB_OUTPUT}"
-          exit 0
+          done
+          (cd target && sha256sum "PlexonCrates-${PLUGIN_VERSION}.jar" > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
 
-      - name: Check whitespace
-        id: whitespace
-        if: steps.verify.outputs.exit_code == '0'
+      - name: Write provenance
         shell: bash
         run: |
-          set +e
-          git diff --check HEAD^ HEAD
-          code=$?
-          echo "exit_code=${code}" >> "${GITHUB_OUTPUT}"
-          exit 0
+          set -euo pipefail
+          cat > target/PROVENANCE.txt <<EOF
+          repository=ZpkDxGames/PlexonCrates
+          branch=${GITHUB_REF_NAME}
+          candidate_sha=${GITHUB_SHA}
+          version=${PLUGIN_VERSION}
+          phase2_parent=${PHASE2_SHA}
+          java=25
+          paper=26.2.build.121-stable
+          plexoncore=2.0.4
+          plexonkeys=${PLEXONKEYS_VERSION}
+          database_schema=4
+          runtime_certification=NOT_EXECUTED
+          EOF
 
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: PlexonCrates-test-reports-${{ github.sha }}
-          path: |
-            target/surefire-reports/
-            build.log
-            distribution.log
-          if-no-files-found: warn
+      - name: Check full Phase 3 diff
+        run: git diff --check "${PHASE2_SHA}...HEAD"
 
-      - name: Upload verified JAR
-        if: steps.verify.outputs.exit_code == '0' && steps.skipped.outputs.exit_code == '0' && steps.distribution.outputs.exit_code == '0' && steps.whitespace.outputs.exit_code == '0'
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: PlexonCrates-${{ github.sha }}
+          name: PlexonCrates-${{ env.PLUGIN_VERSION }}-${{ github.sha }}
           path: |
             target/PlexonCrates-${{ env.PLUGIN_VERSION }}.jar
             target/SHA256SUMS.txt
+            target/TEST_SUMMARY.txt
+            target/PROVENANCE.txt
           if-no-files-found: error
 
-      - name: Enforce result
+      - uses: actions/upload-artifact@v4
         if: always()
-        env:
-          VERIFY_EXIT: ${{ steps.verify.outputs.exit_code }}
-          SKIPPED_EXIT: ${{ steps.skipped.outputs.exit_code }}
-          DISTRIBUTION_EXIT: ${{ steps.distribution.outputs.exit_code }}
-          WHITESPACE_EXIT: ${{ steps.whitespace.outputs.exit_code }}
-        run: |
-          test "${VERIFY_EXIT:-1}" = "0"
-          test "${SKIPPED_EXIT:-1}" = "0"
-          test "${DISTRIBUTION_EXIT:-1}" = "0"
-          test "${WHITESPACE_EXIT:-1}" = "0"
+        with:
+          name: PlexonCrates-test-results-${{ github.sha }}
+          path: target/surefire-reports/
+          if-no-files-found: warn

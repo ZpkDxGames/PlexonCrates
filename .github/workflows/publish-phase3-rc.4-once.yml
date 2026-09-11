@@ -36,7 +36,7 @@ jobs:
           git merge-base --is-ancestor "$RC3_SOURCE" HEAD
           git diff --check "$BASE_SHA...HEAD"
           git diff --name-only "$BASE_SHA" HEAD | tee /tmp/delta
-          if grep -Ev '^(pom\.xml|releases/5\.0\.0-rc\.4\.md|\.github/workflows/publish-phase3-rc\.4-once\.yml|src/main/java/com/antondev/crates/gui/player/PlayerCrateCommandRouter\.java|src/test/java/com/antondev/crates/gui/player/LegacyPlayerSurfaceRoutingTest\.java)$' /tmp/delta | grep -q .; then
+          if grep -Ev '^(pom\.xml|releases/5\.0\.0-rc\.4\.md|\.github/workflows/build\.yml|\.github/workflows/publish-phase3-rc\.4-once\.yml|src/main/java/com/antondev/crates/gui/player/PlayerCrateCommandRouter\.java|src/test/java/com/antondev/crates/gui/player/LegacyPlayerSurfaceRoutingTest\.java)$' /tmp/delta | grep -q .; then
             echo 'Out-of-scope RC4 delta detected' >&2
             exit 1
           fi

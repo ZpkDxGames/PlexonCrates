@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 class Phase3PlayerCrateUxArchitectureTest {
     private static final Path UX = Path.of("src/main/java/com/antondev/crates/gui/player/PlayerCrateMenuService.java");
+    private static final Path ROUTER = Path.of("src/main/java/com/antondev/crates/gui/player/PlayerCrateCommandRouter.java");
     private static final Path HOLDER = Path.of("src/main/java/com/antondev/crates/gui/MenuHolder.java");
     private static final Path SESSION = Path.of("src/main/java/com/antondev/crates/gui/GuiSessionService.java");
     private static final Path CLAIMS = Path.of("src/main/java/com/antondev/crates/service/ClaimService.java");
@@ -23,8 +24,16 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertFalse(method.contains("openSelected("));
     }
 
+    @Test void ordinaryCommandSurfaceRoutesToHallOrPreviewWithoutGlobalInventoryInterception() throws IOException {
+        String router = Files.readString(ROUTER);
+        assertTrue(router.contains("menus.openHall(player, 0)"));
+        assertTrue(router.contains("menus.openPreview(player, crate"));
+        assertFalse(router.contains("InventoryOpenEvent"));
+        assertFalse(router.contains("redirectLegacyPlayerSurface"));
+    }
+
     @Test void normalPlayerUxContainsNoHiddenRightClickConsumeSemantic() throws IOException {
-        String source = Files.readString(UX);
+        String source = Files.readString(UX) + Files.readString(ROUTER);
         assertFalse(source.contains("isRightClick"));
         assertFalse(source.contains("RIGHT_CLICK"));
     }
@@ -50,7 +59,7 @@ class Phase3PlayerCrateUxArchitectureTest {
     }
 
     @Test void playerUxAddsNoRepeatingGuiRefreshTask() throws IOException {
-        String source = Files.readString(UX);
+        String source = Files.readString(UX) + Files.readString(ROUTER);
         assertFalse(source.contains("runTaskTimer"));
         assertFalse(source.contains("runTaskTimerAsynchronously"));
     }
@@ -138,7 +147,7 @@ class Phase3PlayerCrateUxArchitectureTest {
     @Test void playerUxReusesExistingGuiSessionAuthority() throws IOException {
         String session = Files.readString(SESSION);
         String holder = Files.readString(HOLDER);
-        assertTrue(session.contains("new PlayerCrateMenuService(plugin)"));
+        assertTrue(session.contains("new PlayerCrateCommandRouter(plugin)"));
         assertTrue(holder.contains("PLAYER_HALL"));
         assertTrue(session.contains("ConcurrentHashMap<UUID, Active> active"));
         assertFalse(Files.readString(UX).contains("new GuiSessionService"));

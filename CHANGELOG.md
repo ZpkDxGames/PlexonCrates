@@ -2,7 +2,19 @@
 
 All notable PlexonCrates changes are documented here.
 
-## 3.0.0 — In development
+## 5.0.0 — Stable
+
+- Promotes the accepted Phase 2 / Phase 3 premium crate line and final RC4 source boundary to stable `5.0.0`.
+- Preserves journal-first openings, exact ItemStack custody, durable payment/grant recovery states, schema-4 SQLite ownership, percentage-first reward selection, limits, pity, milestones, rerolls, portable issuance and replay protection.
+- Preserves the final player-facing Crate Hall/Preview/selective UX, current eligible-pool probability language and hidden internal reward/recovery identifiers.
+- Fixes a final durability edge case in the Claim Inbox: after a virtual-key credit succeeds, uncertain/failed claim finalization now moves the claim immediately from `CLAIMING` to `REVIEW` instead of relying on the next restart recovery pass.
+- Aligns canonical CI with checksum-pinned PlexonCore 2.0.4 and PlexonKeys 2.0.0-rc.2, Java 25, Paper 26.2, schema 4, required distribution contents and provided-dependency non-shading.
+- Replaces RC-specific/one-off publishers with one canonical Build workflow and one exact-current-`main` stable Release workflow.
+- Stable publication emits the JAR, `SHA256SUMS.txt`, `TEST_SUMMARY.txt` and `PROVENANCE.txt`, then downloads and verifies the published asset checksum and exact source provenance before completion.
+- Live PlexonCraft runtime/soak certification remains a post-release deployment follow-up and may be recorded as `NOT_EXECUTED` in release provenance.
+- Rollback baseline: `v4.6.0` / `261270243beb9ff4a8992f53095f16c20458f770`.
+
+## 3.0.0 — Historical development line
 
 ### Foundation
 

@@ -90,7 +90,7 @@ public final class Messages {
         fallback(yaml, "key-replacement-drafted", "<green>Saved replacement-key drafts for <white><count></white> crate(s).</green> <yellow>Publish those crates before deleting the active key.</yellow>");
         fallback(yaml, "key-replacement-awaiting-publish", "<yellow>This key is still used by a published crate. Publish its pending replacement draft before deleting the key.</yellow>");
         fallback(yaml, "gui-stale", "<yellow>This menu is out of date. Reopen it before trying that action again.</yellow>");
-        fallback(yaml, "reward-claim-pending", "<yellow>Your exact reward was placed in Claim Inbox. Use <white>/crates claim</white> to deliver it safely.</yellow>");
+        fallback(yaml, "reward-claim-pending", "<yellow>Your exact reward is waiting in Pending Rewards. Use <white>/crates claim</white> to deliver it safely.</yellow>");
         fallback(yaml, "virtual-key-granted", "<green>Credited <amount>x virtual <key> keys to <player>.</green>");
     }
 

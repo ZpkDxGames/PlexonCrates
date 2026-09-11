@@ -122,6 +122,20 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertFalse(source.contains("dropItem("));
     }
 
+    @Test void compatibilityPreviewUsesPlayerProbabilityLanguageAndCleanConfirmation() throws IOException {
+        String source = Files.readString(LEGACY_MENU);
+        String preview = section(source, "private void renderPreview", "private void appendMilestonePreview");
+        assertTrue(preview.contains("ProbabilityPresentation.selective"));
+        assertTrue(preview.contains("ProbabilityPresentation.random"));
+        assertTrue(preview.contains("Fallback reward:"));
+        assertTrue(preview.contains("Current eligible reward:"));
+        String confirm = section(source, "private void openSelectiveConfirmation", "public void openAdmin");
+        assertFalse(confirm.contains("Source reward"));
+        assertFalse(confirm.contains("Actual reward"));
+        assertFalse(confirm.contains("alternativeReason().name()"));
+        assertFalse(confirm.contains("requiredPermission()"));
+    }
+
     @Test void playerFacingSourceDoesNotExposeReliabilityEnumsOrSchemaTerms() throws IOException {
         String source = Files.readString(UX);
         for (String forbidden : new String[]{"PAYMENT_ATTEMPTED", "GRANT_ATTEMPTED", "MANUAL_REVIEW", "SQLITE_BUSY", "schema 4", "journal version"}) {

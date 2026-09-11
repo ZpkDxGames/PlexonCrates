@@ -4,6 +4,7 @@ import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.config.MenuConfig;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.gui.player.ProbabilityPresentation;
 import com.antondev.crates.domain.key.KeyPaymentPolicy;
 import com.antondev.crates.domain.opening.OpenSource;
 import com.antondev.crates.domain.opening.OpeningMode;
@@ -260,30 +261,51 @@ public final class MenuService implements Listener {
             boolean canWin = outcome != null;
             double chance = canWin ? RewardSelector.chance(reward, eligible) : 0;
             var lore = new ArrayList<Component>();
-            for (String line : menus.strings("preview.reward-lore")) {
-                lore.add(Text.parse(line,
-                        Text.value("eligible_chance", format(chance)),
-                        Text.value("base_chance", format(reward.baseChancePercent())),
-                        Text.value("chance", format(chance)),
-                        Text.value("weight", format(reward.baseChancePercent()))));
-            }
-            if (reward.chanceBasisPoints() <= 0) {
-                lore.add(Text.parse("<red>Not in pool (0.00%).</red>"));
-            } else if (!canWin) {
-                lore.add(Text.parse("<red>This source and its allowed alternative are unavailable.</red>"));
+            if (adminOrigin) {
+                for (String line : menus.strings("preview.reward-lore")) {
+                    lore.add(Text.parse(line,
+                            Text.value("eligible_chance", format(chance)),
+                            Text.value("base_chance", format(reward.baseChancePercent())),
+                            Text.value("chance", format(chance)),
+                            Text.value("weight", format(reward.baseChancePercent()))));
+                }
+                if (reward.chanceBasisPoints() <= 0) {
+                    lore.add(Text.parse("<red>Not in pool (0.00%).</red>"));
+                } else if (!canWin) {
+                    lore.add(Text.parse("<red>This source and its allowed alternative are unavailable.</red>"));
+                }
+            } else {
+                ProbabilityPresentation probability = selective
+                        ? ProbabilityPresentation.selective(canWin, false)
+                        : ProbabilityPresentation.random(chance, reward.baseChancePercent(), canWin, false);
+                lore.add(Text.parse("<gray>" + probability.primary() + "</gray>"));
+                if (!probability.secondary().isBlank()) {
+                    lore.add(Text.parse("<dark_gray>" + probability.secondary() + "</dark_gray>"));
+                }
             }
             if (plugin.settings().alternativeRewardsEnabled() && reward.hasAlternative()) {
-                lore.add(Text.parse("<gold>Alternative:</gold> <white>" + reward.alternativeRewardId()
-                        + "</white> <gray>for " + reward.alternativeReasons().stream().map(Enum::name).sorted()
-                        .collect(java.util.stream.Collectors.joining(", ")) + "</gray>"));
+                if (adminOrigin) {
+                    lore.add(Text.parse("<gold>Alternative:</gold> <white>" + reward.alternativeRewardId()
+                            + "</white> <gray>for " + reward.alternativeReasons().stream().map(Enum::name).sorted()
+                            .collect(java.util.stream.Collectors.joining(", ")) + "</gray>"));
+                } else {
+                    CrateReward alternative = crate.rewards().get(reward.alternativeRewardId());
+                    lore.add(Text.parse("<gold>Fallback reward:</gold> ").append(alternative == null
+                            ? Text.parse("<gray>Configured alternative</gray>") : alternative.displayName()));
+                    lore.add(Text.parse("<gray>Used only when this reward is unavailable.</gray>"));
+                }
             }
             if (outcome != null && outcome.fallback()) {
-                lore.add(Text.parse("<yellow>Current outcome:</yellow> ").append(outcome.actual().displayName())
-                        .append(Text.parse(" <dark_gray>(" + outcome.alternativeReason().name() + ")</dark_gray>")));
-                lore.add(Text.parse("<gray>The source ticket's configured chance is retained.</gray>"));
+                if (adminOrigin) {
+                    lore.add(Text.parse("<yellow>Current outcome:</yellow> ").append(outcome.actual().displayName())
+                            .append(Text.parse(" <dark_gray>(" + outcome.alternativeReason().name() + ")</dark_gray>")));
+                    lore.add(Text.parse("<gray>The source ticket's configured chance is retained.</gray>"));
+                } else {
+                    lore.add(Text.parse("<yellow>Current eligible reward:</yellow> ").append(outcome.actual().displayName()));
+                    lore.add(Text.parse("<gray>The configured selection chance remains unchanged.</gray>"));
+                }
             }
             if (selective) {
-                lore.add(Text.parse("<gray>Base chance is retained but ignored in selective mode.</gray>"));
                 if (!selectable) lore.add(Text.parse("<red>Selective opening is disabled by the server.</red>"));
                 else if (canWin) {
                     lore.add(Text.parse("<green>Click to choose this exact reward.</green>"));
@@ -399,15 +421,15 @@ public final class MenuService implements Listener {
         ItemStack display = actual.displayCopy();
         var delivery = new ArrayList<Component>();
         delivery.add(Component.empty());
-        delivery.add(Text.parse("<gray>Source reward</gray> <dark_gray>»</dark_gray> <white>" + reward.id() + "</white>"));
-        delivery.add(Text.parse("<gray>Actual reward</gray> <dark_gray>»</dark_gray> <white>" + actual.id() + "</white>"));
-        if (outcome.fallback()) delivery.add(Text.parse("<yellow>Alternative applies:</yellow> <white>"
-                + outcome.alternativeReason().name() + "</white>"));
+        delivery.add(Text.parse("<gray>Reward</gray> <dark_gray>»</dark_gray> ").append(actual.displayName()));
+        if (outcome.fallback()) {
+            delivery.add(Text.parse("<yellow>A fallback reward is active because the original reward is unavailable.</yellow>"));
+        }
         delivery.add(Text.parse("<gray>Amount</gray> <dark_gray>»</dark_gray> <white>1 opening</white>"));
         int itemCount = actual.itemCopies().stream().mapToInt(ItemStack::getAmount).sum();
         delivery.add(Text.parse("<gray>Items</gray> <dark_gray>»</dark_gray> <white>" + itemCount
                 + " across " + actual.itemCopies().size() + " exact stack(s)</white>"));
-        if (!actual.commands().isEmpty()) delivery.add(Text.parse("<gray>Commands</gray> <dark_gray>»</dark_gray> <white>"
+        if (!actual.commands().isEmpty()) delivery.add(Text.parse("<gray>Server actions</gray> <dark_gray>»</dark_gray> <white>"
                 + actual.commands().size() + " configured action(s)</white>"));
         if (actual.experiencePoints() > 0) delivery.add(Text.parse("<gray>Experience points</gray> <dark_gray>»</dark_gray> <white>"
                 + actual.experiencePoints() + "</white>"));
@@ -415,8 +437,6 @@ public final class MenuService implements Listener {
                 + actual.experienceLevels() + "</white>"));
         if (actual.money() > 0) delivery.add(Text.parse("<gray>Money</gray> <dark_gray>»</dark_gray> <white>"
                 + format(actual.money()) + "</white>"));
-        String restriction = actual.requiredPermission().isBlank() ? "none" : actual.requiredPermission();
-        delivery.add(Text.parse("<gray>Required permission</gray> <dark_gray>»</dark_gray> <white>" + restriction + "</white>"));
         delivery.add(Text.parse("<green>Eligible now; eligibility is checked again on confirm.</green>"));
         appendLore(display, delivery);
         inventory.setItem(menus.slot("selective-confirm.reward"), display);

@@ -323,17 +323,31 @@ class PluginIntegrationTest {
     }
 
     private void awaitOpeningCommit() {
-        plugin.database().awaitIdle().join();
-        server.getScheduler().performTicks(2);
-        plugin.database().awaitIdle().join();
-        server.getScheduler().performTicks(2);
-    }
-
-    private void awaitPortableCommit() {
-        for (int pass = 0; pass < 6; pass++) {
+        // Phase 3 adds durable PREPARED -> PAYMENT_ATTEMPTED -> PAYMENT_COMMITTED
+        // -> GRANT_ATTEMPTED -> COMPLETED barriers. Alternate the bounded DB
+        // worker barrier with primary-thread scheduler ticks until all continuations
+        // have had a chance to run; do not weaken the terminal assertions below.
+        for (int pass = 0; pass < 12; pass++) {
             plugin.database().awaitIdle().join();
             server.getScheduler().performTicks(2);
         }
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertEquals(0, plugin.openings().pendingCount(),
+                "opening pipeline did not reach a terminal state");
+    }
+
+    private void awaitPortableCommit() {
+        // Portable openings add issuance reservation/consume ahead of the same
+        // schema-4 payment and grant barriers, so drain the complete bounded chain.
+        for (int pass = 0; pass < 14; pass++) {
+            plugin.database().awaitIdle().join();
+            server.getScheduler().performTicks(2);
+        }
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+        assertEquals(0, plugin.openings().pendingCount(),
+                "portable opening pipeline did not reach a terminal state");
     }
 
     private static String plainLore(ItemStack item) {

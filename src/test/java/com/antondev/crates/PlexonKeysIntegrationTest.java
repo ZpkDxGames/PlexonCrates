@@ -81,10 +81,18 @@ class PlexonKeysIntegrationTest {
     }
 
     private void awaitOpeningCommit() {
+        // Phase 3 adds durable PREPARED -> PAYMENT_ATTEMPTED -> PAYMENT_COMMITTED
+        // -> GRANT_ATTEMPTED -> COMPLETED barriers. Alternate the bounded DB
+        // worker barrier with primary-thread scheduler ticks until all continuations
+        // have had a chance to run; do not weaken the terminal assertions below.
+        for (int pass = 0; pass < 12; pass++) {
+            plugin.database().awaitIdle().join();
+            server.getScheduler().performTicks(2);
+        }
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
-        plugin.database().awaitIdle().join();
-        server.getScheduler().performTicks(2);
+        assertEquals(0, plugin.openings().pendingCount(),
+                "opening pipeline did not reach a terminal state");
     }
 
     public static class FakePlexonKeys extends JavaPlugin {

@@ -10,15 +10,16 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 /**
- * Routes the ordinary player command surface into the Phase 3 product UI.
+ * Routes the ordinary player command and legacy menu surfaces into the Phase 3 product UI.
  *
- * <p>It intentionally does not delegate InventoryOpenEvent. Direct MenuService
- * calls, physical crate interactions, portable previews and admin compatibility
- * surfaces therefore retain their accepted Pipeline 4 behavior.</p>
+ * <p>Legacy non-admin Browser/Preview inventories are intercepted before display and
+ * replaced by the Phase 3 Hall/Preview surfaces. Portable previews remain on the
+ * accepted runtime path because they carry issuance-specific state.</p>
  */
 public final class PlayerCrateCommandRouter implements Listener {
     private static final Set<String> ROOTS = Set.of("crates", "crate", "plexoncrates");
@@ -91,6 +92,11 @@ public final class PlayerCrateCommandRouter implements Listener {
                 menus.openPreview(player, crate, 0, 0, KeyPaymentPlanner.Preference.PHYSICAL);
             });
         }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void open(InventoryOpenEvent event) {
+        menus.redirectLegacyPlayerSurface(event);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)

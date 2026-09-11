@@ -28,7 +28,7 @@ class DatabaseServiceTest {
     @Test
     void schemaThreeInstallsNormalizedDefinitionDraftAndValueTables() throws Exception {
         try (DatabaseService database = database()) {
-            assertEquals(3, database.schemaVersion());
+            assertEquals(4, database.schemaVersion());
             for (String table : List.of("crate_definition", "reward_definition", "reward_item",
                     "reward_action", "key_definition_v3", "key_template_v3", "crate_key_link",
                     "effect_profile", "rarity_profile", "milestone_definition", "milestone_state",

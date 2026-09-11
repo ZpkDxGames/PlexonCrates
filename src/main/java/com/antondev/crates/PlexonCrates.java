@@ -340,8 +340,13 @@ public class PlexonCrates extends JavaPlugin {
         long onlineLocations = locations.all().stream().filter(link -> link.position().loadedWorld() != null).count();
         long drafts = crates.all().stream().filter(crate -> crate.state() == com.antondev.crates.domain.crate.CrateState.DRAFT).count();
         int pendingJournals;
-        try { pendingJournals = database.pendingJournalCount(); }
-        catch (Exception error) { pendingJournals = -1; }
+        DatabaseService.JournalHealth journalHealth = null;
+        List<DatabaseService.JournalDiagnostic> journalEntries = List.of();
+        try {
+            pendingJournals = database.pendingJournalCount();
+            journalHealth = database.journalHealth();
+            journalEntries = database.journalDiagnostics(5);
+        } catch (Exception error) { pendingJournals = -1; }
         DatabaseService.ClaimCounts claimCounts = null;
         try { claimCounts = database.claimCounts().join(); }
         catch (Exception error) { getLogger().log(Level.WARNING, "Could not read Claim Inbox diagnostics", error); }
@@ -376,6 +381,25 @@ public class PlexonCrates extends JavaPlugin {
         sender.sendMessage(Text.parse("<gray>Unresolved:</gray> <white>" + keys.unresolved().size() + "</white> <dark_gray>•</dark_gray> <gray>Collisions:</gray> <white>" + keys.collisions().size() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Locations:</gray> <white>" + locations.all().size() + "</white> <dark_gray>(" + onlineLocations + " online)</dark_gray>"));
         sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + pendingJournals + "</white>"));
+        if (journalHealth != null) {
+            sender.sendMessage(Text.parse("<gray>Journal recovery:</gray> <white>manual=" + journalHealth.manualReview()
+                    + ", pre-payment=" + journalHealth.paymentNotConsumed() + ", payment-committed="
+                    + journalHealth.paymentCommitted() + ", pending-reward=" + journalHealth.rewardPending()
+                    + ", oldest=" + journalHealth.oldestUnresolvedAgeSeconds() + "s</white>"));
+            sender.sendMessage(Text.parse("<gray>Startup reconciliation:</gray> <white>safe-cancelled="
+                    + journalHealth.startupRecovered() + ", compacted=" + journalHealth.startupCompacted() + "</white>"));
+        }
+        for (DatabaseService.JournalDiagnostic entry : journalEntries) {
+            sender.sendMessage(Text.parse("<dark_gray>Journal " + entry.transactionId() + "</dark_gray> <gray>crate=</gray><white>"
+                    + entry.crateId() + "@" + entry.crateRevision() + "</white> <gray>stage=</gray><white>"
+                    + entry.stage() + "</white> <gray>payment=</gray><white>" + entry.paymentState()
+                    + "</white> <gray>grant=</gray><white>" + entry.grantState()
+                    + "</white> <gray>recovery=</gray><white>" + entry.recoveryClassification()
+                    + "</white> <gray>created=</gray><white>" + entry.createdAt()
+                    + "</white> <gray>updated=</gray><white>" + entry.updatedAt() + "</white>"));
+        }
+        sender.sendMessage(Text.parse("<gray>PlexonKeys durable consume latency:</gray> <white>"
+                + openings.plexonKeysLatencyDiagnostic() + "</white>"));
         sender.sendMessage(Text.parse(claimCounts == null
                 ? "<gray>Claim Inbox:</gray> <red>diagnostic unavailable</red>"
                 : "<gray>Claim Inbox:</gray> <white>" + claimCounts.pending()

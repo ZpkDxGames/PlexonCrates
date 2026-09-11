@@ -1,11 +1,16 @@
 package com.antondev.crates.gui;
 
+import com.antondev.crates.PlexonCrates;
+import com.antondev.crates.gui.player.PlayerCrateCommandRouter;
+import com.antondev.crates.service.CrateSimulationService;
 import com.antondev.crates.service.DraftSessionService;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
 /** Owns the one currently routable inventory session for each player. */
 public final class GuiSessionService {
@@ -26,6 +31,18 @@ public final class GuiSessionService {
     }
 
     private final ConcurrentHashMap<UUID, Active> active = new ConcurrentHashMap<>();
+    private final CrateSimulationService simulations;
+
+    public GuiSessionService() {
+        Plugin candidate = Bukkit.getPluginManager().getPlugin("PlexonCrates");
+        if (!(candidate instanceof PlexonCrates plugin)) {
+            throw new IllegalStateException("PlexonCrates plugin instance is unavailable while GUI runtime starts");
+        }
+        simulations = new CrateSimulationService();
+        Bukkit.getPluginManager().registerEvents(new SimulationAdminListener(plugin, simulations), plugin);
+        // The player UX reuses this authority but is routed only through the ordinary command/menu surface.
+        Bukkit.getPluginManager().registerEvents(new PlayerCrateCommandRouter(plugin), plugin);
+    }
 
     public void activate(UUID playerId, MenuHolder holder) {
         Objects.requireNonNull(playerId, "playerId");
@@ -79,9 +96,18 @@ public final class GuiSessionService {
 
     public void clear() {
         active.clear();
+        simulations.close();
     }
 
     public int size() {
         return active.size();
+    }
+
+    public int simulationQueueSize() {
+        return simulations.queuedRequests();
+    }
+
+    public int activeSimulations() {
+        return simulations.activeRequests();
     }
 }

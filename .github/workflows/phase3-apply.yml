@@ -1,0 +1,51 @@
+name: Apply Phase 3 Reliability
+
+on:
+  push:
+    branches:
+      - 'phase3/runtime-reliability'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plexoncrates-phase3-transform
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[phase3-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: phase3/runtime-reliability
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Apply deterministic reliability patch
+        run: python3 tools/apply_phase3_reliability.py
+      - name: Verify patch shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -F '<version>5.0.0-rc.2</version>' pom.xml
+          grep -F '<plexonkeys.version>2.0.0-rc.2</plexonkeys.version>' pom.xml
+          grep -F 'public static final int SCHEMA_VERSION = 4;' src/main/java/com/antondev/crates/database/DatabaseService.java
+          grep -F 'plexoncrates:opening:' src/main/java/com/antondev/crates/service/OpeningService.java
+          grep -F 'markGrantAttempted' src/main/java/com/antondev/crates/service/OpeningService.java
+      - name: Commit transformed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'No reliability changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: harden opening journal recovery [phase3-applied]'
+          git push origin HEAD:phase3/runtime-reliability

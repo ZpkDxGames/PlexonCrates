@@ -244,8 +244,8 @@ class PluginIntegrationTest {
                 .getItem(plugin.menusConfig().slots("preview.reward-slots").getFirst());
         assertTrue(rewardDisplay != null);
         String rewardLore = plainLore(rewardDisplay);
-        assertTrue(rewardLore.contains("Eligible chance » 28%"));
-        assertTrue(rewardLore.contains("Base chance » 28%"));
+        assertTrue(rewardLore.contains("Current pool chance: 28%"));
+        assertFalse(rewardLore.contains("Configured base chance:"));
         ItemStack open = player.getOpenInventory().getTopInventory()
                 .getItem(plugin.menusConfig().slot("preview.open"));
         assertTrue(open != null);

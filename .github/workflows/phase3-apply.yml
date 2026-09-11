@@ -26,6 +26,11 @@ jobs:
           python-version: '3.13'
       - name: Apply deterministic reliability patch
         run: python3 tools/apply_phase3_reliability.py
+      - name: Keep workflow edits connector-owned
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout -- .github/workflows/build.yml .github/workflows/release-candidate.yml
       - name: Verify patch shape
         shell: bash
         run: |

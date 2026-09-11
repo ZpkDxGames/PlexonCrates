@@ -1,0 +1,41 @@
+name: Phase 3 Fix 1
+
+on:
+  push:
+    branches:
+      - 'phase3/runtime-reliability'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ contains(github.event.head_commit.message, '[run-fix1]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: phase3/runtime-reliability
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Apply correction
+        run: python3 tools/phase3_fix1.py
+      - name: Verify correction shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -F 'Availability(keyId, physical, 0, priority++), 0, false)' src/main/java/com/antondev/crates/service/OpeningService.java
+          grep -F 'public static String plexonKeysPaymentTransactionId' src/main/java/com/antondev/crates/service/OpeningService.java
+          grep -F 'plexonKeysBalance(player.getUniqueId(), keyId)' src/main/java/com/antondev/crates/service/OpeningService.java
+      - name: Commit source correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/main/java/com/antondev/crates/service/OpeningService.java
+          git commit -m 'fix: correct RC2 payment planner integration [fix1-applied]'
+          git push origin HEAD:phase3/runtime-reliability

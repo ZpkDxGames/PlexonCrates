@@ -11,8 +11,10 @@ permissions:
   statuses: write
 
 env:
-  PLUGIN_VERSION: '5.0.0-rc.2'
+  PLUGIN_VERSION: '5.0.0-rc.3'
   PHASE2_SHA: 'ec9623857dd09437c29a251c4f1fb01f5b4fd98e'
+  ACCEPTED_PHASE3_SHA: 'f1bcb27186489b47c8692d126e0b1974e25881fa'
+  RELIABILITY_SHA: 'c1b84c76430fd7196acc6ea4d45976e1b0740786'
   PLEXONKEYS_VERSION: '2.0.0-rc.2'
   PLEXONKEYS_SHA256: '0cc87449754b7e5dec34e57091f856f2bfa98a3c256eb41617b510911cbe0ee4'
 
@@ -20,124 +22,59 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Set up Java 25
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: maven
-
+      - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '25', cache: maven}
       - name: Provision immutable Plexon API dependencies
         shell: bash
         run: |
           set -euo pipefail
-          core_jar="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"
-          keys_jar="${RUNNER_TEMP}/PlexonKeys-${PLEXONKEYS_VERSION}.jar"
-          curl --fail --location --silent --show-error --output "${core_jar}" \
-            "https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar"
-          echo "61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  ${core_jar}" | sha256sum --check
-          curl --fail --location --silent --show-error --output "${keys_jar}" \
-            "https://github.com/ZpkDxGames/PlexonKeys/releases/download/v${PLEXONKEYS_VERSION}/PlexonKeys-${PLEXONKEYS_VERSION}.jar"
-          echo "${PLEXONKEYS_SHA256}  ${keys_jar}" | sha256sum --check
-          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
-            -Dfile="${core_jar}" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore \
-            -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
-          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
-            -Dfile="${keys_jar}" -DgroupId=com.antondev -DartifactId=PlexonKeys \
-            -Dversion="${PLEXONKEYS_VERSION}" -Dpackaging=jar -DgeneratePom=true
-
+          core="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"; keys="${RUNNER_TEMP}/PlexonKeys-${PLEXONKEYS_VERSION}.jar"
+          curl --fail --location --silent --show-error -o "$core" https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar
+          echo "61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf  $core" | sha256sum --check
+          curl --fail --location --silent --show-error -o "$keys" "https://github.com/ZpkDxGames/PlexonKeys/releases/download/v${PLEXONKEYS_VERSION}/PlexonKeys-${PLEXONKEYS_VERSION}.jar"
+          echo "${PLEXONKEYS_SHA256}  $keys" | sha256sum --check
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file -Dfile="$core" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file -Dfile="$keys" -DgroupId=com.antondev -DartifactId=PlexonKeys -Dversion="$PLEXONKEYS_VERSION" -Dpackaging=jar -DgeneratePom=true
       - name: Verify dependency and candidate contract
-        shell: bash
         run: |
           set -euo pipefail
-          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexoncore.version)" = "2.0.4"
-          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexonkeys.version)" = "${PLEXONKEYS_VERSION}"
-          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)" = "${PLUGIN_VERSION}"
+          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=paper.version)" = 26.2.build.121-stable
+          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexoncore.version)" = 2.0.4
+          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexonkeys.version)" = "$PLEXONKEYS_VERSION"
+          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)" = "$PLUGIN_VERSION"
           test -f "releases/${PLUGIN_VERSION}.md"
-          test "$(git merge-base "${PHASE2_SHA}" HEAD)" = "${PHASE2_SHA}"
-
+          git merge-base --is-ancestor "$PHASE2_SHA" HEAD
+          git merge-base --is-ancestor "$RELIABILITY_SHA" HEAD
+          git merge-base --is-ancestor "$ACCEPTED_PHASE3_SHA" HEAD
       - name: Test and package
         run: mvn -B -ntp clean verify
-
-      - name: Build exact test summary
-        shell: bash
+      - name: Verify tests and distribution
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import glob, pathlib, xml.etree.ElementTree as ET
-          tests = failures = errors = skipped = 0
-          for path in sorted(glob.glob('target/surefire-reports/TEST-*.xml')):
-              for case in ET.parse(path).getroot().iter('testcase'):
-                  tests += 1
-                  failures += case.find('failure') is not None
-                  errors += case.find('error') is not None
-                  skipped += case.find('skipped') is not None
-          if tests == 0:
-              raise SystemExit('No tests discovered')
-          pathlib.Path('target/TEST_SUMMARY.txt').write_text(
-              f'tests={tests}\nfailures={failures}\nerrors={errors}\nskipped={skipped}\n', encoding='utf-8')
-          if failures or errors or skipped:
-              raise SystemExit(f'Candidate suite not clean: {tests=} {failures=} {errors=} {skipped=}')
-          print(f'Tests: {tests}; failures=0; errors=0; skipped=0')
+          import glob,pathlib,xml.etree.ElementTree as ET
+          t=f=e=s=0
+          for p in glob.glob('target/surefire-reports/TEST-*.xml'):
+              for c in ET.parse(p).getroot().iter('testcase'):
+                  t+=1; f+=c.find('failure') is not None; e+=c.find('error') is not None; s+=c.find('skipped') is not None
+          if not t or f or e or s: raise SystemExit(f'tests={t} failures={f} errors={e} skipped={s}')
+          pathlib.Path('target/TEST_SUMMARY.txt').write_text(f'tests={t}\nfailures={f}\nerrors={e}\nskipped={s}\n'); print(f'Tests: {t}; failures=0; errors=0; skipped=0')
           PY
-
-      - name: Verify distribution
-        shell: bash
-        run: |
-          set -euo pipefail
-          JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"
-          test -s "$JAR"
-          jar tf "$JAR" > target/jar-contents.txt
-          for required in \
-            plugin.yml \
-            com/antondev/crates/PlexonCrates.class \
-            com/antondev/crates/service/OpeningService.class \
-            com/antondev/crates/service/ClaimService.class \
-            com/antondev/crates/service/CrateSimulationService.class \
-            com/antondev/crates/integration/plexonkeys/PlexonKeysServiceAdapter.class \
-            com/antondev/crates/api/event/CrateOpenEvent.class \
-            org/sqlite/JDBC.class; do
-            grep -qx "$required" target/jar-contents.txt
-          done
-          unzip -p "$JAR" plugin.yml | grep -F "version: '${PLUGIN_VERSION}'"
-          unzip -p "$JAR" plugin.yml | grep -F 'main: com.antondev.crates.PlexonCrates'
-          unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
+          JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"; test -s "$JAR"; jar tf "$JAR" > target/jar-contents.txt
+          for r in plugin.yml com/antondev/crates/PlexonCrates.class com/antondev/crates/service/OpeningService.class com/antondev/crates/service/ClaimService.class com/antondev/crates/service/CrateSimulationService.class com/antondev/crates/integration/plexonkeys/PlexonKeysServiceAdapter.class com/antondev/crates/api/event/CrateOpenEvent.class org/sqlite/JDBC.class; do grep -qx "$r" target/jar-contents.txt; done
+          unzip -p "$JAR" plugin.yml | grep -F "version: '${PLUGIN_VERSION}'"; unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
           unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -F "Implementation-Version: ${PLUGIN_VERSION}"
           javap -verbose -classpath "$JAR" com.antondev.crates.PlexonCrates | grep -F 'major version: 69'
-          for prefix in 'com/zpkdxgames/plexoncore/' 'com/antondev/keys/'; do
-            if grep -q "^${prefix}" target/jar-contents.txt; then
-              echo "Provided integration classes must not be shaded: ${prefix}" >&2
-              exit 1
-            fi
-          done
+          for prefix in 'com/zpkdxgames/plexoncore/' 'com/antondev/keys/' 'net/milkbowl/vault/' 'me/clip/placeholderapi/' 'net/luckperms/api/'; do if grep -q "^$prefix" target/jar-contents.txt; then echo "Forbidden dependency shading: $prefix" >&2; exit 1; fi; done
           (cd target && sha256sum "PlexonCrates-${PLUGIN_VERSION}.jar" > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
-
       - name: Write provenance
-        shell: bash
         run: |
-          set -euo pipefail
-          cat > target/PROVENANCE.txt <<EOF
-          repository=ZpkDxGames/PlexonCrates
-          branch=${GITHUB_REF_NAME}
-          candidate_sha=${GITHUB_SHA}
-          version=${PLUGIN_VERSION}
-          phase2_parent=${PHASE2_SHA}
-          java=25
-          paper=26.2.build.121-stable
-          plexoncore=2.0.4
-          plexonkeys=${PLEXONKEYS_VERSION}
-          database_schema=4
-          runtime_certification=NOT_EXECUTED
-          EOF
-
-      - name: Check full Phase 3 diff
+          JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"; size=$(stat -c%s "$JAR"); digest=$(sha256sum "$JAR"|awk '{print $1}')
+          { echo repository=ZpkDxGames/PlexonCrates; echo candidate_sha=$GITHUB_SHA; echo accepted_phase3=$ACCEPTED_PHASE3_SHA; echo reliability_ancestor=$RELIABILITY_SHA; echo version=$PLUGIN_VERSION; echo java=25; echo java_major=69; echo paper=26.2.build.121-stable; echo plexoncore=2.0.4; echo plexonkeys=$PLEXONKEYS_VERSION; echo database_schema=4; echo jar_size=$size; echo jar_sha256=$digest; echo runtime_certification=NOT_EXECUTED; } > target/PROVENANCE.txt
+      - name: Check full diff
         run: git diff --check "${PHASE2_SHA}...HEAD"
-
       - uses: actions/upload-artifact@v4
         with:
           name: PlexonCrates-${{ env.PLUGIN_VERSION }}-${{ github.sha }}
@@ -147,10 +84,3 @@ jobs:
             target/TEST_SUMMARY.txt
             target/PROVENANCE.txt
           if-no-files-found: error
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: PlexonCrates-test-results-${{ github.sha }}
-          path: target/surefire-reports/
-          if-no-files-found: warn

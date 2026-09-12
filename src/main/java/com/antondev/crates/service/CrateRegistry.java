@@ -94,6 +94,13 @@ public final class CrateRegistry {
         @Override public byte[] payload() { return payload.clone(); }
     }
 
+    public record PreparedExport(Path destination, String payload) {
+        public PreparedExport {
+            destination = java.util.Objects.requireNonNull(destination, "destination");
+            payload = java.util.Objects.requireNonNull(payload, "payload");
+        }
+    }
+
     public record PreparedDraftActivation(String crateId, Crate crate, byte[] payload, Path file) {
         public PreparedDraftActivation {
             crateId = java.util.Objects.requireNonNull(crateId, "crateId");
@@ -553,6 +560,12 @@ public void writePublishedMirror(PreparedPublication publication) throws IOExcep
         AtomicFiles.write(prepared.file(), new String(prepared.payload(), StandardCharsets.UTF_8));
     }
 
+    public PreparedDraftActivation prepareImportedActivation(
+            String sourceYaml, String rawNewId, String editor) throws Exception {
+        PreparedDraftImport prepared = prepareImportedDraft(sourceYaml, rawNewId, editor);
+        return new PreparedDraftActivation(prepared.crateId(), prepared.crate(), prepared.payload(), prepared.file());
+    }
+
     public Crate installImportedDraft(PreparedDraftImport prepared) {
         String id = prepared.crateId();
         if (crates.containsKey(id)) throw new IllegalArgumentException("Imported crate ID became occupied: " + id);
@@ -573,16 +586,26 @@ public void writePublishedMirror(PreparedPublication publication) throws IOExcep
         return installImportedDraft(prepared);
     }
 
-    public Path exportDefinition(String crateId, Path exportDirectory) throws Exception {
+    public PreparedExport prepareExport(String crateId, Path exportDirectory) {
         String id = normalize(crateId);
-        Path source = files.get(id);
-        if (source == null) throw new IllegalArgumentException("Unknown crate");
+        if (!files.containsKey(id)) throw new IllegalArgumentException("Unknown crate");
+        byte[] payload = payloads.get(id);
+        if (payload == null) throw new IllegalStateException("Crate payload is unavailable for export");
         Path root = exportDirectory.toAbsolutePath().normalize();
-        Files.createDirectories(root);
         Path destination = root.resolve(id + ".yml").normalize();
         if (!destination.getParent().equals(root)) throw new IllegalArgumentException("Invalid export path");
-        AtomicFiles.write(destination, serialized(id));
-        return destination;
+        return new PreparedExport(destination, new String(payload, StandardCharsets.UTF_8));
+    }
+
+    public Path writeExport(PreparedExport prepared) throws Exception {
+        Files.createDirectories(prepared.destination().getParent());
+        AtomicFiles.write(prepared.destination(), prepared.payload());
+        return prepared.destination();
+    }
+
+    /** Synchronous compatibility API retained for tests/offline tooling. */
+    public Path exportDefinition(String crateId, Path exportDirectory) throws Exception {
+        return writeExport(prepareExport(crateId, exportDirectory));
     }
 
     public void setDisplayName(String crateId, Component displayName, String editor) throws Exception {

@@ -124,26 +124,33 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 }));
     }
 
-    private void importCrate(CommandSender sender, String[] args) throws Exception {
+    private void importCrate(CommandSender sender, String[] args) {
         if (args.length < 3) { help(sender); return; }
         String fileName = args[1];
         if (!safeYamlName(fileName)) throw new IllegalArgumentException("Import filename must be a simple .yml name");
         Path root = plugin.getDataFolder().toPath().resolve("imports").toAbsolutePath().normalize();
         Path source = root.resolve(fileName).normalize();
         if (!source.getParent().equals(root)) throw new IllegalArgumentException("Import path leaves the imports directory");
-        Crate imported = plugin.crates().importAsDraft(source, args[2], sender.getName());
-        registerDraft(sender, imported);
-        if (sender instanceof Player player) plugin.menus().openEditor(player, imported);
-        else sender.sendMessage(Text.parse("<green>Imported crate as draft:</green> <white>" + imported.id() + "</white>"));
+        plugin.crateTransfers().importDraft(actorId(sender), sender.getName(), source, args[2])
+                .whenComplete((imported, error) -> runSync(() -> {
+                    if (error != null) plugin.configError(sender, asException(error));
+                    else if (sender instanceof Player player) {
+                        if (player.isOnline()) plugin.menus().openEditor(player, imported);
+                    } else sender.sendMessage(Text.parse("<green>Imported crate as draft:</green> <white>"
+                            + imported.id() + "</white>"));
+                }));
     }
 
-    private void exportCrate(CommandSender sender, String[] args) throws Exception {
+    private void exportCrate(CommandSender sender, String[] args) {
         Crate crate = crate(sender, args, 1);
         if (crate == null) return;
-        Path destination = plugin.crates().exportDefinition(crate.id(),
-                plugin.getDataFolder().toPath().resolve("exports"));
-        sender.sendMessage(Text.parse("<green>Exported</green> <white>" + crate.id()
-                + "</white> <green>to</green> <white>exports/" + destination.getFileName() + "</white><green>.</green>"));
+        plugin.crateTransfers().export(crate.id(), plugin.getDataFolder().toPath().resolve("exports"))
+                .whenComplete((destination, error) -> runSync(() -> {
+                    if (error != null) plugin.configError(sender, asException(error));
+                    else sender.sendMessage(Text.parse("<green>Exported</green> <white>" + crate.id()
+                            + "</white> <green>to</green> <white>exports/" + destination.getFileName()
+                            + "</white><green>.</green>"));
+                }));
     }
 
     private void publishCrate(CommandSender sender, String[] args) throws Exception {

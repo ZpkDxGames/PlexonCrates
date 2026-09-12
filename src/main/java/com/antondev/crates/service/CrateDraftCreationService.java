@@ -43,6 +43,11 @@ public final class CrateDraftCreationService {
         }
     }
 
+    CompletableFuture<Crate> activatePrepared(UUID actorId, String actorName,
+                                               CrateRegistry.PreparedDraftActivation candidate) {
+        return activate(actorId, actorName, candidate);
+    }
+
     private CompletableFuture<Crate> activate(UUID actorId, String actorName,
                                                CrateRegistry.PreparedDraftActivation candidate) {
         return plugin.draftSessions().openCrate(actorId, actorName, candidate.crateId(),

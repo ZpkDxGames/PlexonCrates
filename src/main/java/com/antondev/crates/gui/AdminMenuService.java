@@ -1080,17 +1080,23 @@ public final class AdminMenuService {
             Path root = plugin.getDataFolder().toPath().resolve("imports").toAbsolutePath().normalize();
             Path source = root.resolve(fileName).normalize();
             if (!source.getParent().equals(root)) throw new IllegalArgumentException("Import path leaves the imports folder");
-            Crate imported = plugin.crates().importAsDraft(source, parts[1].trim(), target.getName());
-            openCrateEditor(target, imported);
+            plugin.crateTransfers().importDraft(target.getUniqueId(), target.getName(), source, parts[1].trim())
+                    .whenComplete((imported, error) -> runFor(target.getUniqueId(), current -> {
+                        if (error != null) plugin.configError(current, asException(error));
+                        else openCrateEditor(current, imported);
+                    }));
         });
     }
 
-    private void exportCrate(Player player, String crateId, int page) throws Exception {
-        Path destination = plugin.crates().exportDefinition(crateId,
-                plugin.getDataFolder().toPath().resolve("exports"));
-        player.sendMessage(Text.parse("<green>Exported</green> <white>" + crateId
-                + "</white> <green>to</green> <white>exports/" + destination.getFileName() + "</white><green>.</green>"));
-        openCrates(player, page);
+    private void exportCrate(Player player, String crateId, int page) {
+        plugin.crateTransfers().export(crateId, plugin.getDataFolder().toPath().resolve("exports"))
+                .whenComplete((destination, error) -> runFor(player.getUniqueId(), current -> {
+                    if (error != null) plugin.configError(current, asException(error));
+                    else current.sendMessage(Text.parse("<green>Exported</green> <white>" + crateId
+                            + "</white> <green>to</green> <white>exports/" + destination.getFileName()
+                            + "</white><green>.</green>"));
+                    openCrates(current, page);
+                }));
     }
 
     private void duplicateKey(Player player) {

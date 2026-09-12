@@ -698,7 +698,7 @@ public final class AdminMenuService {
             case "reward-order" -> editRewardOrder(player);
             case "clear" -> { plugin.editSessions().reward(player).clearItems(); openRewardBuilder(player); }
             case "location" -> location(player, action.value(), event.isShiftClick() && event.isRightClick());
-            case "validate" -> plugin.validateFor(player);
+            case "validate" -> plugin.requestValidation(player);
             case "reload" -> plugin.requestReload(player, () -> { if (player.isOnline()) openSystem(player); });
             case "backup" -> plugin.backupFor(player);
             case "diagnose" -> plugin.diagnoseFor(player);

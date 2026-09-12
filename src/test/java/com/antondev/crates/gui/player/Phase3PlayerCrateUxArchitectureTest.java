@@ -41,8 +41,8 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertTrue(router.contains("class CrateMenuEventRouter implements Listener"));
         assertTrue(router.contains("player.click(event)"));
         assertTrue(router.contains("menus.click(event)"));
-        assertTrue(router.contains("simulation.click(event)"));
-        assertTrue(router.contains("simulation.drag(event)"));
+        assertTrue(router.contains("simulation.routeClick(event)"));
+        assertTrue(router.contains("simulation.routeDrag(event)"));
         assertTrue(router.contains("playerDrag(InventoryDragEvent event)"));
         assertTrue(router.contains("plugin.requestReload(player)"));
         assertTrue(main.contains("public void requestReload(CommandSender sender)"));

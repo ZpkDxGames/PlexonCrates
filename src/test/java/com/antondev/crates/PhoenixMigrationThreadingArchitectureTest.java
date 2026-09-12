@@ -66,13 +66,37 @@ class PhoenixMigrationThreadingArchitectureTest {
                 "public CompletableFuture<ImportResult> importToDraftsAsync(",
                 "private AsyncImportPreparation prepareAsyncImport(");
         assertTrue(coordinator.contains("plugin.io().submit(() -> prepareAsyncImport(planningState))"));
-        assertTrue(coordinator.contains("thenCompose(prepared -> primary("));
+        assertTrue(coordinator.contains("primary(() -> prepareKeys(prepared, actor))"));
+        assertTrue(coordinator.contains("plugin.io().submit(() -> writePreparedKeys(preparedKeys))"));
+        assertTrue(coordinator.contains("primary(() -> installPreparedKeys(preparedKeys))"));
         assertTrue(coordinator.contains("plugin.io().submit(() -> buildDraftPayloads(keyed))"));
         assertTrue(coordinator.contains("primary(() -> prepareDraftBatch(payloads, actor))"));
         assertTrue(coordinator.contains("plugin.io().submit(() -> writeDraftBatch(batch))"));
         assertTrue(coordinator.contains("primary(() -> installDraftBatch(batch))"));
         assertTrue(coordinator.contains("plugin.io().submit(() -> persistAsyncImport(installed, actorId, actor))"));
         assertTrue(coordinator.contains("primary(() -> activatePersistedImport(persisted))"));
+    }
+
+    @Test
+    void keyPreparationAndActivationStayPrimaryWhileMirrorWriteIsWorkerSafe() throws Exception {
+        String source = Files.readString(SERVICE);
+        String prepare = section(source, "private PreparedKeyImport prepareKeys(",
+                "private PreparedKeyImport writePreparedKeys(");
+        String write = section(source, "private PreparedKeyImport writePreparedKeys(",
+                "private KeyedImport installPreparedKeys(");
+        String install = section(source, "private KeyedImport installPreparedKeys(",
+                "private DraftPayloadBatch buildDraftPayloads(");
+        assertTrue(prepare.contains("Bukkit.isPrimaryThread()"));
+        assertTrue(prepare.contains("beginPreparedMutation()"));
+        assertTrue(prepare.contains("prepareBindExternal("));
+        assertTrue(prepare.contains("prepareCreateCaptured("));
+        assertFalse(prepare.contains("Files."));
+        assertTrue(write.contains("writePreparedMutation(prepared.mutation())"));
+        assertFalse(write.contains("Bukkit."));
+        assertFalse(write.contains("installPreparedMutation("));
+        assertTrue(install.contains("Bukkit.isPrimaryThread()"));
+        assertTrue(install.contains("installPreparedMutation(prepared.mutation())"));
+        assertFalse(install.contains("Files."));
     }
 
     @Test

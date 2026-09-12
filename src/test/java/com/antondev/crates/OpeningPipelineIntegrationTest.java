@@ -494,6 +494,7 @@ class OpeningPipelineIntegrationTest {
                 org.bukkit.event.inventory.ClickType.LEFT,
                 org.bukkit.event.inventory.InventoryAction.PICKUP_ALL);
         plugin.menus().click(click);
+        server.getScheduler().performTicks(1);
         assertTrue(player.getOpenInventory().getTopInventory().getHolder()
                 instanceof com.antondev.crates.gui.MenuHolder confirmation
                 && confirmation.kind() == com.antondev.crates.gui.MenuHolder.Kind.SELECTIVE_CONFIRM

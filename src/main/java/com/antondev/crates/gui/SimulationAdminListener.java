@@ -53,6 +53,7 @@ public final class SimulationAdminListener implements Listener {
     private final ExactItemInspector exactItems = new ExactItemInspector();
     private final OpeningAnimationProfileStore animationProfiles;
     private final OpeningAnimationProfileEditor animationEditor;
+    private final OpeningProfilePresentationService profilePresentation;
     private final NamespacedKey marker;
 
     public SimulationAdminListener(PlexonCrates plugin, CrateSimulationService simulations) {
@@ -60,6 +61,7 @@ public final class SimulationAdminListener implements Listener {
         this.simulations = Objects.requireNonNull(simulations, "simulations");
         this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);
         this.animationEditor = new OpeningAnimationProfileEditor(plugin, animationProfiles, this::openHub);
+        this.profilePresentation = OpeningProfilePresentationService.shared(plugin);
         this.marker = new NamespacedKey(plugin, "phase2_simulation");
     }
 
@@ -254,12 +256,11 @@ public final class SimulationAdminListener implements Listener {
         };
         player.sendActionBar(Text.parse("<aqua>Non-granting animation preview:</aqua> <white>"
                 + profile.style() + "</white>"));
-        switch (profile.style()) {
-            case ROULETTE, SPIN, CASCADE -> plugin.menus().animate(player, crate, reward, returnIfStillPreviewing);
-            case CHARGE_REVEAL, SPIRAL_BURST, ORB_REVEAL, FIREWORK_STYLE ->
-                    plugin.menus().reveal(player, crate, reward, returnIfStillPreviewing);
-            case INSTANT -> showDry(player, source.snapshot, reward.id(), stableSeed(source.snapshot, 17));
+        if (!profile.animated()) {
+            showDry(player, source.snapshot, reward.id(), stableSeed(source.snapshot, 17));
+            return;
         }
+        profilePresentation.present(player, crate, reward, profile, returnIfStillPreviewing);
     }
 
     private void openExactItemAudit(Player player, SimulationHolder source) {

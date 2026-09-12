@@ -64,6 +64,12 @@ final class MenuInteraction {
         InventoryAction getAction() { return action; }
         ItemStack getCursor() { return copy(cursor); }
         ItemStack getCurrentItem() { return copy(currentItem); }
+
+        /**
+         * Legacy-shaped accessor for one old reward-pool fallback. This is not a
+         * Bukkit InventoryView; it exposes only the item captured during the event.
+         */
+        CapturedView getView() { return new CapturedView(currentItem); }
     }
 
     static final class Drag {
@@ -81,6 +87,27 @@ final class MenuInteraction {
 
         Set<Integer> getRawSlots() { return rawSlots; }
         ItemStack getOldCursor() { return copy(oldCursor); }
+    }
+
+    static final class CapturedView {
+        private final ItemStack currentItem;
+
+        private CapturedView(ItemStack currentItem) {
+            this.currentItem = copy(currentItem);
+        }
+
+        CapturedInventory getBottomInventory() { return new CapturedInventory(currentItem); }
+        int convertSlot(int rawSlot) { return rawSlot; }
+    }
+
+    static final class CapturedInventory {
+        private final ItemStack currentItem;
+
+        private CapturedInventory(ItemStack currentItem) {
+            this.currentItem = copy(currentItem);
+        }
+
+        ItemStack getItem(int ignoredSlot) { return copy(currentItem); }
     }
 
     private static ItemStack copy(ItemStack item) {

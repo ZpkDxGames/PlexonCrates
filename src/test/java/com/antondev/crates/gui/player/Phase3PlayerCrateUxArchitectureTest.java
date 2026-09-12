@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 class Phase3PlayerCrateUxArchitectureTest {
     private static final Path UX = Path.of("src/main/java/com/antondev/crates/gui/player/PlayerCrateMenuService.java");
     private static final Path ROUTER = Path.of("src/main/java/com/antondev/crates/gui/player/PlayerCrateCommandRouter.java");
+    private static final Path EVENT_ROUTER = Path.of("src/main/java/com/antondev/crates/gui/CrateMenuEventRouter.java");
     private static final Path HOLDER = Path.of("src/main/java/com/antondev/crates/gui/MenuHolder.java");
     private static final Path SESSION = Path.of("src/main/java/com/antondev/crates/gui/GuiSessionService.java");
     private static final Path MAIN = Path.of("src/main/java/com/antondev/crates/PlexonCrates.java");
@@ -31,6 +32,19 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertTrue(router.contains("menus.openPreview(player, crate"));
         assertFalse(router.contains("import org.bukkit.event.inventory.InventoryOpenEvent"));
         assertFalse(router.contains("redirectLegacyPlayerSurface"));
+    }
+
+    @Test void inventoryEventsHaveOneRegisteredRoutingAuthority() throws IOException {
+        String router = Files.readString(EVENT_ROUTER);
+        String commandRouter = Files.readString(ROUTER);
+        String main = Files.readString(MAIN);
+        assertTrue(router.contains("class CrateMenuEventRouter implements Listener"));
+        assertTrue(router.contains("player.click(event)"));
+        assertTrue(router.contains("menus.click(event)"));
+        assertTrue(router.contains("playerDrag(InventoryDragEvent event)"));
+        assertFalse(commandRouter.contains("@EventHandler(priority = EventPriority.HIGHEST)"));
+        assertFalse(main.contains("registerEvents(menus, this)"));
+        assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(menus, playerRouter), this)"));
     }
 
     @Test void normalPlayerUxContainsNoHiddenRightClickConsumeSemantic() throws IOException {
@@ -181,18 +195,21 @@ class Phase3PlayerCrateUxArchitectureTest {
     }
 
     @Test void playerUxReusesExistingGuiSessionAuthority() throws IOException {
-    String session = Files.readString(SESSION);
-    String holder = Files.readString(HOLDER);
-    String main = Files.readString(MAIN);
-    assertTrue(holder.contains("PLAYER_HALL"));
-    assertTrue(session.contains("ConcurrentHashMap<UUID, Active> active"));
-    assertFalse(session.contains("registerEvents"));
-    assertFalse(session.contains("PlayerCrateCommandRouter"));
-    assertTrue(main.contains("registerEvents(new PlayerCrateCommandRouter(this), this)"));
-    assertTrue(main.contains("registerEvents(new SimulationAdminListener(this, simulations), this)"));
-    assertTrue(main.contains("if (simulations != null) simulations.close()"));
-    assertFalse(Files.readString(UX).contains("new GuiSessionService"));
-}
+        String session = Files.readString(SESSION);
+        String holder = Files.readString(HOLDER);
+        String main = Files.readString(MAIN);
+        assertTrue(holder.contains("PLAYER_HALL"));
+        assertTrue(session.contains("ConcurrentHashMap<UUID, Active> active"));
+        assertFalse(session.contains("registerEvents"));
+        assertFalse(session.contains("PlayerCrateCommandRouter"));
+        assertTrue(main.contains("PlayerCrateCommandRouter playerRouter = new PlayerCrateCommandRouter(this)"));
+        assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(menus, playerRouter), this)"));
+        assertTrue(main.contains("registerEvents(playerRouter, this)"));
+        assertTrue(main.contains("registerEvents(new SimulationAdminListener(this, simulations), this)"));
+        assertTrue(main.contains("if (simulations != null) simulations.close()"));
+        assertTrue(main.contains("menus.stop()"));
+        assertFalse(Files.readString(UX).contains("new GuiSessionService"));
+    }
 
     @Test void physicalBlockOpeningAuthorityRemainsSeparateAndUntouchedByPlayerHall() throws IOException {
         String source = Files.readString(PHYSICAL);

@@ -1,0 +1,64 @@
+name: One-shot Test Lab Profile Renderer Patch
+
+on:
+  push:
+    branches: [revamp/6.0.0-gui-animation-overhaul]
+    paths:
+      - '.agent/apply-testlab-profile-renderer'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v5
+        with:
+          ref: revamp/6.0.0-gui-animation-overhaul
+          fetch-depth: 0
+
+      - name: Patch Test Lab to shared profile renderer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/main/java/com/antondev/crates/gui/SimulationAdminListener.java')
+          source = path.read_text()
+          replacements = [
+              (
+                  '''    private final OpeningAnimationProfileStore animationProfiles;\n    private final OpeningAnimationProfileEditor animationEditor;\n    private final NamespacedKey marker;\n''',
+                  '''    private final OpeningAnimationProfileStore animationProfiles;\n    private final OpeningAnimationProfileEditor animationEditor;\n    private final OpeningProfilePresentationService profilePresentation;\n    private final NamespacedKey marker;\n'''
+              ),
+              (
+                  '''        this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);\n        this.animationEditor = new OpeningAnimationProfileEditor(plugin, animationProfiles, this::openHub);\n        this.marker = new NamespacedKey(plugin, "phase2_simulation");\n''',
+                  '''        this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);\n        this.animationEditor = new OpeningAnimationProfileEditor(plugin, animationProfiles, this::openHub);\n        this.profilePresentation = OpeningProfilePresentationService.shared(plugin);\n        this.marker = new NamespacedKey(plugin, "phase2_simulation");\n'''
+              ),
+              (
+                  '''        switch (profile.style()) {\n            case ROULETTE, SPIN, CASCADE -> plugin.menus().animate(player, crate, reward, returnIfStillPreviewing);\n            case CHARGE_REVEAL, SPIRAL_BURST, ORB_REVEAL, FIREWORK_STYLE ->\n                    plugin.menus().reveal(player, crate, reward, returnIfStillPreviewing);\n            case INSTANT -> showDry(player, source.snapshot, reward.id(), stableSeed(source.snapshot, 17));\n        }\n''',
+                  '''        if (!profile.animated()) {\n            showDry(player, source.snapshot, reward.id(), stableSeed(source.snapshot, 17));\n            return;\n        }\n        profilePresentation.present(player, crate, reward, profile, returnIfStillPreviewing);\n'''
+              )
+          ]
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one replacement target, found {count}: {old[:100]!r}')
+              source = source.replace(old, new, 1)
+          path.write_text(source)
+          PY
+          git diff --check
+          git diff -- src/main/java/com/antondev/crates/gui/SimulationAdminListener.java
+
+      - name: Commit focused source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Tonim'
+          git config user.email '99552287+ZpkDxGames@users.noreply.github.com'
+          git add src/main/java/com/antondev/crates/gui/SimulationAdminListener.java
+          test -n "$(git status --porcelain)"
+          git commit -m 'Use shared profile renderer in Test Lab preview'
+          git push origin HEAD:revamp/6.0.0-gui-animation-overhaul

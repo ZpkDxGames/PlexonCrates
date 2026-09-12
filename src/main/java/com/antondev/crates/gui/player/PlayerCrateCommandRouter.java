@@ -43,7 +43,8 @@ public final class PlayerCrateCommandRouter implements Listener {
         if (parts.length == 1) {
             if (!canPreview(player)) return;
             event.setCancelled(true);
-            openHall(player, 0);
+            menus.openHall(player, 0);
+            keyMenus.decorateHall(player);
             return;
         }
 
@@ -88,7 +89,8 @@ public final class PlayerCrateCommandRouter implements Listener {
             if (!canPreview(player)) return;
             if (parts.length == 2) {
                 event.setCancelled(true);
-                openHall(player, 0);
+                menus.openHall(player, 0);
+                keyMenus.decorateHall(player);
                 return;
             }
             if (parts.length == 3) {
@@ -139,11 +141,6 @@ public final class PlayerCrateCommandRouter implements Listener {
     /** Routed by the single registered crate inventory listener. */
     public void quit(PlayerQuitEvent event) {
         menus.quit(event);
-    }
-
-    private void openHall(Player player, int page) {
-        menus.openHall(player, page);
-        keyMenus.decorateHall(player);
     }
 
     private static boolean canPreview(Player player) {

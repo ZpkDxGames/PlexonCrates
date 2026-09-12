@@ -27,6 +27,7 @@ import org.bukkit.scheduler.BukkitTask;
  */
 public final class CrateParticleCoordinator {
     private final PlexonCrates plugin;
+    private final IdleAnimationProfileStore profiles;
     private BukkitTask task;
     private int cursor;
     private long elapsedTicks;
@@ -38,6 +39,7 @@ public final class CrateParticleCoordinator {
 
     public CrateParticleCoordinator(PlexonCrates plugin) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
+        this.profiles = IdleAnimationProfileStore.shared(plugin);
     }
 
     /** Rebuilds scheduling from the current validated settings and linked-location state. */
@@ -47,8 +49,6 @@ public final class CrateParticleCoordinator {
         elapsedTicks = 0L;
         particleFailureLogged = false;
         if (!plugin.isEnabled() || !plugin.settings().particlesEnabled()
-                || plugin.settings().particleCount() <= 0
-                || !plugin.settings().idleParticleProfile().enabled()
                 || plugin.locations().size() == 0) return;
         long interval = plugin.settings().particleInterval();
         task = plugin.getServer().getScheduler().runTaskTimer(plugin, this::tick, interval, interval);
@@ -80,17 +80,13 @@ public final class CrateParticleCoordinator {
             stopTask();
             return;
         }
-        IdleAnimationProfile profile = plugin.settings().idleParticleProfile();
-        if (!profile.enabled()) {
-            stopTask();
-            return;
-        }
+        IdleAnimationProfile legacy = plugin.settings().idleParticleProfile();
         long interval = Math.max(1L, plugin.settings().particleInterval());
         elapsedTicks += interval;
         if (plugin.getServer().getOnlinePlayers().isEmpty()) return;
 
-        double rangeSquared = profile.receiverRange() * profile.receiverRange();
-        int chunkRadius = Math.max(1, (int) Math.ceil(profile.receiverRange() / 16.0));
+        double maximumRange = profiles.maximumReceiverRange(legacy);
+        int chunkRadius = Math.max(1, (int) Math.ceil(maximumRange / 16.0));
         Map<String, LocationStore.Link> candidates = new LinkedHashMap<>();
         Map<UUID, List<Player>> viewersByWorld = new HashMap<>();
         for (Player player : plugin.getServer().getOnlinePlayers()) {
@@ -121,12 +117,15 @@ public final class CrateParticleCoordinator {
             if (world == null || !world.isChunkLoaded(position.x() >> 4, position.z() >> 4)) continue;
             Crate crate = plugin.runtime().find(link.crateId()).orElse(null);
             if (crate == null || !crate.enabled()) continue;
+            IdleAnimationProfile profile = profiles.resolve(crate.id(), legacy);
+            if (!profile.enabled()) continue;
             Location origin = position.center(0.08);
             List<Player> viewers = viewersByWorld.get(world.getUID());
             if (origin == null || viewers == null || viewers.isEmpty()) continue;
 
             List<IdleAnimationMath.Offset> offsets = IdleAnimationMath.sample(profile, elapsedTicks);
             if (offsets.isEmpty()) continue;
+            double rangeSquared = profile.receiverRange() * profile.receiverRange();
             int crateRemaining = Math.min(profile.maxPerCratePerTick(), globalRemaining);
             boolean emittedForCrate = false;
             for (Player viewer : viewers) {

@@ -30,7 +30,7 @@ final class PhoenixMigrationCommand {
                 case "plan" -> plan(plugin, service, sender);
                 case "validate" -> validate(plugin, service, sender);
                 case "report" -> report(plugin, service, sender);
-                case "import" -> importData(service, sender, args);
+                case "import" -> importData(plugin, service, sender, args);
                 default -> help(sender);
             }
         } catch (Exception error) {
@@ -124,22 +124,29 @@ final class PhoenixMigrationCommand {
         }
     }
 
-    private static void importData(PhoenixMigrationService service, CommandSender sender, String[] args) throws Exception {
+    private static void importData(PlexonCrates plugin, PhoenixMigrationService service,
+                                   CommandSender sender, String[] args) {
         if (args.length < 4 || !args[3].equalsIgnoreCase("confirm")) {
             sender.sendMessage(Text.parse("<yellow>This step creates PlexonCrates data and aggregate history.</yellow>"));
             sender.sendMessage(Text.parse("<gray>It never modifies Phoenix source files, but it must be explicitly confirmed:</gray>"));
             sender.sendMessage(Text.parse("<white>/pcrates migrate phoenix import confirm</white>"));
             return;
         }
-        PhoenixMigrationService.ScanResult scan = service.scan();
-        PhoenixMigrationService.PlanResult plan = service.plan(scan);
-        if (!plan.importEnabled()) {
-            sender.sendMessage(Text.parse("<red>Import is blocked. Run /pcrates migrate phoenix plan first.</red>"));
-            for (String warning : plan.warnings()) sender.sendMessage(Text.parse("<red>•</red> <white>" + escape(warning) + "</white>"));
-            return;
-        }
         UUID actorId = sender instanceof Player player ? player.getUniqueId() : null;
-        PhoenixMigrationService.ImportResult result = service.importToDrafts(plan, actorId, sender.getName());
+        String actorName = sender.getName();
+        PhoenixMigrationService.PlanningState state = service.capturePlanningState();
+        sender.sendMessage(Text.parse("<aqua>Creating Phoenix backup and importing drafts off-thread…</aqua>"));
+        service.importToDraftsAsync(state, actorId, actorName).whenComplete((result, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (sender instanceof Player player && !player.isOnline()) return;
+                if (error != null) fail(plugin, sender, error);
+                else renderImport(sender, result);
+            });
+        });
+    }
+
+    private static void renderImport(CommandSender sender, PhoenixMigrationService.ImportResult result) {
         sender.sendMessage(Text.parse("<gradient:#FF9F2E:#FFF0B2><bold>Phoenix Import Complete</bold></gradient>"));
         sender.sendMessage(Text.parse("<gray>Crate drafts:</gray> <white>" + result.importedCrates()
                 + " imported</white> <dark_gray>•</dark_gray> <white>" + result.skippedCrates() + " already present</white>"));

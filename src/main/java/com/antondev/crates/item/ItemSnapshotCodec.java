@@ -4,7 +4,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
@@ -94,7 +93,7 @@ public final class ItemSnapshotCodec {
         try {
             bytes = captured.serializeAsBytes();
             validatePayloadSize(bytes);
-            verifyCurrentServerRoundTrip(bytes);
+            verifyCurrentServerRoundTrip(bytes, captured);
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Paper could not serialize and restore this exact item", error);
         }
@@ -164,14 +163,19 @@ public final class ItemSnapshotCodec {
         }
     }
 
-    private static void verifyCurrentServerRoundTrip(byte[] bytes) {
+    /**
+     * Proves that Paper can decode the captured bytes back into the same current-server item.
+     * The original serialized bytes remain canonical even if a serializer emits a different-but-equivalent
+     * byte representation when called again (for example after component normalization/data fixing).
+     */
+    private static void verifyCurrentServerRoundTrip(byte[] bytes, ItemStack captured) {
         ItemStack restored = ItemStack.deserializeBytes(bytes.clone());
         if (restored == null || restored.getType().isAir()) {
             throw new IllegalArgumentException("Paper decoded the exact item to an empty item");
         }
-        byte[] roundTrip = restored.serializeAsBytes();
-        if (!Arrays.equals(bytes, roundTrip)) {
-            throw new IllegalArgumentException("Paper native item bytes are not stable on this server build");
+        restored.setAmount(1);
+        if (!restored.isSimilar(captured)) {
+            throw new IllegalArgumentException("Paper native item round-trip changed the captured item semantics");
         }
     }
 

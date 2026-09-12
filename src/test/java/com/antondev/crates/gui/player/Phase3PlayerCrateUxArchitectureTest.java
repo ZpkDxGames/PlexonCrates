@@ -64,6 +64,27 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertFalse(source.contains("runTaskTimerAsynchronously"));
     }
 
+    @Test void acceptedPlayerClicksDeferActionDispatchUntilAfterInventoryEvent() throws IOException {
+        String method = section(Files.readString(UX), "public void click", "private void hallClick");
+        assertTrue(method.contains("event.setCancelled(true)"));
+        assertTrue(method.contains("later(() ->"));
+        assertTrue(method.contains("plugin.guiSessions().validate(player, holder"));
+        assertTrue(method.contains("ViewState state = views.get(sessionId)"));
+    }
+
+    @Test void playerMenuSessionOwnershipIsExplicitAndClearedOnCloseAndQuit() throws IOException {
+        String source = Files.readString(UX);
+        assertTrue(source.contains("Map<UUID, UUID> owners = new ConcurrentHashMap<>()"));
+        String open = section(source, "private void open(Player player", "private static void bind");
+        assertTrue(open.contains("owners.put(holder.sessionId(), player.getUniqueId())"));
+        String close = section(source, "public void close(InventoryCloseEvent", "public void quit(PlayerQuitEvent");
+        assertTrue(close.contains("owners.remove(holder.sessionId())"));
+        String quit = section(source, "public void quit(PlayerQuitEvent", "private record ViewState");
+        assertTrue(quit.contains("owners.entrySet().removeIf"));
+        assertTrue(quit.contains("views.remove(sessionId)"));
+        assertTrue(quit.contains("submitted.remove(sessionId)"));
+    }
+
     @Test void openOneDelegatesToExistingOpeningAuthorityWithSingleSubmitGuard() throws IOException {
         String method = section(Files.readString(UX), "private void submitRandom", "private void submitSelective");
         assertTrue(method.contains("submitted.add(holder.sessionId())"));

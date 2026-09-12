@@ -26,6 +26,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -68,32 +69,56 @@ public final class SimulationAdminListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
-    public void click(InventoryClickEvent event) {
+    /**
+     * Called only by {@link CrateMenuEventRouter}. The Bukkit event is cancelled and reduced
+     * to immutable identifiers immediately; every inventory transition runs on the next tick
+     * after the original event has returned.
+     */
+    public boolean routeClick(InventoryClickEvent event) {
         Inventory top = event.getView().getTopInventory();
         if (top.getHolder() instanceof MenuHolder holder && holder.kind() == MenuHolder.Kind.EDITOR) {
-            if (event.getClickedInventory() != top || !marked(event.getCurrentItem())) return;
+            if (event.getClickedInventory() != top || !marked(event.getCurrentItem())) return false;
             event.setCancelled(true);
-            if (event.getWhoClicked() instanceof Player player
-                    && player.hasPermission("plexoncrates.admin.simulate")) {
-                openHub(player, holder.crateId(), Mode.CONFIGURED);
-            }
-            return;
+            if (!(event.getWhoClicked() instanceof Player player)
+                    || !player.hasPermission("plexoncrates.admin.simulate")) return true;
+            UUID playerId = player.getUniqueId();
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player target = Bukkit.getPlayer(playerId);
+                if (target == null || !target.isOnline() || !currentHolder(target, holder)) return;
+                if (plugin.guiSessions().validate(target, holder, plugin.draftSessions())
+                        != GuiSessionService.Validation.CURRENT) return;
+                openHub(target, holder.crateId(), Mode.CONFIGURED);
+            });
+            return true;
         }
-        if (!(top.getHolder() instanceof SimulationHolder holder)) return;
+        if (!(top.getHolder() instanceof SimulationHolder holder)) return false;
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)
                 || !holder.playerId.equals(player.getUniqueId())
-                || event.getClickedInventory() != top) return;
-        route(player, holder, event.getRawSlot());
+                || event.getClickedInventory() != top) return true;
+        UUID playerId = player.getUniqueId();
+        int slot = event.getRawSlot();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player target = Bukkit.getPlayer(playerId);
+            if (target == null || !target.isOnline() || !currentHolder(target, holder)) return;
+            route(target, holder, slot);
+        });
+        return true;
+    }
+
+    /** Test Lab inventories never accept dragged items. */
+    public boolean routeDrag(InventoryDragEvent event) {
+        if (!(event.getView().getTopInventory().getHolder() instanceof SimulationHolder)) return false;
+        event.setCancelled(true);
+        return true;
     }
 
     private void route(Player player, SimulationHolder holder, int slot) {
         if (holder.view == View.HUB) {
             if (slot == 10) runDry(player, holder.snapshot);
-            else if (slot == 12) runSimulation(player, holder.snapshot, 1_000);
-            else if (slot == 13) runSimulation(player, holder.snapshot, CrateSimulationService.DEFAULT_SAMPLES);
-            else if (slot == 14) runSimulation(player, holder.snapshot, CrateSimulationService.MAX_SAMPLES);
+            else if (slot == 12) runSimulation(player, holder, 1_000);
+            else if (slot == 13) runSimulation(player, holder, CrateSimulationService.DEFAULT_SAMPLES);
+            else if (slot == 14) runSimulation(player, holder, CrateSimulationService.MAX_SAMPLES);
             else if (slot == 16) openHub(player, holder.crateId,
                     holder.snapshot.mode() == Mode.CONFIGURED ? Mode.PLAYER_CONTEXT : Mode.CONFIGURED);
             else if (slot == 22) backToEditor(player, holder.crateId);
@@ -201,24 +226,27 @@ public final class SimulationAdminListener implements Listener {
         player.openInventory(inventory);
     }
 
-    private void runSimulation(Player player, Snapshot snapshot, int samples) {
+    private void runSimulation(Player player, SimulationHolder holder, int samples) {
+        Snapshot snapshot = holder.snapshot;
         if (!current(player, snapshot)) {
             stale(player, snapshot);
             return;
         }
         long seed = stableSeed(snapshot, samples);
+        UUID playerId = player.getUniqueId();
         player.sendActionBar(Text.parse("<aqua>Running " + samples + " analytical rolls off-thread…</aqua>"));
         simulations.simulateAsync(snapshot, samples, seed).whenComplete((report, error) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!player.isOnline()) return;
+                Player target = Bukkit.getPlayer(playerId);
+                if (target == null || !target.isOnline() || !currentHolder(target, holder)) return;
                 if (error != null) {
-                    player.sendActionBar(Text.parse("<red>Simulation failed:</red> <gray>" + safe(rootMessage(error)) + "</gray>"));
-                    openHub(player, snapshot.crateId(), snapshot.mode());
-                } else if (!current(player, report.snapshot())) {
-                    stale(player, report.snapshot());
+                    target.sendActionBar(Text.parse("<red>Simulation failed:</red> <gray>" + safe(rootMessage(error)) + "</gray>"));
+                    openHub(target, snapshot.crateId(), snapshot.mode());
+                } else if (!current(target, report.snapshot())) {
+                    stale(target, report.snapshot());
                 } else {
-                    openReport(player, report, 0);
+                    openReport(target, report, 0);
                 }
             });
         });
@@ -288,6 +316,11 @@ public final class SimulationAdminListener implements Listener {
 
     private boolean current(Player player, Snapshot snapshot) {
         return CrateSimulationService.isCurrent(snapshot, currentRevision(player, snapshot.crateId()));
+    }
+
+    private static boolean currentHolder(Player player, InventoryHolder expected) {
+        Inventory top = player.getOpenInventory().getTopInventory();
+        return top != null && top.getHolder() == expected && top == expected.getInventory();
     }
 
     private void stale(Player player, Snapshot snapshot) {

@@ -718,7 +718,6 @@ public final class AdminMenuService {
 
     private void createFor(MenuHolder.Kind kind, Player player) {
         if (kind == MenuHolder.Kind.CRATE_LIST) {
-            player.closeInventory();
             plugin.draftCreation().createQuick(player.getUniqueId(), player.getName())
                     .whenComplete((created, error) -> runFor(player.getUniqueId(), target -> {
                         if (error != null) plugin.configError(target, asException(error));

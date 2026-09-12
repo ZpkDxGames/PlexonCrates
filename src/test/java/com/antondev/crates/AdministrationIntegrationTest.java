@@ -230,6 +230,11 @@ class AdministrationIntegrationTest {
         player.simulateInventoryClick(player.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("crate-list.create"));
 
+        // New drafts are durable-first: keep the crate list visible while SQLite establishes
+        // the writable draft, then transition to the editor on the primary thread.
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
+
         MenuHolder holder = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
         assertEquals(MenuHolder.Kind.EDITOR, holder.kind());
         assertTrue(holder.crateId().matches("crate_[0-9a-f]{8}"));

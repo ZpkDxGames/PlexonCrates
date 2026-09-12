@@ -373,7 +373,7 @@ public void writePublishedMirror(PreparedPublication publication) throws IOExcep
             throw new IllegalArgumentException("Draft snapshot targets a different crate ID");
         }
         String serialized = yaml.saveToString();
-        AtomicFiles.write(file, serialized);
+        persistEditableMirror(file, serialized);
         install(id, file, restored);
         payloads.put(id, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(restored, changeType(previous, restored));

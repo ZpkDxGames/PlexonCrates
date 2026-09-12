@@ -3,7 +3,10 @@
 # alter limits, grant items, or write opening statistics.
 config-version: 1
 
-global-profile: default
+# Migration-safe default. Existing crates retain their accepted 5.x animation
+# (INSTANT/ROULETTE/REVEAL/SUMMARY) until an administrator deliberately chooses
+# a named global profile or per-crate override.
+global-profile: legacy
 
 profiles:
   default:
@@ -41,4 +44,6 @@ profiles:
     summary-on-finish: false
 
 # Per-crate assignments are optional. A crate absent here inherits global-profile.
+# The reserved value "legacy" may also be used explicitly to keep one crate on
+# its existing crate.animation presentation while another global profile is active.
 crate-profiles: {}

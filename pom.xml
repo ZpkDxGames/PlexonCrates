@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.antondev</groupId><artifactId>PlexonCrates</artifactId><version>5.0.0</version>
+  <groupId>com.antondev</groupId><artifactId>PlexonCrates</artifactId><version>5.1.0-rc.1</version>
   <name>PlexonCrates</name><description>Exact-item, percentage-first crates for Paper with native Plexon integrations.</description><url>https://github.com/ZpkDxGames/PlexonCrates</url>
   <developers><developer><id>ZpkDxGames</id><name>Tonim</name><url>https://github.com/ZpkDxGames</url><roles><role>Creator</role><role>Maintainer</role></roles></developer></developers>
   <licenses><license><name>MIT License</name><url>https://opensource.org/license/mit</url><distribution>repo</distribution></license></licenses>

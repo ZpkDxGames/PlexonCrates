@@ -1,0 +1,51 @@
+name: One-shot Stable Gate Finalize
+
+on:
+  push:
+    branches: [revamp/6.0.0-gui-animation-overhaul]
+    paths:
+      - '.agent/apply-stable-gate-finalize'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: revamp/6.0.0-gui-animation-overhaul
+          fetch-depth: 0
+      - name: Finalize 6.0 stable gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/release.yml')
+          s = p.read_text()
+          old = 'pom.xml|"releases/${PLUGIN_VERSION}.md"|"releases/${PLUGIN_VERSION}.runtime-certification.env"|docs/REVAMP_5_1_IMPLEMENTATION_STATUS.md)'
+          new = 'pom.xml|"releases/${PLUGIN_VERSION}.md"|"releases/${PLUGIN_VERSION}.runtime-certification.env"|docs/REVAMP_6_0_IMPLEMENTATION_STATUS.md|.github/workflows/release.yml)'
+          if s.count(old) != 1: raise SystemExit('stable whitelist anchor mismatch')
+          s = s.replace(old, new, 1)
+          old = '            plugin.yml \\\n            com/antondev/crates/PlexonCrates.class \\'
+          new = '            plugin.yml \\\n            animations.yml \\\n            idle-animations.yml \\\n            com/antondev/crates/PlexonCrates.class \\'
+          if s.count(old) != 1: raise SystemExit('stable resource anchor mismatch')
+          s = s.replace(old, new, 1)
+          old = '            com/antondev/crates/service/OpeningService.class \\\n            com/antondev/crates/service/ClaimService.class \\'
+          new = '            com/antondev/crates/service/OpeningService.class \\\n            com/antondev/crates/gui/OpeningProfilePresentationService.class \\\n            com/antondev/crates/gui/OpeningAnimationCoordinator.class \\\n            com/antondev/crates/animation/CrateParticleCoordinator.class \\\n            com/antondev/crates/item/ExactItemInspector.class \\\n            com/antondev/crates/service/ClaimService.class \\'
+          if s.count(old) != 1: raise SystemExit('stable class anchor mismatch')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- .github/workflows/release.yml
+      - name: Commit stable gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Tonim'
+          git config user.email '99552287+ZpkDxGames@users.noreply.github.com'
+          git add .github/workflows/release.yml
+          git commit -m 'Harden PlexonCrates 6.0 stable promotion gate'
+          git push origin HEAD:revamp/6.0.0-gui-animation-overhaul

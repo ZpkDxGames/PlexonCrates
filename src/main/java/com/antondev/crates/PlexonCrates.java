@@ -22,6 +22,7 @@ import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.database.DefinitionRepository;
 import com.antondev.crates.database.LegacyMigration;
 import com.antondev.crates.service.CrateRegistry;
+import com.antondev.crates.service.CrateDraftCreationService;
 import com.antondev.crates.service.AsyncIoService;
 import com.antondev.crates.service.CrateSimulationService;
 import com.antondev.crates.service.ClaimService;
@@ -75,6 +76,7 @@ public class PlexonCrates extends JavaPlugin {
     private RewardStateService rewardStates;
     private MilestoneProgressService milestoneProgress;
     private DraftSessionService draftSessions;
+    private CrateDraftCreationService draftCreation;
     private DefinitionPublisher definitionPublisher;
     private DisplayService displays;
     private GuiSessionService guiSessions;
@@ -143,6 +145,7 @@ public class PlexonCrates extends JavaPlugin {
             openingLog = new OpeningLog(this);
             displays = new DisplayService(this);
             draftSessions = new DraftSessionService(database, this::draftStateChanged);
+            draftCreation = new CrateDraftCreationService(this);
             definitionPublisher = new DefinitionPublisher(this, definitionRepository, crates, keys, runtime,
                     draftSessions);
             guiSessions = new GuiSessionService();
@@ -728,6 +731,7 @@ public class PlexonCrates extends JavaPlugin {
     public RewardStateService rewardStates() { return rewardStates; }
     public MilestoneProgressService milestoneProgress() { return milestoneProgress; }
     public DraftSessionService draftSessions() { return draftSessions; }
+    public CrateDraftCreationService draftCreation() { return draftCreation; }
     public DefinitionPublisher definitionPublisher() { return definitionPublisher; }
     public DisplayService displays() { return displays; }
     public GuiSessionService guiSessions() { return guiSessions; }

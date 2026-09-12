@@ -718,11 +718,12 @@ public final class AdminMenuService {
 
     private void createFor(MenuHolder.Kind kind, Player player) {
         if (kind == MenuHolder.Kind.CRATE_LIST) {
-            try {
-                openCrateEditor(player, plugin.crates().createQuickDraft(player.getName()));
-            } catch (Exception error) {
-                plugin.configError(player, error);
-            }
+            player.closeInventory();
+            plugin.draftCreation().createQuick(player.getUniqueId(), player.getName())
+                    .whenComplete((created, error) -> runFor(player.getUniqueId(), target -> {
+                        if (error != null) plugin.configError(target, asException(error));
+                        else openCrateEditor(target, created);
+                    }));
         } else if (kind == MenuHolder.Kind.KEY_LIST) {
             plugin.editSessions().request(player, Text.parse("<aqua>Enter the new custom key ID:</aqua>"), (target, value) -> {
                 if (!CrateRegistry.validId(value) || !value.equals(value.toLowerCase(Locale.ROOT))) throw new IllegalArgumentException("Use a unique lowercase ID");
@@ -1052,8 +1053,11 @@ public final class AdminMenuService {
 
     private void cloneCrate(Player player, String crateId) {
         plugin.editSessions().request(player, Text.parse("<aqua>Enter the clone's new ID:</aqua>"), (target, value) -> {
-            Crate clone = plugin.crates().cloneAsDraft(crateId, value, target.getName());
-            openCrateEditor(target, clone);
+            plugin.draftCreation().cloneDraft(target.getUniqueId(), target.getName(), crateId, value)
+                    .whenComplete((clone, error) -> runFor(target.getUniqueId(), current -> {
+                        if (error != null) plugin.configError(current, asException(error));
+                        else openCrateEditor(current, clone);
+                    }));
         });
     }
 

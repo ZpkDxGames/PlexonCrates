@@ -88,13 +88,19 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private void create(CommandSender sender, String[] args) throws Exception {
+    private void create(CommandSender sender, String[] args) {
         if (args.length < 2) { help(sender); return; }
-        Crate created = plugin.crates().createDraft(args[1], sender.getName());
-        registerDraft(sender, created);
-        if (sender instanceof Player player) {
-            plugin.menus().openEditor(player, created);
-        } else sender.sendMessage(Text.parse("<green>Created persistent crate draft</green> <white>" + created.id() + "</white><green>.</green>"));
+        plugin.draftCreation().create(actorId(sender), sender.getName(), args[1])
+                .whenComplete((created, error) -> runSync(() -> {
+                    if (error != null) {
+                        plugin.configError(sender, asException(error));
+                    } else if (sender instanceof Player player) {
+                        if (player.isOnline()) plugin.menus().openEditor(player, created);
+                    } else {
+                        sender.sendMessage(Text.parse("<green>Created persistent crate draft</green> <white>"
+                                + created.id() + "</white><green>.</green>"));
+                    }
+                }));
     }
 
     private void edit(CommandSender sender, String[] args) {
@@ -103,12 +109,19 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (crate != null) plugin.menus().openEditor(player, crate);
     }
 
-    private void cloneCrate(CommandSender sender, String[] args) throws Exception {
+    private void cloneCrate(CommandSender sender, String[] args) {
         if (args.length < 3) { help(sender); return; }
-        Crate clone = plugin.crates().cloneAsDraft(args[1], args[2], sender.getName());
-        registerDraft(sender, clone);
-        if (sender instanceof Player player) plugin.menus().openEditor(player, clone);
-        else sender.sendMessage(Text.parse("<green>Cloned crate as draft:</green> <white>" + clone.id() + "</white>"));
+        plugin.draftCreation().cloneDraft(actorId(sender), sender.getName(), args[1], args[2])
+                .whenComplete((clone, error) -> runSync(() -> {
+                    if (error != null) {
+                        plugin.configError(sender, asException(error));
+                    } else if (sender instanceof Player player) {
+                        if (player.isOnline()) plugin.menus().openEditor(player, clone);
+                    } else {
+                        sender.sendMessage(Text.parse("<green>Cloned crate as draft:</green> <white>"
+                                + clone.id() + "</white>"));
+                    }
+                }));
     }
 
     private void importCrate(CommandSender sender, String[] args) throws Exception {

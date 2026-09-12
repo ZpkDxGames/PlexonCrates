@@ -22,6 +22,13 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
+
+          def replace_once(text, pattern, replacement, label):
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f'{label} changed unexpectedly: {count} matches')
+              return updated
 
           session = Path('src/main/java/com/antondev/crates/gui/GuiSessionService.java')
           text = session.read_text()
@@ -33,53 +40,22 @@ jobs:
               'import org.bukkit.plugin.Plugin;\n',
           ]:
               text = text.replace(line, '')
-          old = '''    private final ConcurrentHashMap<UUID, Active> active = new ConcurrentHashMap<>();
-              private final CrateSimulationService simulations;
-
-              public GuiSessionService() {
-                  Plugin candidate = Bukkit.getPluginManager().getPlugin("PlexonCrates");
-                  if (!(candidate instanceof PlexonCrates plugin)) {
-                      throw new IllegalStateException("PlexonCrates plugin instance is unavailable while GUI runtime starts");
-                  }
-                  simulations = new CrateSimulationService();
-                  Bukkit.getPluginManager().registerEvents(new SimulationAdminListener(plugin, simulations), plugin);
-                  // The player UX reuses this authority but is routed only through the ordinary command/menu surface.
-                  Bukkit.getPluginManager().registerEvents(new PlayerCrateCommandRouter(plugin), plugin);
-              }
-          '''
-          old = old.replace('              ', '')
-          new = '    private final ConcurrentHashMap<UUID, Active> active = new ConcurrentHashMap<>();\n'
-          if old not in text:
-              raise SystemExit('GuiSessionService constructor block changed unexpectedly')
-          text = text.replace(old, new)
-          old_tail = '''    public void clear() {
-              active.clear();
-              simulations.close();
-          }
-
-          public int size() {
-              return active.size();
-          }
-
-          public int simulationQueueSize() {
-              return simulations.queuedRequests();
-          }
-
-          public int activeSimulations() {
-              return simulations.activeRequests();
-          }
-          '''.replace('          ', '')
-          new_tail = '''    public void clear() {
-              active.clear();
-          }
-
-          public int size() {
-              return active.size();
-          }
-          '''.replace('          ', '')
-          if old_tail not in text:
-              raise SystemExit('GuiSessionService clear/tail block changed unexpectedly')
-          session.write_text(text.replace(old_tail, new_tail))
+          text = replace_once(
+              text,
+              r'    private final ConcurrentHashMap<UUID, Active> active = new ConcurrentHashMap<>\(\);\n'
+              r'    private final CrateSimulationService simulations;\n\n'
+              r'    public GuiSessionService\(\) \{.*?\n    \}\n',
+              '    private final ConcurrentHashMap<UUID, Active> active = new ConcurrentHashMap<>();\n',
+              'GuiSessionService constructor block')
+          text = replace_once(
+              text,
+              r'    public void clear\(\) \{\n        active\.clear\(\);\n        simulations\.close\(\);\n    \}\n\n'
+              r'    public int size\(\) \{\n        return active\.size\(\);\n    \}\n\n'
+              r'    public int simulationQueueSize\(\) \{.*?\n    \}\n\n'
+              r'    public int activeSimulations\(\) \{.*?\n    \}\n',
+              '    public void clear() {\n        active.clear();\n    }\n\n    public int size() {\n        return active.size();\n    }\n',
+              'GuiSessionService clear/tail block')
+          session.write_text(text)
 
           main = Path('src/main/java/com/antondev/crates/PlexonCrates.java')
           text = main.read_text()
@@ -96,32 +72,25 @@ jobs:
               '            guiSessions = new GuiSessionService();\n',
               '            guiSessions = new GuiSessionService();\n            simulations = new CrateSimulationService();\n')
           marker = '            getServer().getPluginManager().registerEvents(menus, this);\n'
-          replacement = marker + '            getServer().getPluginManager().registerEvents(new SimulationAdminListener(this, simulations), this);\n            getServer().getPluginManager().registerEvents(new PlayerCrateCommandRouter(this), this);\n'
-          if marker not in text:
+          if text.count(marker) != 1:
               raise SystemExit('PlexonCrates listener registration marker changed unexpectedly')
-          text = text.replace(marker, replacement, 1)
+          text = text.replace(marker, marker
+              + '            getServer().getPluginManager().registerEvents(new SimulationAdminListener(this, simulations), this);\n'
+              + '            getServer().getPluginManager().registerEvents(new PlayerCrateCommandRouter(this), this);\n', 1)
           marker = '        if (guiSessions != null) guiSessions.clear();\n'
-          replacement = marker + '        if (simulations != null) simulations.close();\n'
-          if marker not in text:
+          if text.count(marker) != 1:
               raise SystemExit('PlexonCrates disable marker changed unexpectedly')
-          text = text.replace(marker, replacement, 1)
+          text = text.replace(marker, marker + '        if (simulations != null) simulations.close();\n', 1)
           main.write_text(text)
 
           test = Path('src/test/java/com/antondev/crates/gui/player/Phase3PlayerCrateUxArchitectureTest.java')
           text = test.read_text()
-          text = text.replace(
-              '    private static final Path SESSION = Path.of("src/main/java/com/antondev/crates/gui/GuiSessionService.java");\n',
-              '    private static final Path SESSION = Path.of("src/main/java/com/antondev/crates/gui/GuiSessionService.java");\n    private static final Path MAIN = Path.of("src/main/java/com/antondev/crates/PlexonCrates.java");\n')
-          old = '''    @Test void playerUxReusesExistingGuiSessionAuthority() throws IOException {
-              String session = Files.readString(SESSION);
-              String holder = Files.readString(HOLDER);
-              assertTrue(session.contains("new PlayerCrateCommandRouter(plugin)"));
-              assertTrue(holder.contains("PLAYER_HALL"));
-              assertTrue(session.contains("ConcurrentHashMap<UUID, Active> active"));
-              assertFalse(Files.readString(UX).contains("new GuiSessionService"));
-          }
-          '''.replace('          ', '')
-          new = '''    @Test void playerUxReusesExistingGuiSessionAuthority() throws IOException {
+          marker = '    private static final Path SESSION = Path.of("src/main/java/com/antondev/crates/gui/GuiSessionService.java");\n'
+          if text.count(marker) != 1:
+              raise SystemExit('Architecture test SESSION marker changed unexpectedly')
+          text = text.replace(marker, marker
+              + '    private static final Path MAIN = Path.of("src/main/java/com/antondev/crates/PlexonCrates.java");\n', 1)
+          replacement = '''    @Test void playerUxReusesExistingGuiSessionAuthority() throws IOException {
               String session = Files.readString(SESSION);
               String holder = Files.readString(HOLDER);
               String main = Files.readString(MAIN);
@@ -134,10 +103,14 @@ jobs:
               assertTrue(main.contains("if (simulations != null) simulations.close()"));
               assertFalse(Files.readString(UX).contains("new GuiSessionService"));
           }
-          '''.replace('          ', '')
-          if old not in text:
-              raise SystemExit('Architecture test block changed unexpectedly')
-          test.write_text(text.replace(old, new))
+          '''
+          replacement = replacement.replace('          ', '')
+          text = replace_once(
+              text,
+              r'    @Test void playerUxReusesExistingGuiSessionAuthority\(\) throws IOException \{.*?\n    \}\n',
+              replacement,
+              'Architecture test session-authority block')
+          test.write_text(text)
       - name: Commit patch and remove temporary workflow
         shell: bash
         run: |

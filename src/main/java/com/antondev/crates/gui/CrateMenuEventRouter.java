@@ -1,7 +1,9 @@
 package com.antondev.crates.gui;
 
+import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.gui.player.PlayerCrateCommandRouter;
 import java.util.Objects;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -20,10 +22,12 @@ import org.bukkit.event.player.PlayerTeleportEvent;
  * listeners. Routing is based exclusively on the custom MenuHolder kind.</p>
  */
 public final class CrateMenuEventRouter implements Listener {
+    private final PlexonCrates plugin;
     private final MenuService menus;
     private final PlayerCrateCommandRouter player;
 
-    public CrateMenuEventRouter(MenuService menus, PlayerCrateCommandRouter player) {
+    public CrateMenuEventRouter(PlexonCrates plugin, MenuService menus, PlayerCrateCommandRouter player) {
+        this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.menus = Objects.requireNonNull(menus, "menus");
         this.player = Objects.requireNonNull(player, "player");
     }
@@ -32,6 +36,7 @@ public final class CrateMenuEventRouter implements Listener {
     public void legacyClick(InventoryClickEvent event) {
         MenuHolder holder = holder(event.getView().getTopInventory().getHolder());
         if (holder == null || playerKind(holder.kind())) return;
+        if (routeLiveReload(event, holder)) return;
         menus.click(event);
     }
 
@@ -87,6 +92,19 @@ public final class CrateMenuEventRouter implements Listener {
     @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
     public void teleport(PlayerTeleportEvent event) {
         menus.teleport(event);
+    }
+
+    private boolean routeLiveReload(InventoryClickEvent event, MenuHolder holder) {
+        if (!(event.getWhoClicked() instanceof Player player)
+                || event.getClickedInventory() != event.getView().getTopInventory()) return false;
+        MenuHolder.Action action = holder.action(event.getRawSlot());
+        boolean modernSystemReload = action != null && action.id().equals("reload");
+        boolean legacyAdminReload = holder.kind() == MenuHolder.Kind.ADMIN
+                && event.getRawSlot() == plugin.menusConfig().slot("admin.reload");
+        if (!modernSystemReload && !legacyAdminReload) return false;
+        event.setCancelled(true);
+        plugin.requestReload(player);
+        return true;
     }
 
     private static MenuHolder holder(Object candidate) {

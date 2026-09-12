@@ -45,6 +45,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.time.Instant;
@@ -151,7 +152,7 @@ public class PlexonCrates extends JavaPlugin {
                     ServicePriority.Normal);
 
             PlayerCrateCommandRouter playerRouter = new PlayerCrateCommandRouter(this);
-            getServer().getPluginManager().registerEvents(new CrateMenuEventRouter(menus, playerRouter), this);
+            getServer().getPluginManager().registerEvents(new CrateMenuEventRouter(this, menus, playerRouter), this);
             getServer().getPluginManager().registerEvents(new SimulationAdminListener(this, simulations), this);
             getServer().getPluginManager().registerEvents(playerRouter, this);
             getServer().getPluginManager().registerEvents(editSessions, this);
@@ -206,6 +207,7 @@ public class PlexonCrates extends JavaPlugin {
         if (database != null) database.close();
     }
 
+    /** Synchronous compatibility path used by startup/integration callers. Live admin surfaces use requestReload(). */
     public boolean reloadFor(CommandSender sender) {
         try {
             PluginSettings nextSettings = PluginSettings.load(file("config.yml"));
@@ -231,56 +233,130 @@ public class PlexonCrates extends JavaPlugin {
             }
             KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(
                     definitionRepository.loadKeys().join(), getLogger());
-            KeyService.Snapshot nextKeys = loadKeySnapshot(nextSettings.fallbackFile(), canonicalKeys);
-            if (!nextSettings.databaseFile().equals(settings.databaseFile())) {
-                throw new IllegalArgumentException("database.file cannot be changed by reload; restart the server after moving data safely");
-            }
-
-            PluginSettings previousSettings = settings;
-            Messages previousMessages = messages;
-            MenuConfig previousMenus = menusConfig;
-            CrateRegistry.Snapshot previousCrates = crates.snapshot();
-            KeyService.Snapshot previousKeys = keys.snapshot();
-            Map<String, ItemStack> previousKeyCache = keys.lastKnownGoodSnapshot();
-            try {
-                settings = nextSettings;
-                messages = nextMessages;
-                menusConfig = nextMenus;
-                crates.apply(nextCrates);
-                keys.apply(nextKeys, mergeKeyCaches(canonicalKeys));
-                for (var crate : crates.ordered()) {
-                    List<String> issues = crates.publishingIssues(crate.id(), keys);
-                    if (!issues.isEmpty()) throw new IllegalArgumentException("crates/" + crate.id()
-                            + ".yml cannot remain published: " + String.join(" ", issues));
-                }
-                menus.closeAll();
-                displays.refresh();
-                if (!canonical.definitions().isEmpty()) {
-                    definitionRevisions.clear();
-                    canonical.definitions().forEach(definition ->
-                            definitionRevisions.put(definition.crateId().toLowerCase(Locale.ROOT),
-                                    definition.publishedRevision()));
-                }
-            } catch (Exception error) {
-                settings = previousSettings;
-                messages = previousMessages;
-                menusConfig = previousMenus;
-                crates.apply(previousCrates);
-                keys.apply(previousKeys, previousKeyCache);
-                try { displays.refresh(); }
-                catch (RuntimeException refreshError) { error.addSuppressed(refreshError); }
-                throw error;
-            }
-            if (coreBridge != null) {
-                coreBridge.registerStarting();
-                updateCoreHealth();
-            }
-            messages.send(sender, "reloaded");
-            return true;
+            return applyReload(sender, nextSettings, nextMessages, nextMenus, canonical, durableDrafts,
+                    validationRegistry, nextCrates, canonicalKeys);
         } catch (Exception error) {
             configError(sender, error);
             return false;
         }
+    }
+
+    /**
+     * Live reload entry point. Canonical SQLite reads run on DatabaseService's
+     * async executors; only validation/application and Bukkit-facing reconciliation
+     * return to the primary thread.
+     */
+    public void requestReload(CommandSender sender) {
+        if (!isEnabled()) return;
+        sender.sendMessage(Text.parse("<gray>Reloading PlexonCrates configuration…</gray>"));
+        var publishedFuture = definitionRepository.loadPublished();
+        var draftsFuture = definitionRepository.loadDrafts();
+        var keyRowsFuture = definitionRepository.loadKeys();
+        CompletableFuture.allOf(publishedFuture, draftsFuture, keyRowsFuture).whenComplete((ignored, failure) -> {
+            if (!isEnabled()) return;
+            getServer().getScheduler().runTask(this, () -> {
+                if (!isEnabled()) return;
+                if (failure != null) {
+                    configError(sender, completionException(failure));
+                    return;
+                }
+                try {
+                    PluginSettings nextSettings = PluginSettings.load(file("config.yml"));
+                    Messages nextMessages = Messages.load(file("messages.yml"));
+                    MenuConfig nextMenus = MenuConfig.load(file("menus.yml"));
+                    DatabaseService.PublishedSnapshot canonical = publishedFuture.getNow(null);
+                    List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts =
+                            draftsFuture.getNow(List.of());
+                    if (canonical == null) throw new IllegalStateException("Published definition snapshot was unavailable");
+                    CrateRegistry validationRegistry;
+                    if (canonical.definitions().isEmpty()) {
+                        Path crateDirectory = getDataFolder().toPath().resolve("crates");
+                        validationRegistry = new CrateRegistry(crateDirectory,
+                                CrateRegistry.withDurableDrafts(crateDirectory,
+                                        CrateRegistry.load(crateDirectory), durableDrafts));
+                    } else {
+                        validationRegistry = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"),
+                                canonical.definitions(), durableDrafts);
+                    }
+                    CrateRegistry.Snapshot nextCrates = validationRegistry.snapshot();
+                    for (LocationStore.Link link : locations.all()) {
+                        if (validationRegistry.find(link.crateId()).isEmpty()) {
+                            throw new IllegalArgumentException(
+                                    "Linked location references a crate missing from the reload: " + link.crateId());
+                        }
+                    }
+                    KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(
+                            keyRowsFuture.getNow(List.of()), getLogger());
+                    applyReload(sender, nextSettings, nextMessages, nextMenus, canonical, durableDrafts,
+                            validationRegistry, nextCrates, canonicalKeys);
+                } catch (Exception error) {
+                    configError(sender, error);
+                }
+            });
+        });
+    }
+
+    private boolean applyReload(CommandSender sender, PluginSettings nextSettings, Messages nextMessages,
+                                MenuConfig nextMenus, DatabaseService.PublishedSnapshot canonical,
+                                List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts,
+                                CrateRegistry validationRegistry, CrateRegistry.Snapshot nextCrates,
+                                KeyService.CanonicalSnapshot canonicalKeys) throws Exception {
+        KeyService.Snapshot nextKeys = loadKeySnapshot(nextSettings.fallbackFile(), canonicalKeys);
+        if (!nextSettings.databaseFile().equals(settings.databaseFile())) {
+            throw new IllegalArgumentException(
+                    "database.file cannot be changed by reload; restart the server after moving data safely");
+        }
+
+        PluginSettings previousSettings = settings;
+        Messages previousMessages = messages;
+        MenuConfig previousMenus = menusConfig;
+        CrateRegistry.Snapshot previousCrates = crates.snapshot();
+        KeyService.Snapshot previousKeys = keys.snapshot();
+        Map<String, ItemStack> previousKeyCache = keys.lastKnownGoodSnapshot();
+        try {
+            settings = nextSettings;
+            messages = nextMessages;
+            menusConfig = nextMenus;
+            crates.apply(nextCrates);
+            keys.apply(nextKeys, mergeKeyCaches(canonicalKeys));
+            for (var crate : crates.ordered()) {
+                List<String> issues = crates.publishingIssues(crate.id(), keys);
+                if (!issues.isEmpty()) throw new IllegalArgumentException("crates/" + crate.id()
+                        + ".yml cannot remain published: " + String.join(" ", issues));
+            }
+            menus.closeAll();
+            displays.refresh();
+            if (!canonical.definitions().isEmpty()) {
+                definitionRevisions.clear();
+                canonical.definitions().forEach(definition ->
+                        definitionRevisions.put(definition.crateId().toLowerCase(Locale.ROOT),
+                                definition.publishedRevision()));
+            }
+        } catch (Exception error) {
+            settings = previousSettings;
+            messages = previousMessages;
+            menusConfig = previousMenus;
+            crates.apply(previousCrates);
+            keys.apply(previousKeys, previousKeyCache);
+            try { displays.refresh(); }
+            catch (RuntimeException refreshError) { error.addSuppressed(refreshError); }
+            throw error;
+        }
+        if (coreBridge != null) {
+            coreBridge.registerStarting();
+            updateCoreHealth();
+        }
+        messages.send(sender, "reloaded");
+        return true;
+    }
+
+    private static Exception completionException(Throwable error) {
+        Throwable current = error;
+        while ((current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException) && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current instanceof Exception exception ? exception : new IllegalStateException(current);
     }
 
     public void configError(CommandSender sender, Exception error) {

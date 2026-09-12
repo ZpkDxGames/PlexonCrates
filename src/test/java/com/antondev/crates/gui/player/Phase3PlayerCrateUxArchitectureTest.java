@@ -41,12 +41,14 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertTrue(router.contains("class CrateMenuEventRouter implements Listener"));
         assertTrue(router.contains("player.click(event)"));
         assertTrue(router.contains("menus.click(event)"));
+        assertTrue(router.contains("simulation.click(event)"));
+        assertTrue(router.contains("simulation.drag(event)"));
         assertTrue(router.contains("playerDrag(InventoryDragEvent event)"));
         assertTrue(router.contains("plugin.requestReload(player)"));
         assertTrue(main.contains("public void requestReload(CommandSender sender)"));
         assertFalse(commandRouter.contains("@EventHandler(priority = EventPriority.HIGHEST)"));
         assertFalse(main.contains("registerEvents(menus, this)"));
-        assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(this, menus, playerRouter), this)"));
+        assertTrue(main.contains("new CrateMenuEventRouter(this, menus, playerRouter, simulationMenus)"));
     }
 
     @Test void normalPlayerUxContainsNoHiddenRightClickConsumeSemantic() throws IOException {
@@ -205,9 +207,10 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertFalse(session.contains("registerEvents"));
         assertFalse(session.contains("PlayerCrateCommandRouter"));
         assertTrue(main.contains("PlayerCrateCommandRouter playerRouter = new PlayerCrateCommandRouter(this)"));
-        assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(this, menus, playerRouter), this)"));
+        assertTrue(main.contains("SimulationAdminListener simulationMenus = new SimulationAdminListener(this, simulations)"));
+        assertTrue(main.contains("new CrateMenuEventRouter(this, menus, playerRouter, simulationMenus)"));
+        assertTrue(main.contains("registerEvents(simulationMenus, this)"));
         assertTrue(main.contains("registerEvents(playerRouter, this)"));
-        assertTrue(main.contains("registerEvents(new SimulationAdminListener(this, simulations), this)"));
         assertTrue(main.contains("if (simulations != null) simulations.close()"));
         assertTrue(main.contains("menus.stop()"));
         assertFalse(Files.readString(UX).contains("new GuiSessionService"));

@@ -101,7 +101,7 @@ public final class SimulationAdminListener implements Listener {
             return true;
         }
         if (!(top.getHolder() instanceof SimulationHolder holder)) return false;
-        event.setCancelled(true;
+        event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)
                 || !holder.playerId.equals(player.getUniqueId())
                 || event.getClickedInventory() != top) return true;

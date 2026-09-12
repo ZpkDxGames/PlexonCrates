@@ -81,6 +81,16 @@ public final class CrateRegistry {
         @Override public byte[] payload() { return payload.clone(); }
     }
 
+    public record PreparedDraftImport(String crateId, Crate crate, byte[] payload, Path file) {
+        public PreparedDraftImport {
+            crateId = java.util.Objects.requireNonNull(crateId, "crateId");
+            crate = java.util.Objects.requireNonNull(crate, "crate");
+            payload = java.util.Objects.requireNonNull(payload, "payload").clone();
+            file = java.util.Objects.requireNonNull(file, "file");
+        }
+        @Override public byte[] payload() { return payload.clone(); }
+    }
+
     private static final Pattern ID = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
     private static final ItemSnapshotCodec ITEM_SNAPSHOTS = new ItemSnapshotCodec();
     private final Path directory;
@@ -414,16 +424,13 @@ public void writePublishedMirror(PreparedPublication publication) throws IOExcep
         return parsed;
     }
 
-    public Crate importAsDraft(Path sourceFile, String rawNewId, String editor) throws Exception {
+    public PreparedDraftImport prepareImportedDraft(String sourceYaml, String rawNewId, String editor) throws Exception {
         String newId = normalize(rawNewId);
         if (!validId(newId) || crates.containsKey(newId)) {
             throw new IllegalArgumentException("Invalid or existing imported crate ID");
         }
-        Path source = sourceFile.toAbsolutePath().normalize();
-        if (!Files.isRegularFile(source) || !source.getFileName().toString().endsWith(".yml")) {
-            throw new IllegalArgumentException("Import source must be an existing .yml file");
-        }
-        YamlConfiguration yaml = read(source);
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.loadFromString(java.util.Objects.requireNonNull(sourceYaml, "sourceYaml"));
         yaml.set("id", newId);
         yaml.set("state", "DRAFT");
         yaml.set("display-order", nextDisplayOrder());
@@ -435,12 +442,32 @@ public void writePublishedMirror(PreparedPublication publication) throws IOExcep
             throw new IllegalArgumentException("Invalid imported crate path");
         }
         Crate parsed = parse(destination, yaml);
-        String serialized = yaml.saveToString();
-        AtomicFiles.write(destination, serialized);
-        install(newId, destination, parsed);
-        payloads.put(newId, serialized.getBytes(StandardCharsets.UTF_8));
-        fireChange(parsed, CrateDefinitionChangeEvent.ChangeType.CREATED);
-        return parsed;
+        byte[] payload = yaml.saveToString().getBytes(StandardCharsets.UTF_8);
+        return new PreparedDraftImport(newId, parsed, payload, destination);
+    }
+
+    public void writeImportedDraft(PreparedDraftImport prepared) throws IOException {
+        AtomicFiles.write(prepared.file(), new String(prepared.payload(), StandardCharsets.UTF_8));
+    }
+
+    public Crate installImportedDraft(PreparedDraftImport prepared) {
+        String id = prepared.crateId();
+        if (crates.containsKey(id)) throw new IllegalArgumentException("Imported crate ID became occupied: " + id);
+        install(id, prepared.file(), prepared.crate());
+        payloads.put(id, prepared.payload());
+        fireChange(prepared.crate(), CrateDefinitionChangeEvent.ChangeType.CREATED);
+        return prepared.crate();
+    }
+
+    public Crate importAsDraft(Path sourceFile, String rawNewId, String editor) throws Exception {
+        Path source = sourceFile.toAbsolutePath().normalize();
+        if (!Files.isRegularFile(source) || !source.getFileName().toString().endsWith(".yml")) {
+            throw new IllegalArgumentException("Import source must be an existing .yml file");
+        }
+        PreparedDraftImport prepared = prepareImportedDraft(
+                Files.readString(source, StandardCharsets.UTF_8), rawNewId, editor);
+        writeImportedDraft(prepared);
+        return installImportedDraft(prepared);
     }
 
     public Path exportDefinition(String crateId, Path exportDirectory) throws Exception {

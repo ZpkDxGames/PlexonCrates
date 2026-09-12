@@ -56,11 +56,12 @@ class DraftCreationDurabilityArchitectureTest {
     }
 
     @Test
-    void liveGuiCreateAndCloneUseDurableCoordinator() throws Exception {
+    void liveGuiCreateAndCloneUseDurableCoordinatorWithoutBlankingCurrentView() throws Exception {
         String source = Files.readString(ADMIN);
         String create = section(source, "private void createFor(", "private void renameCrate(");
         assertTrue(create.contains("plugin.draftCreation().createQuick("));
         assertFalse(create.contains("createQuickDraft("));
+        assertFalse(create.contains("player.closeInventory()"));
         assertTrue(source.contains("plugin.draftCreation().cloneDraft("));
         assertFalse(source.contains("plugin.crates().cloneAsDraft("));
     }

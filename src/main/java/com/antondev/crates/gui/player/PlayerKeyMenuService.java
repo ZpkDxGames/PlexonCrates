@@ -35,6 +35,20 @@ public final class PlayerKeyMenuService {
         this.crateMenus = Objects.requireNonNull(crateMenus, "crateMenus");
     }
 
+    /** Adds a discoverable My Keys shortcut to the otherwise-unused Hall payment slot. */
+    public void decorateHall(Player player) {
+        Inventory inventory = player.getOpenInventory().getTopInventory();
+        if (!(inventory.getHolder() instanceof MenuHolder holder)
+                || holder.kind() != MenuHolder.Kind.PLAYER_HALL) return;
+        inventory.setItem(PlayerCrateLayout.PAYMENT, item(Material.TRIPWIRE_HOOK,
+                "<gold>My Keys</gold>",
+                "<gray>View physical and virtual key balances.</gray>",
+                "<gray>See every compatible crate.</gray>",
+                "",
+                "<aqua>Click to browse your keys.</aqua>"));
+        holder.bind(PlayerCrateLayout.PAYMENT, "keys");
+    }
+
     public void openKeys(Player player, int requestedPage) {
         List<KeyDefinition> definitions = plugin.keys().definitions().stream()
                 .filter(KeyDefinition::enabled)
@@ -143,7 +157,10 @@ public final class PlayerKeyMenuService {
     private void keysClick(Player player, MenuHolder holder, MenuHolder.Action action) {
         switch (action.id()) {
             case "close" -> player.closeInventory();
-            case "hall" -> crateMenus.openHall(player, 0);
+            case "hall" -> {
+                crateMenus.openHall(player, 0);
+                decorateHall(player);
+            }
             case "refresh" -> openKeys(player, holder.page());
             case "previous" -> openKeys(player, holder.page() - 1);
             case "next" -> openKeys(player, holder.page() + 1);
@@ -265,7 +282,7 @@ public final class PlayerKeyMenuService {
 
     private static ItemStack item(Material material, String name, String... lore) {
         List<Component> lines = new ArrayList<>();
-        for (String line : lore) lines.add(Text.parse(line));
+        for (String line : lore) lines.add(line.isEmpty() ? Component.empty() : Text.parse(line));
         return item(material, Text.parse(name), lines);
     }
 

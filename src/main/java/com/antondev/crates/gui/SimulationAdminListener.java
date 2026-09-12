@@ -1,6 +1,8 @@
 package com.antondev.crates.gui;
 
 import com.antondev.crates.PlexonCrates;
+import com.antondev.crates.animation.OpeningAnimationProfile;
+import com.antondev.crates.animation.OpeningAnimationProfileStore;
 import com.antondev.crates.config.Text;
 import com.antondev.crates.item.ExactItemInspector;
 import com.antondev.crates.model.Crate;
@@ -49,11 +51,15 @@ public final class SimulationAdminListener implements Listener {
     private final PlexonCrates plugin;
     private final CrateSimulationService simulations;
     private final ExactItemInspector exactItems = new ExactItemInspector();
+    private final OpeningAnimationProfileStore animationProfiles;
+    private final OpeningAnimationProfileEditor animationEditor;
     private final NamespacedKey marker;
 
     public SimulationAdminListener(PlexonCrates plugin, CrateSimulationService simulations) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.simulations = Objects.requireNonNull(simulations, "simulations");
+        this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);
+        this.animationEditor = new OpeningAnimationProfileEditor(plugin, animationProfiles, this::openHub);
         this.marker = new NamespacedKey(plugin, "phase2_simulation");
     }
 
@@ -77,6 +83,7 @@ public final class SimulationAdminListener implements Listener {
      * after the original event has returned.
      */
     public boolean routeClick(InventoryClickEvent event) {
+        if (animationEditor.routeClick(event)) return true;
         Inventory top = event.getView().getTopInventory();
         if (top.getHolder() instanceof MenuHolder holder && holder.kind() == MenuHolder.Kind.EDITOR) {
             if (event.getClickedInventory() != top || !marked(event.getCurrentItem())) return false;
@@ -94,7 +101,7 @@ public final class SimulationAdminListener implements Listener {
             return true;
         }
         if (!(top.getHolder() instanceof SimulationHolder holder)) return false;
-        event.setCancelled(true);
+        event.setCancelled(true;
         if (!(event.getWhoClicked() instanceof Player player)
                 || !holder.playerId.equals(player.getUniqueId())
                 || event.getClickedInventory() != top) return true;
@@ -108,8 +115,9 @@ public final class SimulationAdminListener implements Listener {
         return true;
     }
 
-    /** Test Lab inventories never accept dragged items. */
+    /** Test Lab/profile inventories never accept dragged items. */
     public boolean routeDrag(InventoryDragEvent event) {
+        if (animationEditor.routeDrag(event)) return true;
         if (!(event.getView().getTopInventory().getHolder() instanceof SimulationHolder)) return false;
         event.setCancelled(true);
         return true;
@@ -125,6 +133,7 @@ public final class SimulationAdminListener implements Listener {
                     holder.snapshot.mode() == Mode.CONFIGURED ? Mode.PLAYER_CONTEXT : Mode.CONFIGURED);
             else if (slot == 19) previewAnimation(player, holder);
             else if (slot == 20) openExactItemAudit(player, holder);
+            else if (slot == 21) animationEditor.open(player, holder.crateId, holder.snapshot.mode());
             else if (slot == 22) backToEditor(player, holder.crateId);
             return;
         }
@@ -153,6 +162,7 @@ public final class SimulationAdminListener implements Listener {
             return;
         }
         Snapshot snapshot = snapshot(player, crate, mode);
+        OpeningAnimationProfile openingProfile = animationProfiles.resolve(crate.id(), crate.animation());
         SimulationHolder holder = new SimulationHolder(player.getUniqueId(), crate.id(), View.HUB, snapshot, null, 0);
         Inventory inventory = Bukkit.createInventory(holder, 27,
                 Text.parse("<gradient:#8CDFFF:#D8F6FF><bold>CRATE TEST LAB</bold></gradient> <dark_gray>•</dark_gray> <white>"
@@ -191,13 +201,21 @@ public final class SimulationAdminListener implements Listener {
                 line("Queued", simulations.queuedRequests()),
                 Component.text("One bounded worker • no per-player task", NamedTextColor.DARK_GRAY))));
         inventory.setItem(19, item(Material.AMETHYST_SHARD, "<light_purple><bold>Animation Preview</bold></light_purple>", List.of(
-                line("Configured type", crate.animation()),
+                line("Effective style", openingProfile.style()),
+                line("Legacy crate type", crate.animation()),
+                line("Duration budget", openingProfile.totalTicks() + " ticks"),
                 Component.text("Uses a deterministic non-granting dry selection.", NamedTextColor.GRAY),
                 Component.text("No OpeningService/payment/journal path is entered.", NamedTextColor.GREEN))));
         inventory.setItem(20, item(Material.KNOWLEDGE_BOOK, "<aqua><bold>Exact Item Audit</bold></aqua>", List.of(
                 Component.text("Inspect the exact item currently in your main hand.", NamedTextColor.GRAY),
                 Component.text("Shows native-byte fingerprint and safety diagnostics.", NamedTextColor.GRAY),
                 Component.text("The displayed item clone is never relored or rewritten.", NamedTextColor.GREEN))));
+        inventory.setItem(21, item(Material.REPEATER, "<gradient:#BCA7FF:#E8E0FF><bold>Opening Profiles</bold></gradient>", List.of(
+                line("Effective style", openingProfile.style()),
+                line("Particle budget", openingProfile.particleBudgetPerTick() + "/tick"),
+                Component.text("Edit style, stages, sound, particles and safe numeric budgets.", NamedTextColor.GRAY),
+                Component.text("Assign globally/per crate, clone profiles or reset defaults.", NamedTextColor.GRAY),
+                Component.text("Profile edits never touch rewards, keys, pity, limits or statistics.", NamedTextColor.GREEN))));
         inventory.setItem(22, item(Material.ARROW, "<gray>Back to Crate Editor</gray>", List.of()));
         player.openInventory(inventory);
     }
@@ -225,6 +243,7 @@ public final class SimulationAdminListener implements Listener {
             player.sendActionBar(Text.parse("<red>The dry-selected reward is no longer available.</red>"));
             return;
         }
+        OpeningAnimationProfile profile = animationProfiles.resolve(crate.id(), crate.animation());
         Runnable returnIfStillPreviewing = () -> {
             if (!player.isOnline()) return;
             Inventory top = player.getOpenInventory().getTopInventory();
@@ -234,11 +253,11 @@ public final class SimulationAdminListener implements Listener {
             }
         };
         player.sendActionBar(Text.parse("<aqua>Non-granting animation preview:</aqua> <white>"
-                + crate.animation() + "</white>"));
-        switch (crate.animation()) {
-            case ROULETTE -> plugin.menus().animate(player, crate, reward, returnIfStillPreviewing);
-            case REVEAL -> plugin.menus().reveal(player, crate, reward, returnIfStillPreviewing);
-            case SUMMARY -> plugin.menus().openSummary(player, crate, List.of(reward));
+                + profile.style() + "</white>"));
+        switch (profile.style()) {
+            case ROULETTE, SPIN, CASCADE -> plugin.menus().animate(player, crate, reward, returnIfStillPreviewing);
+            case CHARGE_REVEAL, SPIRAL_BURST, ORB_REVEAL, FIREWORK_STYLE ->
+                    plugin.menus().reveal(player, crate, reward, returnIfStillPreviewing);
             case INSTANT -> showDry(player, source.snapshot, reward.id(), stableSeed(source.snapshot, 17));
         }
     }
@@ -440,6 +459,7 @@ public final class SimulationAdminListener implements Listener {
                 Component.text("Dry-run reward selection without granting.", NamedTextColor.GRAY),
                 Component.text("Run bounded expected-vs-observed simulations.", NamedTextColor.GRAY),
                 Component.text("Preview opening presentation without entering the transaction path.", NamedTextColor.GRAY),
+                Component.text("Edit opening animation profiles with bounded safe parameters.", NamedTextColor.GRAY),
                 Component.text("Audit native exact-item payloads without mutation.", NamedTextColor.GRAY),
                 Component.text("No key, reward, journal or player state is mutated.", NamedTextColor.GREEN),
                 Component.text("Click to open the Test Lab.", NamedTextColor.DARK_GRAY)));

@@ -7,6 +7,7 @@ import com.antondev.crates.domain.reward.RewardRarity;
 import com.antondev.crates.domain.reward.RewardLimits;
 import com.antondev.crates.domain.reward.RewardPresentation;
 import com.antondev.crates.domain.key.KeyDefinition;
+import com.antondev.crates.item.ExactItemInspector;
 import com.antondev.crates.model.CrateReward;
 import com.antondev.crates.service.AlternativeRewardResolver;
 import com.antondev.crates.service.CrateRegistry;
@@ -33,6 +34,8 @@ import org.bukkit.scheduler.BukkitTask;
 
 /** Owns safe chat inputs and transient item-builder state around durable SQLite draft sessions. */
 public final class EditSessionService implements Listener {
+    private static final ExactItemInspector EXACT_ITEMS = new ExactItemInspector();
+
     private final PlexonCrates plugin;
     private final Map<UUID, TextInput> inputs = new ConcurrentHashMap<>();
     private final Map<UUID, KeyDraft> keys = new HashMap<>();
@@ -203,7 +206,11 @@ public final class EditSessionService implements Listener {
         public Component displayName() { return displayName; }
         public void displayName(Component value) { displayName = value; touch(); }
         public ItemStack template() { return template == null ? null : template.clone(); }
-        public void template(ItemStack value) { template = ItemCodec.one(value); touch(); }
+        public void template(ItemStack value) {
+            EXACT_ITEMS.inspect(value);
+            template = ItemCodec.one(value);
+            touch();
+        }
         public ItemStack previous() { return previous == null ? null : previous.clone(); }
         public boolean rotation() { return previous != null; }
         public boolean keepPreviousAsLegacy() { return keepPreviousAsLegacy; }
@@ -273,7 +280,11 @@ public final class EditSessionService implements Listener {
         public RewardRarity rarity() { return rarity; }
         public void rarity(RewardRarity value) { rarity = value; touch(); }
         public List<ItemStack> items() { return items.stream().map(ItemStack::clone).toList(); }
-        public void addItem(ItemStack value) { items.add(value.clone()); touch(); }
+        public void addItem(ItemStack value) {
+            EXACT_ITEMS.inspect(value);
+            items.add(value.clone());
+            touch();
+        }
         public void clearItems() { items.clear(); touch(); }
         public List<String> commands() { return List.copyOf(commands); }
         public void addCommand(String value) {

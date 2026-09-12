@@ -62,11 +62,12 @@ class OpeningAnimationProfilesTest {
         OpeningAnimationProfiles.Snapshot source = OpeningAnimationProfiles.defaults(AnimationType.ROULETTE);
         source = OpeningAnimationProfiles.withProfile(source, "spin",
                 OpeningAnimationProfile.defaults(OpeningAnimationStyle.SPIN));
+        OpeningAnimationProfiles.Snapshot removable = source;
         OpeningAnimationProfiles.Snapshot assigned = OpeningAnimationProfiles.assign(source, "epic", "spin");
         assertThrows(IllegalArgumentException.class,
                 () -> OpeningAnimationProfiles.removeProfile(assigned, "spin"));
         assertThrows(IllegalArgumentException.class,
-                () -> OpeningAnimationProfiles.removeProfile(source, OpeningAnimationProfiles.BUILTIN_DEFAULT));
+                () -> OpeningAnimationProfiles.removeProfile(removable, OpeningAnimationProfiles.BUILTIN_DEFAULT));
     }
 
     @Test

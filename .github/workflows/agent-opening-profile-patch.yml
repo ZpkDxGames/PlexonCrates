@@ -1,0 +1,78 @@
+name: One-shot Opening Profile Runtime Patch
+
+on:
+  push:
+    branches: [revamp/6.0.0-gui-animation-overhaul]
+    paths:
+      - '.agent/apply-opening-profile-runtime'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v5
+        with:
+          ref: revamp/6.0.0-gui-animation-overhaul
+          fetch-depth: 0
+
+      - name: Patch only OpeningService presentation seam
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/main/java/com/antondev/crates/service/OpeningService.java')
+          source = path.read_text()
+          replacements = []
+
+          replacements.append((
+          '''import com.antondev.crates.config.OverflowPolicy;\n''',
+          '''import com.antondev.crates.animation.OpeningAnimationProfile;\nimport com.antondev.crates.animation.OpeningAnimationProfileStore;\nimport com.antondev.crates.config.OverflowPolicy;\nimport com.antondev.crates.gui.MenuHolder;\nimport com.antondev.crates.gui.OpeningProfilePresentationService;\n'''))
+
+          replacements.append((
+          '''import com.antondev.crates.domain.crate.AnimationType;\n''',
+          ''''''))
+
+          replacements.append((
+          '''    private final VaultEconomyBridge economy;\n    private final PlaceholderBridge placeholders;\n    private final ItemSnapshotCodec itemSnapshots = new ItemSnapshotCodec();\n''',
+          '''    private final VaultEconomyBridge economy;\n    private final PlaceholderBridge placeholders;\n    private final OpeningAnimationProfileStore animationProfiles;\n    private final OpeningProfilePresentationService profilePresentation;\n    private final ItemSnapshotCodec itemSnapshots = new ItemSnapshotCodec();\n'''))
+
+          replacements.append((
+          '''        this.log = log;\n        this.economy = new VaultEconomyBridge(plugin);\n        this.placeholders = new PlaceholderBridge(plugin);\n''',
+          '''        this.log = log;\n        this.economy = new VaultEconomyBridge(plugin);\n        this.placeholders = new PlaceholderBridge(plugin);\n        this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);\n        this.profilePresentation = OpeningProfilePresentationService.shared(plugin);\n'''))
+
+          replacements.append((
+          '''    public void clear() {\n        String reason = "Plugin disabled before inventory mutation";\n''',
+          '''    public void clear() {\n        profilePresentation.stop();\n        String reason = "Plugin disabled before inventory mutation";\n'''))
+
+          old_show = '''    private void showResult(Player player, Crate crate, List<CrateReward> selected, OpeningPlan plan) {\n        if (plan.openingCount() == 1) {\n            CrateReward reward = selected.getFirst();\n            if (!plugin.settings().animationEnabled() || crate.animation() == AnimationType.INSTANT) {\n                announceSingle(player, crate, reward);\n                return;\n            }\n            try {\n                switch (crate.animation()) {\n                    case ROULETTE -> plugin.menus().animate(player, crate, reward, () -> announceSingle(player, crate, reward));\n                    case REVEAL -> plugin.menus().reveal(player, crate, reward, () -> announceSingle(player, crate, reward));\n                    case SUMMARY -> { announceSingle(player, crate, reward); plugin.menus().openSummary(player, crate, selected); }\n                    case INSTANT -> announceSingle(player, crate, reward);\n                }\n            } catch (RuntimeException error) {\n                plugin.getLogger().log(Level.WARNING, "Could not show the crate animation; delivery is already complete.", error);\n                announceSingle(player, crate, reward);\n            }\n        } else {\n            plugin.messages().send(player, "bulk-opened", Text.value("amount", plan.openingCount()),\n                    Text.component("crate", crate.displayName()), Text.value("rewards", selected.size()));\n            announceBroadcasts(player, crate, selected);\n            if (crate.animation() == AnimationType.SUMMARY\n                    || plan.openingCount() > plugin.settings().bulkSummaryThreshold()) {\n                plugin.menus().openSummary(player, crate, selected);\n            }\n        }\n    }\n'''
+
+          new_show = '''    private void showResult(Player player, Crate crate, List<CrateReward> selected, OpeningPlan plan) {\n        OpeningAnimationProfile profile = animationProfiles.resolve(crate.id(), crate.animation());\n        if (plan.openingCount() == 1) {\n            CrateReward reward = selected.getFirst();\n            if (!plugin.settings().animationEnabled()) {\n                announceSingle(player, crate, reward);\n                return;\n            }\n            if (!profile.animated()) {\n                announceSingle(player, crate, reward);\n                if (profile.summaryOnFinish()) plugin.menus().openSummary(player, crate, selected);\n                return;\n            }\n            try {\n                profilePresentation.present(player, crate, reward, profile,\n                        () -> finishSinglePresentation(player, crate, reward, selected, profile));\n            } catch (RuntimeException error) {\n                plugin.getLogger().log(Level.WARNING,\n                        "Could not show the crate animation profile; delivery is already complete.", error);\n                announceSingle(player, crate, reward);\n                if (profile.summaryOnFinish()) plugin.menus().openSummary(player, crate, selected);\n            }\n        } else {\n            plugin.messages().send(player, "bulk-opened", Text.value("amount", plan.openingCount()),\n                    Text.component("crate", crate.displayName()), Text.value("rewards", selected.size()));\n            announceBroadcasts(player, crate, selected);\n            if (profile.summaryOnFinish()\n                    || plan.openingCount() > plugin.settings().bulkSummaryThreshold()) {\n                plugin.menus().openSummary(player, crate, selected);\n            }\n        }\n    }\n\n    private void finishSinglePresentation(Player player, Crate crate, CrateReward reward,\n                                          List<CrateReward> selected, OpeningAnimationProfile profile) {\n        announceSingle(player, crate, reward);\n        if (!profile.summaryOnFinish() || !player.isOnline()) return;\n        if (player.getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder holder\n                && holder.kind() == MenuHolder.Kind.OPENING) {\n            plugin.menus().openSummary(player, crate, selected);\n        }\n    }\n'''
+          replacements.append((old_show, new_show))
+
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one replacement target, found {count}: {old[:90]!r}')
+              source = source.replace(old, new, 1)
+
+          path.write_text(source)
+          PY
+          git diff --check
+          git diff -- src/main/java/com/antondev/crates/service/OpeningService.java
+
+      - name: Commit focused source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Tonim'
+          git config user.email '99552287+ZpkDxGames@users.noreply.github.com'
+          git add src/main/java/com/antondev/crates/service/OpeningService.java
+          test -n "$(git status --porcelain)"
+          git commit -m 'Use 6.0 animation profiles for finalized openings'
+          git push origin HEAD:revamp/6.0.0-gui-animation-overhaul

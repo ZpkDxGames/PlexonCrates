@@ -25,6 +25,17 @@ class DraftMirrorIoBoundaryArchitectureTest {
     }
 
     @Test
+    void restoredDurableDraftAlsoQueuesOnlyItsYamlMirror() throws Exception {
+        String source = Files.readString(REGISTRY);
+        String restore = section(source, "public Crate restoreDraftSnapshot(", "public Crate createDraft(");
+        assertTrue(restore.contains("persistEditableMirror(file, serialized)"));
+        assertFalse(restore.contains("AtomicFiles.write("));
+        assertTrue(restore.contains("install(id, file, restored)"));
+        assertTrue(restore.contains("payloads.put(id"));
+        assertTrue(restore.contains("fireChange(restored"));
+    }
+
+    @Test
     void liveMirrorWriterOrdersEachPathBeforeSubmittingNextWrite() throws Exception {
         String source = Files.readString(REGISTRY);
         String writer = section(source, "private void persistEditableMirror(", "public static Snapshot load(");

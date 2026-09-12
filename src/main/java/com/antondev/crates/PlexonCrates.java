@@ -344,7 +344,7 @@ public class PlexonCrates extends JavaPlugin {
         }
         if (coreBridge != null) {
             coreBridge.registerStarting();
-            updateCoreHealth();
+            updateCoreHealthAsync();
         }
         messages.send(sender, "reloaded");
         return true;
@@ -426,28 +426,58 @@ public class PlexonCrates extends JavaPlugin {
             messages.send(sender, "no-permission");
             return;
         }
-        long onlineLocations = locations.all().stream().filter(link -> link.position().loadedWorld() != null).count();
-        long drafts = crates.all().stream().filter(crate -> crate.state() == com.antondev.crates.domain.crate.CrateState.DRAFT).count();
-        int pendingJournals;
+        long onlineLocations = locations.all().stream()
+                .filter(link -> link.position().loadedWorld() != null).count();
+        long drafts = crates.all().stream()
+                .filter(crate -> crate.state() == com.antondev.crates.domain.crate.CrateState.DRAFT).count();
+        boolean signerServiceReady = portables != null && portables.ready();
+        sender.sendMessage(Text.parse("<gray>Collecting PlexonCrates diagnostics…</gray>"));
+        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+            DiagnosticDatabaseSnapshot diagnostic = collectDiagnosticDatabaseSnapshot();
+            if (!isEnabled()) return;
+            getServer().getScheduler().runTask(this, () -> {
+                if (!isEnabled()) return;
+                renderDiagnostics(sender, onlineLocations, drafts, signerServiceReady, diagnostic);
+            });
+        });
+    }
+
+    private DiagnosticDatabaseSnapshot collectDiagnosticDatabaseSnapshot() {
+        int pendingJournals = -1;
         DatabaseService.JournalHealth journalHealth = null;
         List<DatabaseService.JournalDiagnostic> journalEntries = List.of();
         try {
             pendingJournals = database.pendingJournalCount();
             journalHealth = database.journalHealth();
             journalEntries = database.journalDiagnostics(5);
-        } catch (Exception error) { pendingJournals = -1; }
+        } catch (Exception error) {
+            getLogger().log(Level.WARNING, "Could not read opening-journal diagnostics", error);
+        }
         DatabaseService.ClaimCounts claimCounts = null;
-        try { claimCounts = database.claimCounts().join(); }
-        catch (Exception error) { getLogger().log(Level.WARNING, "Could not read Claim Inbox diagnostics", error); }
+        try {
+            claimCounts = database.claimCounts().join();
+        } catch (Exception error) {
+            getLogger().log(Level.WARNING, "Could not read Claim Inbox diagnostics", error);
+        }
         DatabaseService.PortableIssueCounts portableCounts = null;
-        boolean portableSignerHealthy = portables != null && portables.ready();
+        boolean portableSecretPresent = false;
         try {
             portableCounts = database.portableIssueCounts().join();
-            portableSignerHealthy = portableSignerHealthy && database.portableSecretPresent().join();
+            portableSecretPresent = database.portableSecretPresent().join();
         } catch (Exception error) {
             getLogger().log(Level.WARNING, "Could not read portable-crate diagnostics", error);
-            portableSignerHealthy = false;
         }
+        return new DiagnosticDatabaseSnapshot(pendingJournals, journalHealth, journalEntries,
+                claimCounts, portableCounts, portableSecretPresent);
+    }
+
+    private void renderDiagnostics(CommandSender sender, long onlineLocations, long drafts,
+                                   boolean signerServiceReady, DiagnosticDatabaseSnapshot diagnostic) {
+        DatabaseService.JournalHealth journalHealth = diagnostic.journalHealth();
+        List<DatabaseService.JournalDiagnostic> journalEntries = diagnostic.journalEntries();
+        DatabaseService.ClaimCounts claimCounts = diagnostic.claimCounts();
+        DatabaseService.PortableIssueCounts portableCounts = diagnostic.portableCounts();
+        boolean portableSignerHealthy = signerServiceReady && diagnostic.portableSecretPresent();
         sender.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>PlexonCrates Diagnostics</bold></gradient>"));
         sender.sendMessage(Text.parse("<gray>Plugin:</gray> <white>" + getPluginMeta().getVersion() + "</white> <dark_gray>•</dark_gray> <gray>Paper API:</gray> <white>26.2</white> <dark_gray>•</dark_gray> <gray>Java:</gray> <white>" + Runtime.version().feature() + "</white>"));
         if (coreBridge != null) {
@@ -469,7 +499,7 @@ public class PlexonCrates extends JavaPlugin {
         sender.sendMessage(Text.parse("<gray>Key detail:</gray> <white>" + keys.providerDiagnostic() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Unresolved:</gray> <white>" + keys.unresolved().size() + "</white> <dark_gray>•</dark_gray> <gray>Collisions:</gray> <white>" + keys.collisions().size() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Locations:</gray> <white>" + locations.all().size() + "</white> <dark_gray>(" + onlineLocations + " online)</dark_gray>"));
-        sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + pendingJournals + "</white>"));
+        sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + diagnostic.pendingJournals() + "</white>"));
         if (journalHealth != null) {
             sender.sendMessage(Text.parse("<gray>Journal recovery:</gray> <white>manual=" + journalHealth.manualReview()
                     + ", pre-payment=" + journalHealth.paymentNotConsumed() + ", payment-committed="
@@ -511,20 +541,57 @@ public class PlexonCrates extends JavaPlugin {
                 + (openings.pendingCount() + draftSessions.activeSessions()) + "</white>"));
     }
 
+    private record DiagnosticDatabaseSnapshot(
+            int pendingJournals,
+            DatabaseService.JournalHealth journalHealth,
+            List<DatabaseService.JournalDiagnostic> journalEntries,
+            DatabaseService.ClaimCounts claimCounts,
+            DatabaseService.PortableIssueCounts portableCounts,
+            boolean portableSecretPresent) {
+        private DiagnosticDatabaseSnapshot {
+            journalEntries = List.copyOf(journalEntries);
+        }
+    }
+
     private void updateCoreHealth() {
         if (coreBridge == null || !coreBridge.available()) return;
         try {
-            int pendingJournals = database == null ? 0 : database.pendingJournalCount();
-            if (pendingJournals > 0) {
-                coreBridge.markDegraded("Crate runtime is ready; " + pendingJournals
-                        + " opening journal entr" + (pendingJournals == 1 ? "y requires" : "ies require")
-                        + " manual review");
-                return;
-            }
-            coreBridge.markReady("Crate engine, API, key registry, runtime snapshot and writer are ready");
+            applyCoreHealth(database == null ? 0 : database.pendingJournalCount(), null);
         } catch (Exception error) {
+            applyCoreHealth(-1, error);
+        }
+    }
+
+    private void updateCoreHealthAsync() {
+        if (coreBridge == null || !coreBridge.available() || !isEnabled()) return;
+        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+            int pending = -1;
+            Exception failure = null;
+            try {
+                pending = database == null ? 0 : database.pendingJournalCount();
+            } catch (Exception error) {
+                failure = error;
+            }
+            int finalPending = pending;
+            Exception finalFailure = failure;
+            if (!isEnabled()) return;
+            getServer().getScheduler().runTask(this, () -> {
+                if (isEnabled()) applyCoreHealth(finalPending, finalFailure);
+            });
+        });
+    }
+
+    private void applyCoreHealth(int pendingJournals, Exception failure) {
+        if (coreBridge == null || !coreBridge.available()) return;
+        if (failure != null) {
             coreBridge.markDegraded("Crate runtime is ready; health probe failed: "
-                    + error.getClass().getSimpleName());
+                    + failure.getClass().getSimpleName());
+        } else if (pendingJournals > 0) {
+            coreBridge.markDegraded("Crate runtime is ready; " + pendingJournals
+                    + " opening journal entr" + (pendingJournals == 1 ? "y requires" : "ies require")
+                    + " manual review");
+        } else {
+            coreBridge.markReady("Crate engine, API, key registry, runtime snapshot and writer are ready");
         }
     }
 

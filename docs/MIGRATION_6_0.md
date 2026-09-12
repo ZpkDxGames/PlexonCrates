@@ -27,6 +27,21 @@ New optional particle controls include:
 
 Global location/particle budgets and stagger behavior remain authoritative ceilings.
 
+### Opening animation profiles
+
+6.0 adds `animations.yml` as a presentation-only profile registry. Its bundled migration-safe default is:
+
+```yaml
+global-profile: legacy
+crate-profiles: {}
+```
+
+`legacy` is a reserved assignment, not a named editable profile. It means “project this crate's already-accepted 5.x `crate.animation` value.” Therefore installing 6.0 does not silently convert an `INSTANT`, `REVEAL`, `ROULETTE`, or `SUMMARY` crate to a new animation style.
+
+Administrators may deliberately replace that behavior by selecting a named global profile or assigning a named profile to one crate. A crate may also be explicitly assigned `legacy` while another named global profile is active. The in-game profile editor exposes both “Preserve Legacy Globally” and “Use Legacy for This Crate”; cloning an effective legacy presentation materializes the current crate animation into a normal editable profile.
+
+The profile registry remains cosmetic. It does not store reward choices, key/payment state, pity, limits, journals, claims, milestones, rerolls, or statistics, and it does not require a SQLite schema change.
+
 ## Exact item compatibility
 
 Stored exact item bytes are never rewritten solely because 6.0 introduces additional diagnostics. On restore, PlexonCrates verifies the stored SHA-256 before Paper decodes the payload. Capture validation requires a successful native decode back to an equivalent current-server ItemStack while retaining the original captured byte array as the authoritative snapshot.
@@ -46,9 +61,10 @@ The existing Phoenix migration service remains in scope and retains its 5.1 asyn
 3. Install the exact published 6.0 RC JAR; do not substitute a locally rebuilt binary during certification.
 4. Start Paper 26.2 and verify clean enable with the existing config/schema.
 5. Verify published crates, linked locations, key sources, exact custom rewards and player durable state.
-6. Exercise restart/reload and confirm no duplicate grants, lost claims or unexpected payload rewrites.
-7. Exercise Phoenix migration only with the intended fixture/source and retain its generated backup/report.
-8. Capture the exact RC tag, source SHA and JAR SHA-256 in the runtime certification record.
+6. Verify existing crates retain their pre-6.0 animation behavior while `global-profile: legacy` is active, then exercise one deliberate named-profile override and revert it.
+7. Exercise restart/reload and confirm no duplicate grants, lost claims or unexpected payload rewrites.
+8. Exercise Phoenix migration only with the intended fixture/source and retain its generated backup/report.
+9. Capture the exact RC tag, source SHA and JAR SHA-256 in the runtime certification record.
 
 ## Rollback
 

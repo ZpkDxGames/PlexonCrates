@@ -2,6 +2,36 @@
 
 All notable PlexonCrates changes are documented here.
 
+## 6.0.0-rc.1 — Runtime certification candidate
+
+### Added
+
+- Added first-class player **My Keys** and paginated **Opening History** GUIs using existing authoritative key/history data sources and the centralized inventory router.
+- Added native-byte exact-item diagnostics for resolved key templates, Reward Builder delivery stacks, global reward browsing and Test Lab without mutating canonical/source ItemStacks.
+- Added named opening profiles in `animations.yml` with `INSTANT`, `ROULETTE`, `SPIN`, `CHARGE_REVEAL`, `SPIRAL_BURST`, `ORB_REVEAL`, `CASCADE` and `FIREWORK_STYLE`, explicit animation stages, bounded particles/sounds and global/per-crate assignment.
+- Added named physical idle profiles in `idle-animations.yml` with reusable geometry/range/budget settings, global/per-crate assignment and an in-game editor.
+- Added migration-safe reserved `legacy` inheritance for both opening and idle profiles so existing 5.x presentation is preserved until deliberately overridden.
+- Added bounded Test Lab previews that reuse the production opening renderer and a one-frame idle preview without adding per-viewer/profile repeating tasks.
+
+### Changed
+
+- Production opening result presentation now resolves the effective 6.0 profile only after the authoritative reward/payment/delivery/finalization path has completed.
+- Physical linked-crate particles now resolve the effective per-crate idle profile while retaining one shared scheduler, indexed nearby-chunk discovery, receiver-scoped emission and global performance ceilings.
+- Updated GUI/migration/testing/release documentation for the 6.0 product boundary and real-host certification gate.
+- Kept SQLite schema `4`; new profile registries remain presentation-only files and do not duplicate durable transaction/player state.
+
+### Preserved
+
+- `OpeningService` remains the sole opening transaction authority; reward selection, journal/payment/revalidation/grant ordering, limits, pity, cooldowns, milestones, rerolls, claims/recovery and statistics are not moved into animation or GUI code.
+- Exact item authority remains native Paper bytes; no Material/name/lore/plugin-ID reconstruction is introduced.
+- PlexonKeys integration, durable draft/publication revisions, portable issuance/signing/replay protection, Phoenix migration boundaries and the `v5.0.0` rollback baseline remain intact.
+
+### Release state
+
+- Target runtime: Paper `26.2.build.121-stable`, Java `25`, PlexonCore `2.0.4`, PlexonKeys API `2.0.0-rc.2`.
+- This is a prerelease candidate. GitHub source/distribution CI is required before publication, followed by real PlexonCraft startup, GUI/opening, exact-item persistence/recovery and active-use performance/soak certification.
+- Stable `v6.0.0` is forbidden until the exact published RC artifact is runtime-certified.
+
 ## 5.0.0 — Stable
 
 - Promotes the accepted Phase 2 / Phase 3 premium crate line and final RC4 source boundary to stable `5.0.0`.

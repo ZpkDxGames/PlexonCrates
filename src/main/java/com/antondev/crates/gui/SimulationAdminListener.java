@@ -1,6 +1,8 @@
 package com.antondev.crates.gui;
 
 import com.antondev.crates.PlexonCrates;
+import com.antondev.crates.animation.IdleAnimationProfile;
+import com.antondev.crates.animation.IdleAnimationProfileStore;
 import com.antondev.crates.animation.OpeningAnimationProfile;
 import com.antondev.crates.animation.OpeningAnimationProfileStore;
 import com.antondev.crates.config.Text;
@@ -54,6 +56,8 @@ public final class SimulationAdminListener implements Listener {
     private final OpeningAnimationProfileStore animationProfiles;
     private final OpeningAnimationProfileEditor animationEditor;
     private final OpeningProfilePresentationService profilePresentation;
+    private final IdleAnimationProfileStore idleProfiles;
+    private final IdleAnimationProfileEditor idleEditor;
     private final NamespacedKey marker;
 
     public SimulationAdminListener(PlexonCrates plugin, CrateSimulationService simulations) {
@@ -62,6 +66,8 @@ public final class SimulationAdminListener implements Listener {
         this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);
         this.animationEditor = new OpeningAnimationProfileEditor(plugin, animationProfiles, this::openHub);
         this.profilePresentation = OpeningProfilePresentationService.shared(plugin);
+        this.idleProfiles = IdleAnimationProfileStore.shared(plugin);
+        this.idleEditor = new IdleAnimationProfileEditor(plugin, idleProfiles, this::openHub);
         this.marker = new NamespacedKey(plugin, "phase2_simulation");
     }
 
@@ -85,6 +91,7 @@ public final class SimulationAdminListener implements Listener {
      * after the original event has returned.
      */
     public boolean routeClick(InventoryClickEvent event) {
+        if (idleEditor.routeClick(event)) return true;
         if (animationEditor.routeClick(event)) return true;
         Inventory top = event.getView().getTopInventory();
         if (top.getHolder() instanceof MenuHolder holder && holder.kind() == MenuHolder.Kind.EDITOR) {
@@ -119,6 +126,7 @@ public final class SimulationAdminListener implements Listener {
 
     /** Test Lab/profile inventories never accept dragged items. */
     public boolean routeDrag(InventoryDragEvent event) {
+        if (idleEditor.routeDrag(event)) return true;
         if (animationEditor.routeDrag(event)) return true;
         if (!(event.getView().getTopInventory().getHolder() instanceof SimulationHolder)) return false;
         event.setCancelled(true);
@@ -137,6 +145,7 @@ public final class SimulationAdminListener implements Listener {
             else if (slot == 20) openExactItemAudit(player, holder);
             else if (slot == 21) animationEditor.open(player, holder.crateId, holder.snapshot.mode());
             else if (slot == 22) backToEditor(player, holder.crateId);
+            else if (slot == 23) idleEditor.open(player, holder.crateId, holder.snapshot.mode());
             return;
         }
         if (holder.view == View.DRY) {
@@ -165,6 +174,7 @@ public final class SimulationAdminListener implements Listener {
         }
         Snapshot snapshot = snapshot(player, crate, mode);
         OpeningAnimationProfile openingProfile = animationProfiles.resolve(crate.id(), crate.animation());
+        IdleAnimationProfile idleProfile = idleProfiles.resolve(crate.id(), plugin.settings().idleParticleProfile());
         SimulationHolder holder = new SimulationHolder(player.getUniqueId(), crate.id(), View.HUB, snapshot, null, 0);
         Inventory inventory = Bukkit.createInventory(holder, 27,
                 Text.parse("<gradient:#8CDFFF:#D8F6FF><bold>CRATE TEST LAB</bold></gradient> <dark_gray>•</dark_gray> <white>"
@@ -219,6 +229,13 @@ public final class SimulationAdminListener implements Listener {
                 Component.text("Assign globally/per crate, clone profiles or reset defaults.", NamedTextColor.GRAY),
                 Component.text("Profile edits never touch rewards, keys, pity, limits or statistics.", NamedTextColor.GREEN))));
         inventory.setItem(22, item(Material.ARROW, "<gray>Back to Crate Editor</gray>", List.of()));
+        inventory.setItem(23, item(Material.END_ROD, "<gradient:#8CDFFF:#D8F6FF><bold>Idle Profiles</bold></gradient>", List.of(
+                line("Effective style", idleProfile.style()),
+                line("Particle", idleProfile.particle()),
+                line("Receiver range", idleProfile.receiverRange() + " blocks"),
+                Component.text("Edit geometry, particle and bounded per-crate/viewer budgets.", NamedTextColor.GRAY),
+                Component.text("Assign globally/per crate, clone, reset or render a one-frame preview.", NamedTextColor.GRAY),
+                Component.text("Idle presentation never enters the opening transaction path.", NamedTextColor.GREEN))));
         player.openInventory(inventory);
     }
 

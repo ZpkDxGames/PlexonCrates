@@ -32,8 +32,8 @@ class RevampPublicationIoArchitectureTest {
                 "private static DatabaseService.DefinitionBundle bundle(");
         assertTrue(mirror.contains("plugin.io().submit"));
         assertTrue(mirror.contains("crates.writePublishedMirror(prepared)"));
-        assertTrue(mirror.contains("yaml mirror could not be updated"));
-        assertTrue(mirror.contains("yaml mirror task could not be scheduled"));
+        assertTrue(mirror.contains("YAML mirror could not be updated"));
+        assertTrue(mirror.contains("YAML mirror task could not be scheduled"));
     }
 
     @Test

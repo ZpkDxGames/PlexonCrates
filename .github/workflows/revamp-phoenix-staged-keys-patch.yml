@@ -1,0 +1,30 @@
+name: Revamp Phoenix prepared-key wiring
+
+on:
+  push:
+    branches:
+      - revamp/5.1.0-full-source-hardening
+    paths:
+      - .github/workflows/revamp-phoenix-staged-keys-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: revamp/5.1.0-full-source-hardening
+          fetch-depth: 0
+      - name: Wire Phoenix to staged key mutations
+        run: python tools/revamp_wire_phoenix_staged_keys.py
+      - name: Commit source patch and remove temporary helpers
+        run: |
+          git rm .github/workflows/revamp-phoenix-staged-keys-patch.yml tools/revamp_wire_phoenix_staged_keys.py
+          git add src/main/java/com/antondev/crates/migration/phoenix/PhoenixMigrationService.java
+          git config user.name "Tonim"
+          git config user.email "99552287+ZpkDxGames@users.noreply.github.com"
+          git commit -m "perf: remove Phoenix key mirror IO from primary thread"
+          git push origin HEAD:revamp/5.1.0-full-source-hardening

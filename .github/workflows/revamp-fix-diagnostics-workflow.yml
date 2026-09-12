@@ -26,14 +26,15 @@ jobs:
           text = path.read_text()
           start = text.index("          old = '''            if (coreBridge != null) {")
           end = text.index("\n          health_start = text.index('    private void updateCoreHealth() {')", start)
-          replacement = '''          reload_start = text.index('    private boolean applyReload(')
-          reload_end = text.index('    private static Exception completionException', reload_start)
-          reload_section = text[reload_start:reload_end]
-          if 'updateCoreHealth();' not in reload_section:
-              raise SystemExit('Reload Core health call changed unexpectedly')
-          reload_section = reload_section.replace('updateCoreHealth();', 'updateCoreHealthAsync();', 1)
-          text = text[:reload_start] + reload_section + text[reload_end:]
-'''
+          replacement = (
+              "          reload_start = text.index('    private boolean applyReload(')\n"
+              "          reload_end = text.index('    private static Exception completionException', reload_start)\n"
+              "          reload_section = text[reload_start:reload_end]\n"
+              "          if 'updateCoreHealth();' not in reload_section:\n"
+              "              raise SystemExit('Reload Core health call changed unexpectedly')\n"
+              "          reload_section = reload_section.replace('updateCoreHealth();', 'updateCoreHealthAsync();', 1)\n"
+              "          text = text[:reload_start] + reload_section + text[reload_end:]\n"
+          )
           path.write_text(text[:start] + replacement + text[end:])
       - name: Commit guard fix and remove helper workflow
         shell: bash

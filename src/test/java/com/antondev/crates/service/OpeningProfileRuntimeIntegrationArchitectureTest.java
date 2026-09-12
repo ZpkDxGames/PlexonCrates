@@ -42,7 +42,7 @@ class OpeningProfileRuntimeIntegrationArchitectureTest {
         String source = Files.readString(SOURCE);
         assertTrue(source.contains("OpeningAnimationProfileStore.shared(plugin)"));
         assertTrue(source.contains("OpeningProfilePresentationService.shared(plugin)"));
-        String clear = section(source, "public void clear()", "public RerollMetrics rerollMetrics()");
+        String clear = section(source, "public void clear()", "private void commitPrepared");
         assertTrue(clear.contains("profilePresentation.stop()"));
     }
 

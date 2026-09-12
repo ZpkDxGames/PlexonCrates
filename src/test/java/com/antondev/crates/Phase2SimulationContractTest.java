@@ -31,11 +31,14 @@ class Phase2SimulationContractTest {
 
     @Test
     void editorIntegrationIsAdditiveAndRejectsStaleAsyncOutput() throws Exception {
-        String lifecycle = source("gui/GuiSessionService.java");
+        String lifecycle = source("PlexonCrates.java");
+        String sessions = source("gui/GuiSessionService.java");
         String listener = source("gui/SimulationAdminListener.java");
-        assertTrue(lifecycle.contains("new CrateSimulationService()"));
-        assertTrue(lifecycle.contains("new SimulationAdminListener(plugin, simulations)"));
-        assertTrue(lifecycle.contains("simulations.close()"));
+        assertTrue(lifecycle.contains("simulations = new CrateSimulationService()"));
+        assertTrue(lifecycle.contains("registerEvents(new SimulationAdminListener(this, simulations), this)"));
+        assertTrue(lifecycle.contains("if (simulations != null) simulations.close()"));
+        assertFalse(sessions.contains("new CrateSimulationService()"));
+        assertFalse(sessions.contains("registerEvents"));
         assertFalse(listener.contains("holder.action"));
         assertTrue(listener.contains("simulateAsync(snapshot"));
         assertTrue(listener.contains("CrateSimulationService.isCurrent"));

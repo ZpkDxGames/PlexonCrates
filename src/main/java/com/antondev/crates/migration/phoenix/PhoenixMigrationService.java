@@ -121,9 +121,38 @@ public final class PhoenixMigrationService {
         return new ScanResult(Instant.now(), fingerprint, List.copyOf(files), warnings);
     }
 
+    /** Captures all live plugin state needed by read-only migration planning on the primary thread. */
+    public PlanningState capturePlanningState() {
+        requirePlugin();
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("Phoenix planning state must be captured on the primary thread");
+        }
+        var keys = new LinkedHashMap<String, PlanningKey>();
+        for (var definition : plugin.keys().definitions()) {
+            ItemStack template = plugin.keys().template(definition.id()).orElse(null);
+            keys.put(definition.id().toLowerCase(Locale.ROOT), new PlanningKey(template));
+        }
+        var crateFingerprints = new LinkedHashMap<String, String>();
+        var crates = plugin.crates().snapshot();
+        Map<String, byte[]> payloads = crates.payloads();
+        for (String crateId : crates.crates().keySet()) {
+            byte[] payload = payloads.get(crateId);
+            crateFingerprints.put(crateId.toLowerCase(Locale.ROOT),
+                    payload == null ? "" : migrationFingerprint(payload));
+        }
+        Plugin phoenix = plugin.getServer().getPluginManager().getPlugin("PhoenixCratesLite");
+        return new PlanningState(phoenix != null && phoenix.isEnabled(), keys, crateFingerprints,
+                List.copyOf(plugin.locations().all()));
+    }
+
     /** Parses the supplied live fixture and produces a non-mutating mapping plan. */
     public PlanResult plan(ScanResult scan) {
+        return plan(scan, plugin == null ? PlanningState.empty() : capturePlanningState());
+    }
+
+    public PlanResult plan(ScanResult scan, PlanningState state) {
         Objects.requireNonNull(scan, "scan");
+        Objects.requireNonNull(state, "state");
         if (scan.files().isEmpty()) {
             return blockedPlan(scan, "No Phoenix source files were found.", List.of());
         }
@@ -133,8 +162,7 @@ public final class PhoenixMigrationService {
             var warnings = new ArrayList<>(fixture.warnings());
             boolean enabled = true;
 
-            Plugin phoenix = plugin == null ? null : plugin.getServer().getPluginManager().getPlugin("PhoenixCratesLite");
-            if (phoenix != null && phoenix.isEnabled()) {
+            if (state.phoenixEnabled()) {
                 enabled = false;
                 warnings.add("PhoenixCratesLite is enabled. Stop the server and remove its JAR from active plugins before importing.");
             }
@@ -143,8 +171,9 @@ public final class PhoenixMigrationService {
                     .sorted(Comparator.comparing(PhoenixKey::sourceId)).toList()) {
                 MigrationStatus status = MigrationStatus.EXACT;
                 String detail = key.sourceId() + " -> " + key.targetId();
-                if (plugin != null && plugin.keys().definition(key.targetId()).isPresent()) {
-                    ItemStack existing = plugin.keys().template(key.targetId()).orElse(null);
+                PlanningKey existingKey = state.keys().get(key.targetId().toLowerCase(Locale.ROOT));
+                if (existingKey != null) {
+                    ItemStack existing = existingKey.template();
                     if (existing == null) {
                         status = MigrationStatus.MANUAL_REVIEW;
                         enabled = false;
@@ -161,8 +190,8 @@ public final class PhoenixMigrationService {
                 MigrationStatus status = MigrationStatus.EXACT;
                 String detail = crate.sourceId() + " -> " + crate.targetId() + " as DRAFT; "
                         + crate.rewards().size() + " rewards";
-                if (plugin != null && plugin.crates().find(crate.targetId()).isPresent()) {
-                    String existingFingerprint = migrationFingerprint(crate.targetId());
+                if (state.crateFingerprints().containsKey(crate.targetId())) {
+                    String existingFingerprint = state.crateFingerprints().get(crate.targetId());
                     if (scan.fingerprint().equals(existingFingerprint)) {
                         status = MigrationStatus.SKIPPED;
                         detail += " (already imported from this source fingerprint)";
@@ -200,18 +229,16 @@ public final class PhoenixMigrationService {
                             MigrationStatus.CONFLICT, "Location references an unavailable Phoenix crate"));
                     continue;
                 }
-                if (plugin != null) {
-                    var existing = plugin.locations().all().stream().filter(link ->
-                            link.position().worldName().equalsIgnoreCase(location.worldName())
-                                    && link.position().x() == location.x() && link.position().y() == location.y()
-                                    && link.position().z() == location.z()).findFirst().orElse(null);
-                    if (existing != null && !existing.crateId().equalsIgnoreCase(target)) {
-                        enabled = false;
-                        entries.add(new PlanEntry("location:" + location.worldName() + ":" + location.x()
-                                + ":" + location.y() + ":" + location.z(), target, MigrationStatus.CONFLICT,
-                                "Block is already linked to " + existing.crateId()));
-                        continue;
-                    }
+                var existing = state.locations().stream().filter(link ->
+                        link.position().worldName().equalsIgnoreCase(location.worldName())
+                                && link.position().x() == location.x() && link.position().y() == location.y()
+                                && link.position().z() == location.z()).findFirst().orElse(null);
+                if (existing != null && !existing.crateId().equalsIgnoreCase(target)) {
+                    enabled = false;
+                    entries.add(new PlanEntry("location:" + location.worldName() + ":" + location.x()
+                            + ":" + location.y() + ":" + location.z(), target, MigrationStatus.CONFLICT,
+                            "Block is already linked to " + existing.crateId()));
+                    continue;
                 }
                 entries.add(new PlanEntry("location:" + location.worldName() + ":" + location.x()
                         + ":" + location.y() + ":" + location.z(), target, MigrationStatus.EXACT,
@@ -350,14 +377,19 @@ public final class PhoenixMigrationService {
 
     /** Revalidates the current source and all mapping conflicts without changing data. */
     public ValidationResult validate(PlanResult plan) {
+        return validate(plan, plugin == null ? PlanningState.empty() : capturePlanningState());
+    }
+
+    public ValidationResult validate(PlanResult plan, PlanningState state) {
         Objects.requireNonNull(plan, "plan");
+        Objects.requireNonNull(state, "state");
         var issues = new ArrayList<String>();
         try {
             ScanResult current = scan();
             if (!current.fingerprint().equals(plan.sourceFingerprint())) {
                 issues.add("Phoenix source fingerprint changed after the plan was generated.");
             }
-            PlanResult fresh = plan(current);
+            PlanResult fresh = plan(current, state);
             if (!fresh.importEnabled()) issues.addAll(fresh.warnings());
             fresh.entries().stream().filter(entry -> entry.status() == MigrationStatus.CONFLICT)
                     .forEach(entry -> issues.add(entry.source() + ": " + entry.detail()));
@@ -581,8 +613,16 @@ public final class PhoenixMigrationService {
 
     private String migrationFingerprint(String crateId) {
         try {
+            return migrationFingerprint(plugin.crates().serialized(crateId).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String migrationFingerprint(byte[] payload) {
+        try {
             YamlConfiguration yaml = new YamlConfiguration();
-            yaml.loadFromString(plugin.crates().serialized(crateId));
+            yaml.loadFromString(new String(payload, StandardCharsets.UTF_8));
             return yaml.getString("migration.source-fingerprint", "");
         } catch (Exception ignored) {
             return "";
@@ -665,6 +705,25 @@ public final class PhoenixMigrationService {
     private static Component keyDisplayName(PhoenixKey key) {
         Component name = key.template().getItemMeta().displayName();
         return name == null ? Text.parse("<white>" + key.targetId() + " key</white>") : name;
+    }
+
+    public record PlanningKey(ItemStack template) {
+        public PlanningKey {
+            template = template == null ? null : template.clone();
+        }
+        @Override public ItemStack template() { return template == null ? null : template.clone(); }
+    }
+
+    public record PlanningState(boolean phoenixEnabled, Map<String, PlanningKey> keys,
+                                Map<String, String> crateFingerprints, List<LocationStore.Link> locations) {
+        public PlanningState {
+            keys = Map.copyOf(keys);
+            crateFingerprints = Map.copyOf(crateFingerprints);
+            locations = List.copyOf(locations);
+        }
+        public static PlanningState empty() {
+            return new PlanningState(false, Map.of(), Map.of(), List.of());
+        }
     }
 
     public enum Phase { SCAN, PLAN, IMPORT_TO_DRAFTS, VALIDATE, CUTOVER_REPORT }

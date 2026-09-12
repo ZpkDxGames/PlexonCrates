@@ -3,10 +3,13 @@ package com.antondev.crates.command;
 import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.config.Text;
 import com.antondev.crates.migration.phoenix.PhoenixMigrationService;
-import java.nio.file.Files;
+import com.antondev.crates.service.AsyncIoService;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.function.BiConsumer;
+import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -23,16 +26,15 @@ final class PhoenixMigrationCommand {
         String phase = args[2].toLowerCase(Locale.ROOT);
         try {
             switch (phase) {
-                case "scan" -> scan(service, sender);
-                case "plan" -> plan(service, sender);
-                case "validate" -> validate(service, sender);
-                case "report" -> report(service, sender);
+                case "scan" -> scan(plugin, service, sender);
+                case "plan" -> plan(plugin, service, sender);
+                case "validate" -> validate(plugin, service, sender);
+                case "report" -> report(plugin, service, sender);
                 case "import" -> importData(service, sender, args);
                 default -> help(sender);
             }
         } catch (Exception error) {
-            sender.sendMessage(Text.parse("<red>Phoenix migration failed:</red> <white>" + escape(concise(error)) + "</white>"));
-            plugin.getLogger().log(java.util.logging.Level.WARNING, "Phoenix migration command failed", error);
+            fail(plugin, sender, error);
         }
     }
 
@@ -48,8 +50,39 @@ final class PhoenixMigrationCommand {
         return List.of();
     }
 
-    private static void scan(PhoenixMigrationService service, CommandSender sender) throws Exception {
-        PhoenixMigrationService.ScanResult scan = service.scan();
+    private static void scan(PlexonCrates plugin, PhoenixMigrationService service, CommandSender sender) {
+        async(plugin, sender, "<aqua>Scanning Phoenix migration source off-thread…</aqua>", service::scan,
+                PhoenixMigrationCommand::renderScan);
+    }
+
+    private static void plan(PlexonCrates plugin, PhoenixMigrationService service, CommandSender sender) {
+        PhoenixMigrationService.PlanningState state = service.capturePlanningState();
+        async(plugin, sender, "<aqua>Building Phoenix migration plan off-thread…</aqua>", () -> {
+            PhoenixMigrationService.ScanResult scan = service.scan();
+            return new PlanBundle(scan, service.plan(scan, state));
+        }, (target, bundle) -> renderPlan(target, bundle.plan()));
+    }
+
+    private static void validate(PlexonCrates plugin, PhoenixMigrationService service, CommandSender sender) {
+        PhoenixMigrationService.PlanningState state = service.capturePlanningState();
+        async(plugin, sender, "<aqua>Validating Phoenix migration source off-thread…</aqua>", () -> {
+            PhoenixMigrationService.ScanResult scan = service.scan();
+            PhoenixMigrationService.PlanResult plan = service.plan(scan, state);
+            return new ValidationBundle(scan, service.validate(plan, state));
+        }, PhoenixMigrationCommand::renderValidation);
+    }
+
+    private static void report(PlexonCrates plugin, PhoenixMigrationService service, CommandSender sender) {
+        PhoenixMigrationService.PlanningState state = service.capturePlanningState();
+        async(plugin, sender, "<aqua>Writing Phoenix migration report off-thread…</aqua>", () -> {
+            PhoenixMigrationService.ScanResult scan = service.scan();
+            PhoenixMigrationService.PlanResult plan = service.plan(scan, state);
+            return new ReportBundle(service.writeReport(scan, plan));
+        }, (target, bundle) -> target.sendMessage(Text.parse("<green>Phoenix migration report written:</green> <white>"
+                + escape(bundle.report().getFileName().toString()) + "</white>")));
+    }
+
+    private static void renderScan(CommandSender sender, PhoenixMigrationService.ScanResult scan) {
         sender.sendMessage(Text.parse("<gradient:#FF9F2E:#FFF0B2><bold>Phoenix Migration Scan</bold></gradient>"));
         sender.sendMessage(Text.parse("<gray>Source:</gray> <white>plugins/PlexonCrates/imports/phoenix/</white>"));
         sender.sendMessage(Text.parse("<gray>Files:</gray> <white>" + scan.files().size() + "</white>"));
@@ -59,9 +92,7 @@ final class PhoenixMigrationCommand {
         } else sender.sendMessage(Text.parse("<green>Source fingerprint completed without modifying Phoenix files.</green>"));
     }
 
-    private static void plan(PhoenixMigrationService service, CommandSender sender) throws Exception {
-        PhoenixMigrationService.ScanResult scan = service.scan();
-        PhoenixMigrationService.PlanResult plan = service.plan(scan);
+    private static void renderPlan(CommandSender sender, PhoenixMigrationService.PlanResult plan) {
         sender.sendMessage(Text.parse("<gradient:#FF9F2E:#FFF0B2><bold>Phoenix Migration Plan</bold></gradient>"));
         sender.sendMessage(Text.parse("<gray>Fingerprint:</gray> <white>" + plan.sourceFingerprint() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Mappings:</gray> <white>" + plan.entries().size() + "</white>"));
@@ -81,25 +112,16 @@ final class PhoenixMigrationCommand {
         }
     }
 
-    private static void validate(PhoenixMigrationService service, CommandSender sender) throws Exception {
-        PhoenixMigrationService.ScanResult scan = service.scan();
-        PhoenixMigrationService.PlanResult plan = service.plan(scan);
-        PhoenixMigrationService.ValidationResult validation = service.validate(plan);
-        if (validation.validForImport()) {
+    private static void renderValidation(CommandSender sender, ValidationBundle bundle) {
+        if (bundle.validation().validForImport()) {
             sender.sendMessage(Text.parse("<green>Phoenix migration validation passed for fingerprint</green> <white>"
-                    + scan.fingerprint() + "</white><green>.</green>"));
+                    + bundle.scan().fingerprint() + "</white><green>.</green>"));
         } else {
             sender.sendMessage(Text.parse("<red>Phoenix migration validation is blocked.</red>"));
-            for (String issue : validation.issues()) sender.sendMessage(Text.parse("<red>•</red> <white>" + escape(issue) + "</white>"));
+            for (String issue : bundle.validation().issues()) {
+                sender.sendMessage(Text.parse("<red>•</red> <white>" + escape(issue) + "</white>"));
+            }
         }
-    }
-
-    private static void report(PhoenixMigrationService service, CommandSender sender) throws Exception {
-        PhoenixMigrationService.ScanResult scan = service.scan();
-        PhoenixMigrationService.PlanResult plan = service.plan(scan);
-        var report = service.writeReport(scan, plan);
-        sender.sendMessage(Text.parse("<green>Phoenix migration report written:</green> <white>"
-                + escape(report.getFileName().toString()) + "</white>"));
     }
 
     private static void importData(PhoenixMigrationService service, CommandSender sender, String[] args) throws Exception {
@@ -129,6 +151,24 @@ final class PhoenixMigrationCommand {
         sender.sendMessage(Text.parse("<yellow>Imported crates remain DRAFT. Review and validate them before publishing.</yellow>"));
     }
 
+    private static <T> void async(PlexonCrates plugin, CommandSender sender, String progress,
+                                  AsyncIoService.CheckedSupplier<T> task, BiConsumer<CommandSender, T> success) {
+        sender.sendMessage(Text.parse(progress));
+        plugin.io().submit(task).whenComplete((result, error) -> {
+            if (!plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (sender instanceof Player player && !player.isOnline()) return;
+                if (error != null) fail(plugin, sender, error);
+                else success.accept(sender, result);
+            });
+        });
+    }
+
+    private static void fail(PlexonCrates plugin, CommandSender sender, Throwable error) {
+        sender.sendMessage(Text.parse("<red>Phoenix migration failed:</red> <white>" + escape(concise(error)) + "</white>"));
+        plugin.getLogger().log(java.util.logging.Level.WARNING, "Phoenix migration command failed", error);
+    }
+
     private static void help(CommandSender sender) {
         sender.sendMessage(Text.parse("<white>/pcrates migrate phoenix scan</white> <dark_gray>—</dark_gray> <gray>Hash the read-only source.</gray>"));
         sender.sendMessage(Text.parse("<white>/pcrates migrate phoenix plan</white> <dark_gray>—</dark_gray> <gray>Preview mappings and conflicts.</gray>"));
@@ -152,4 +192,9 @@ final class PhoenixMigrationCommand {
         String lower = prefix == null ? "" : prefix.toLowerCase(Locale.ROOT);
         return values.stream().filter(value -> value.toLowerCase(Locale.ROOT).startsWith(lower)).toList();
     }
+
+    private record PlanBundle(PhoenixMigrationService.ScanResult scan, PhoenixMigrationService.PlanResult plan) {}
+    private record ValidationBundle(PhoenixMigrationService.ScanResult scan,
+                                    PhoenixMigrationService.ValidationResult validation) {}
+    private record ReportBundle(Path report) {}
 }

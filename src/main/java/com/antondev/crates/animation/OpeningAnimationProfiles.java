@@ -23,16 +23,18 @@ import org.bukkit.configuration.file.YamlConfiguration;
 public final class OpeningAnimationProfiles {
     public static final int CONFIG_VERSION = 1;
     public static final String BUILTIN_DEFAULT = "default";
+    /** Reserved assignment that projects each crate's accepted legacy animation value. */
+    public static final String LEGACY_INHERIT = "legacy";
 
     public record Snapshot(
             String globalProfileId,
             Map<String, OpeningAnimationProfile> profiles,
             Map<String, String> crateAssignments) {
         public Snapshot {
-            globalProfileId = id(globalProfileId, "global profile");
+            globalProfileId = assignmentId(globalProfileId, "global profile");
             profiles = Map.copyOf(new LinkedHashMap<>(Objects.requireNonNull(profiles, "profiles")));
             crateAssignments = Map.copyOf(new LinkedHashMap<>(Objects.requireNonNull(crateAssignments, "crateAssignments")));
-            if (!profiles.containsKey(globalProfileId)) {
+            if (!LEGACY_INHERIT.equals(globalProfileId) && !profiles.containsKey(globalProfileId)) {
                 throw new IllegalArgumentException("Global opening animation profile does not exist: " + globalProfileId);
             }
             for (Map.Entry<String, String> entry : crateAssignments.entrySet()) {
@@ -40,8 +42,8 @@ public final class OpeningAnimationProfiles {
                 if (!crateId.equals(entry.getKey())) {
                     throw new IllegalArgumentException("Crate animation assignment IDs must be normalized: " + entry.getKey());
                 }
-                String profileId = id(entry.getValue(), "crate profile");
-                if (!profiles.containsKey(profileId)) {
+                String profileId = assignmentId(entry.getValue(), "crate profile");
+                if (!LEGACY_INHERIT.equals(profileId) && !profiles.containsKey(profileId)) {
                     throw new IllegalArgumentException("Crate " + crateId + " references unknown animation profile " + profileId);
                 }
             }
@@ -63,25 +65,39 @@ public final class OpeningAnimationProfiles {
     }
 
     public Optional<OpeningAnimationProfile> named(String profileId) {
-        if (profileId == null) return Optional.empty();
+        if (profileId == null || LEGACY_INHERIT.equals(profileId.trim().toLowerCase(Locale.ROOT))) {
+            return Optional.empty();
+        }
         return Optional.ofNullable(snapshot.profiles().get(profileId.trim().toLowerCase(Locale.ROOT)));
     }
 
     /**
-     * Resolves a 6.0 assignment first and falls back to the crate's accepted
-     * legacy animation value if no explicit assignment exists.
+     * Resolves a crate override first, then the global assignment. The reserved
+     * {@code legacy} assignment projects the crate's accepted 5.x animation type,
+     * preventing a 6.0 upgrade from silently changing presentation behavior.
      */
     public OpeningAnimationProfile resolve(String crateId, AnimationType legacy) {
+        Objects.requireNonNull(legacy, "legacy");
         String normalized = crateId == null ? "" : crateId.trim().toLowerCase(Locale.ROOT);
         String assigned = snapshot.crateAssignments().get(normalized);
-        if (assigned != null) return snapshot.profiles().get(assigned);
-        OpeningAnimationProfile global = snapshot.profiles().get(snapshot.globalProfileId());
-        return global == null ? OpeningAnimationProfile.fromLegacy(legacy) : global;
+        if (assigned != null) return resolveAssignment(assigned, legacy);
+        return resolveAssignment(snapshot.globalProfileId(), legacy);
+    }
+
+    private OpeningAnimationProfile resolveAssignment(String assignment, AnimationType legacy) {
+        if (LEGACY_INHERIT.equals(assignment)) return OpeningAnimationProfile.fromLegacy(legacy);
+        OpeningAnimationProfile profile = snapshot.profiles().get(assignment);
+        return profile == null ? OpeningAnimationProfile.fromLegacy(legacy) : profile;
     }
 
     public static Snapshot defaults(AnimationType legacyDefault) {
         OpeningAnimationProfile profile = OpeningAnimationProfile.fromLegacy(legacyDefault);
         return new Snapshot(BUILTIN_DEFAULT, Map.of(BUILTIN_DEFAULT, profile), Map.of());
+    }
+
+    public static Snapshot migrationSafeDefaults(AnimationType profileDefault) {
+        OpeningAnimationProfile profile = OpeningAnimationProfile.fromLegacy(profileDefault);
+        return new Snapshot(LEGACY_INHERIT, Map.of(BUILTIN_DEFAULT, profile), Map.of());
     }
 
     public static Snapshot load(File file, AnimationType legacyDefault) {
@@ -96,10 +112,13 @@ public final class OpeningAnimationProfiles {
         Map<String, OpeningAnimationProfile> profiles = new LinkedHashMap<>();
         for (String raw : root.getKeys(false)) {
             String profileId = id(raw, "profile");
+            if (LEGACY_INHERIT.equals(profileId)) {
+                throw new IllegalArgumentException("Animation profile ID 'legacy' is reserved for legacy inheritance");
+            }
             if (!profileId.equals(raw)) throw new IllegalArgumentException("Animation profile IDs must be normalized: " + raw);
             profiles.put(profileId, readProfile(yaml, "profiles." + profileId));
         }
-        String global = id(yaml.getString("global-profile", BUILTIN_DEFAULT), "global profile");
+        String global = assignmentId(yaml.getString("global-profile", LEGACY_INHERIT), "global profile");
         Map<String, String> assignments = new LinkedHashMap<>();
         ConfigurationSection crates = yaml.getConfigurationSection("crate-profiles");
         if (crates != null) {
@@ -108,7 +127,7 @@ public final class OpeningAnimationProfiles {
                 if (!crateId.equals(rawCrate)) {
                     throw new IllegalArgumentException("Crate animation assignment IDs must be normalized: " + rawCrate);
                 }
-                assignments.put(crateId, id(crates.getString(rawCrate, ""), "crate profile"));
+                assignments.put(crateId, assignmentId(crates.getString(rawCrate, ""), "crate profile"));
             }
         }
         return new Snapshot(global, profiles, assignments);
@@ -130,6 +149,9 @@ public final class OpeningAnimationProfiles {
     public static Snapshot withProfile(Snapshot source, String rawId, OpeningAnimationProfile profile) {
         Objects.requireNonNull(source, "source");
         String profileId = id(rawId, "profile");
+        if (LEGACY_INHERIT.equals(profileId)) {
+            throw new IllegalArgumentException("Animation profile ID 'legacy' is reserved for legacy inheritance");
+        }
         Map<String, OpeningAnimationProfile> profiles = new LinkedHashMap<>(source.profiles());
         profiles.put(profileId, Objects.requireNonNull(profile, "profile"));
         return new Snapshot(source.globalProfileId(), profiles, source.crateAssignments());
@@ -137,13 +159,13 @@ public final class OpeningAnimationProfiles {
 
     public static Snapshot withGlobal(Snapshot source, String rawProfileId) {
         Objects.requireNonNull(source, "source");
-        return new Snapshot(id(rawProfileId, "global profile"), source.profiles(), source.crateAssignments());
+        return new Snapshot(assignmentId(rawProfileId, "global profile"), source.profiles(), source.crateAssignments());
     }
 
     public static Snapshot assign(Snapshot source, String rawCrateId, String rawProfileId) {
         Objects.requireNonNull(source, "source");
         String crateId = id(rawCrateId, "crate assignment");
-        String profileId = id(rawProfileId, "crate profile");
+        String profileId = assignmentId(rawProfileId, "crate profile");
         Map<String, String> assignments = new LinkedHashMap<>(source.crateAssignments());
         assignments.put(crateId, profileId);
         return new Snapshot(source.globalProfileId(), source.profiles(), assignments);
@@ -160,6 +182,9 @@ public final class OpeningAnimationProfiles {
     public static Snapshot removeProfile(Snapshot source, String rawProfileId) {
         Objects.requireNonNull(source, "source");
         String profileId = id(rawProfileId, "profile");
+        if (LEGACY_INHERIT.equals(profileId)) {
+            throw new IllegalArgumentException("Legacy inheritance is reserved and cannot be removed");
+        }
         if (profileId.equals(source.globalProfileId())) {
             throw new IllegalArgumentException("The global animation profile cannot be removed");
         }
@@ -244,6 +269,12 @@ public final class OpeningAnimationProfiles {
             }
         }
         throw new IllegalArgumentException("Only built-in Paper sound constants can be persisted in animations.yml");
+    }
+
+    private static String assignmentId(String raw, String label) {
+        String value = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+        if (LEGACY_INHERIT.equals(value)) return value;
+        return id(value, label);
     }
 
     private static String id(String raw, String label) {

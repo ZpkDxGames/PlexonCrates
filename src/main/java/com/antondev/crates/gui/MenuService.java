@@ -48,7 +48,6 @@ import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
-import org.bukkit.scheduler.BukkitRunnable;
 
 public final class MenuService implements Listener {
     private final PlexonCrates plugin;
@@ -56,10 +55,12 @@ public final class MenuService implements Listener {
     private final NamespacedKey editorItem;
     private final Map<UUID, String> rewardSearch = new ConcurrentHashMap<>();
     private final Map<UUID, MassContext> massContexts = new ConcurrentHashMap<>();
+    private final OpeningAnimationCoordinator animations;
 
     public MenuService(PlexonCrates plugin) {
         this.plugin = plugin;
         this.editorItem = new NamespacedKey(plugin, "editor_item");
+        this.animations = new OpeningAnimationCoordinator(plugin);
     }
 
     public void openBrowser(Player player) {
@@ -540,31 +541,8 @@ public final class MenuService implements Listener {
         if (visuals.isEmpty()) visuals = List.of(selected);
         for (int slot : rail) inventory.setItem(slot, randomDisplay(visuals));
         open(player, inventory);
-
-        List<CrateReward> finalVisuals = visuals;
-        int steps = Math.max(1, plugin.settings().animationDuration() / plugin.settings().animationPeriod());
-        new BukkitRunnable() {
-            private int step;
-            @Override public void run() {
-                step++;
-                if (player.isOnline() && player.getOpenInventory().getTopInventory().getHolder() == holder) {
-                    for (int index = 0; index < rail.size() - 1; index++) {
-                        inventory.setItem(rail.get(index), inventory.getItem(rail.get(index + 1)));
-                    }
-                    inventory.setItem(rail.getLast(), randomDisplay(finalVisuals));
-                    if (step % 3 == 0) {
-                        float pitch = Math.min(2.0f, 0.65f + step / (float) steps);
-                        player.playSound(player.getLocation(), plugin.settings().openingSound(), 0.35f, pitch);
-                    }
-                }
-                if (step < steps) return;
-                cancel();
-                if (player.isOnline() && player.getOpenInventory().getTopInventory().getHolder() == holder) {
-                    inventory.setItem(menus.slot("opening.center-slot"), selected.displayCopy());
-                }
-                completed.run();
-            }
-        }.runTaskTimer(plugin, plugin.settings().animationPeriod(), plugin.settings().animationPeriod());
+        animations.start(player, holder, inventory, rail, visuals, selected,
+                menus.slot("opening.center-slot"), completed);
     }
 
     public void reveal(Player player, Crate crate, CrateReward selected, Runnable completed) {
@@ -658,6 +636,10 @@ public final class MenuService implements Listener {
         holder.bind(menus.slot("reroll.accept"), "accept-reroll", view.transactionId().toString());
         holder.bind(menus.slot("reroll.reroll"), view.canReroll() ? "request-reroll" : "noop",
                 view.transactionId().toString());
+    }
+
+    public void stop() {
+        animations.stop();
     }
 
     public void closeAll() {

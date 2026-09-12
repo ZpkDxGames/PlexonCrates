@@ -7,10 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
+import java.util.List;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.BundleMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +51,54 @@ class ItemSnapshotCodecTest {
         assertTrue(snapshot.customDataPresent());
         assertEquals(64, snapshot.sha256().length());
         assertEquals(12, snapshot.shortFingerprint().length());
+    }
+
+    @Test
+    void foreignMetadataAndDamageSensitiveStateRemainExact() {
+        ItemStack source = new ItemStack(Material.DIAMOND_SWORD);
+        source.editMeta(meta -> {
+            meta.displayName(Component.text("Slimefun-like synthetic tool"));
+            meta.lore(List.of(Component.text("foreign identity"), Component.text("component sensitive")));
+            meta.setUnbreakable(true);
+            meta.setEnchantmentGlintOverride(true);
+            meta.getPersistentDataContainer().set(new NamespacedKey("slimefun_like", "item_id"),
+                    PersistentDataType.STRING, "SYNTHETIC_TOOL");
+            meta.getPersistentDataContainer().set(new NamespacedKey("itemsadder_like", "namespaced_id"),
+                    PersistentDataType.STRING, "plexon:synthetic_tool");
+            if (meta instanceof org.bukkit.inventory.meta.Damageable damageable) damageable.setDamage(17);
+        });
+        byte[] before = source.serializeAsBytes();
+
+        ItemSnapshotCodec.Snapshot snapshot = codec.capture(source);
+        ItemStack restored = codec.restoreTemplate(snapshot);
+
+        assertArrayEquals(before, source.serializeAsBytes());
+        assertArrayEquals(snapshot.bytes(), restored.serializeAsBytes());
+        assertTrue(snapshot.customDataPresent());
+    }
+
+    @Test
+    void nestedBundleContentsRoundTripWithForeignPdc() {
+        ItemStack nested = customItem("nested", 3);
+        ItemStack bundle = new ItemStack(Material.BUNDLE);
+        bundle.editMeta(meta -> {
+            BundleMeta bundleMeta = (BundleMeta) meta;
+            bundleMeta.setItems(List.of(nested));
+            bundleMeta.getPersistentDataContainer().set(new NamespacedKey("foreign_bundle", "owner"),
+                    PersistentDataType.STRING, "external-plugin");
+        });
+        byte[] before = bundle.serializeAsBytes();
+
+        ItemSnapshotCodec.Snapshot snapshot = codec.capture(bundle);
+        ItemStack restored = codec.restoreTemplate(snapshot);
+
+        assertArrayEquals(before, bundle.serializeAsBytes());
+        assertArrayEquals(snapshot.bytes(), restored.serializeAsBytes());
+        assertTrue(snapshot.customDataPresent());
+        assertTrue(snapshot.containerContentsPresent());
+        BundleMeta restoredMeta = (BundleMeta) restored.getItemMeta();
+        assertEquals(1, restoredMeta.getItems().size());
+        assertTrue(restoredMeta.getItems().getFirst().isSimilar(nested));
     }
 
     @Test
@@ -96,7 +146,7 @@ class ItemSnapshotCodecTest {
         ItemStack item = new ItemStack(Material.DIAMOND, amount);
         item.editMeta(meta -> {
             meta.displayName(Component.text("Exact custom item"));
-            meta.lore(java.util.List.of(Component.text("Preserve every component")));
+            meta.lore(List.of(Component.text("Preserve every component")));
             meta.setEnchantmentGlintOverride(true);
             meta.getPersistentDataContainer().set(new NamespacedKey("plexoncrates_test", "identity"),
                     PersistentDataType.STRING, identity);

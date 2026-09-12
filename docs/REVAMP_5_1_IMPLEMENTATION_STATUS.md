@@ -6,11 +6,15 @@ Current branch: `revamp/5.1.0-full-source-hardening`
 
 Product-source freeze: `549eb33547ab56ebe0b4415668b31fd6a15df9e5`
 
-Release-gate / provenance checkpoint: `60c642e2f5a85feea2afa4ad9221bd78b6314640`
+Published runtime candidate: `v5.1.0-rc.1`
 
-## Source implementation status
+RC source: `015bc8fae37c0f6ebf7fc4161a33b3f103b46a7b`
 
-**SOURCE HARDENING COMPLETE / RUNTIME CERTIFICATION PENDING**
+RC JAR SHA-256: `9a6858bf19edba570d6a1a4ae6b65e70e141baeab11081e12c52dfd9a256b71d`
+
+## Current status
+
+**SOURCE HARDENING COMPLETE / RC PUBLISHED / RUNTIME CERTIFICATION PENDING**
 
 The 5.1 revamp keeps the proven opening, exact-item, publication, recovery and SQLite schema-4 product model. The implementation work concentrated on GUI lifecycle correctness, explicit event ownership, bounded scheduling/executors and live administrative I/O boundaries rather than rewriting the transaction core.
 
@@ -69,7 +73,7 @@ The 5.1 revamp keeps the proven opening, exact-item, publication, recovery and S
   - primary-thread final activation/rendering.
 - The persistence stage does not perform Bukkit world or registry mutation.
 
-## Verification boundary
+## Verification history
 
 ### Product-source checkpoint
 
@@ -91,23 +95,54 @@ Result:
 - whitespace gate passed;
 - verified CI artifact upload passed.
 
-The artifact produced by this source checkpoint is still versioned `PlexonCrates-5.0.0.jar`. It is a CI certification artifact only, **not** a 5.1 release candidate or stable release.
+### Release-policy hardening
 
-### Release-provenance checkpoint
-
-Exact checkpoint: `60c642e2f5a85feea2afa4ad9221bd78b6314640`
-
-Canonical Build: `34700994957`
-
-Result: **PASS**.
-
-The build workflow now anchors rollback metadata to the current stable release:
+Build provenance is anchored to the current stable rollback boundary:
 
 - rollback tag: `v5.0.0`;
 - rollback source: `f24e3f7f942f7c886352e71c7105af499828096f`;
 - CI proves the tag resolves to that exact SHA;
-- CI proves the rollback SHA is an ancestor of the candidate;
+- CI proves the rollback SHA is an ancestor of every candidate;
 - existing Phase 2 / reliability / Phase 3 / accepted RC4 ancestry checks remain intact.
+
+A dedicated prerelease workflow now publishes only from `release/<project-version>` RC branches and refuses mutable/replaced RC tags/releases.
+
+Stable publication is fail-closed until a checked-in runtime certification record provides:
+
+- `RUNTIME_CERTIFICATION=PASS`;
+- the exact published RC tag;
+- the exact RC source SHA;
+- the exact RC JAR SHA-256;
+- Paper `26.2.build.121-stable` certification.
+
+The stable publisher verifies the real prerelease/tag/binary and rejects post-RC production-code changes. Only the stable version bump, release note, runtime-certification record and this implementation-status document may differ after the certified RC.
+
+## Published runtime candidate
+
+Tag: `v5.1.0-rc.1`
+
+Source: `015bc8fae37c0f6ebf7fc4161a33b3f103b46a7b`
+
+Prerelease workflow: `34701537837`
+
+Artifact: `PlexonCrates-5.1.0-rc.1.jar`
+
+Size: `12,982,792` bytes
+
+SHA-256: `9a6858bf19edba570d6a1a4ae6b65e70e141baeab11081e12c52dfd9a256b71d`
+
+Published verification evidence:
+
+- `TEST_COUNT=274 FAILURES=0 ERRORS=0 SKIPPED=0`;
+- Java `25` / class major `69`;
+- Paper `26.2.build.121-stable`;
+- PlexonCore `2.0.4` pinned by checksum;
+- PlexonKeys `2.0.0-rc.2` pinned by checksum;
+- database schema `4`;
+- rollback `v5.0.0` / `f24e3f7f942f7c886352e71c7105af499828096f`;
+- `runtime_certification=PENDING`.
+
+The prerelease workflow rebuilt the exact RC source, verified distribution contents, published the four release assets, re-downloaded them, rechecked `SHA256SUMS.txt`, validated provenance/test summary, and confirmed the tag targets the exact RC SHA.
 
 ## Architecture/regression coverage now green
 
@@ -126,6 +161,7 @@ The canonical suite includes dedicated coverage for:
 - crate import/deletion/transfer I/O isolation;
 - Phoenix migration threading/staging;
 - simulation non-granting contracts;
+- release-candidate/stable-promotion safety gates;
 - opening transaction/recovery behavior;
 - administration integration;
 - opening pipeline integration;
@@ -133,18 +169,18 @@ The canonical suite includes dedicated coverage for:
 
 ## Remaining gates
 
-No additional source-architecture rewrite is currently required before runtime certification. The remaining blockers are operational/release gates:
+The exact published `v5.1.0-rc.1` JAR is now the only runtime candidate. Remaining blockers are operational:
 
-1. Start the candidate on the real PlexonCraft Paper 26.2 host and prove clean enable/disable/restart behavior.
+1. Install the exact published RC1 JAR on the real PlexonCraft Paper 26.2 host and prove clean enable/disable/restart behavior.
 2. Smoke-test `/crates`, Crate Hall navigation, physical crates, portable crates, single/selective/bulk openings, Pending Rewards/claims, rerolls and failure states.
 3. Smoke-test admin editor, Test Lab, publish, reload, backup, validate and diagnose surfaces.
 4. Verify schema-4 data and player/admin state survive restart without loss or duplicate grants.
 5. Exercise Phoenix migration with an appropriate fixture/live migration source when available and confirm report/backup/import behavior.
 6. Capture active-use spark evidence for repeated opening/menu/admin activity and compare it with the accepted 5.0 baseline.
-7. Only after runtime certification, create the 5.1 release-candidate version boundary, build the exact candidate JAR, record its SHA-256/source SHA and perform final promotion review.
+7. If all gates pass, check in `releases/5.1.0.runtime-certification.env` with the RC1 tag/SHA/JAR checksum and PASS result, change only the Maven version to `5.1.0`, add stable release notes/status, then merge/promote through the guarded stable workflow.
 
 ## Release boundary
 
-Do **not** merge this branch into `main`, tag `v5.1.0`, or publish a stable 5.1 JAR until the real PlexonCraft startup, interaction, persistence/restart and performance gates pass.
+Do **not** merge the revamp PR, tag `v5.1.0`, or publish a stable 5.1 JAR until the exact published RC1 passes the real PlexonCraft startup, interaction, persistence/restart and performance gates.
 
-`v5.0.0` at `f24e3f7f942f7c886352e71c7105af499828096f` is the rollback boundary.
+`v5.0.0` at `f24e3f7f942f7c886352e71c7105af499828096f` remains the rollback boundary.

@@ -32,6 +32,7 @@ import com.antondev.crates.service.DefinitionPublisher;
 import com.antondev.crates.service.DisplayService;
 import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.KeyService;
+import com.antondev.crates.service.KeyMutationService;
 import com.antondev.crates.service.LocationStore;
 import com.antondev.crates.service.MilestoneProgressService;
 import com.antondev.crates.service.OpeningLog;
@@ -73,6 +74,7 @@ public class PlexonCrates extends JavaPlugin {
     private RuntimeRegistry runtime;
     private LocationStore locations;
     private KeyService keys;
+    private KeyMutationService keyMutations;
     private StatsStore statistics;
     private RewardStateService rewardStates;
     private MilestoneProgressService milestoneProgress;
@@ -149,6 +151,7 @@ public class PlexonCrates extends JavaPlugin {
             draftSessions = new DraftSessionService(database, this::draftStateChanged);
             draftCreation = new CrateDraftCreationService(this);
             crateTransfers = new CrateTransferService(this);
+            keyMutations = new KeyMutationService(this);
             definitionPublisher = new DefinitionPublisher(this, definitionRepository, crates, keys, runtime,
                     draftSessions);
             guiSessions = new GuiSessionService();
@@ -730,6 +733,7 @@ public class PlexonCrates extends JavaPlugin {
     public RuntimeRegistry runtime() { return runtime; }
     public LocationStore locations() { return locations; }
     public KeyService keys() { return keys; }
+    public KeyMutationService keyMutations() { return keyMutations; }
     public StatsStore statistics() { return statistics; }
     public RewardStateService rewardStates() { return rewardStates; }
     public MilestoneProgressService milestoneProgress() { return milestoneProgress; }

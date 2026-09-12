@@ -1128,10 +1128,13 @@ public final class AdminMenuService {
             Path root = plugin.getDataFolder().toPath().resolve("imports").toAbsolutePath().normalize();
             Path source = root.resolve(fileName).normalize();
             if (!source.getParent().equals(root)) throw new IllegalArgumentException("Import path leaves the imports folder");
-            List<String> imported = plugin.keys().importDefinitions(source, target.getName());
-            target.sendMessage(Text.parse("<green>Imported exact key definitions:</green> <white>"
-                    + String.join(", ", imported) + "</white>"));
-            openKeys(target, 0);
+            plugin.keyMutations().importDefinitions(source, target.getName())
+                    .whenComplete((imported, error) -> runFor(target.getUniqueId(), current -> {
+                        if (error != null) plugin.configError(current, asException(error));
+                        else current.sendMessage(Text.parse("<green>Imported exact key definitions:</green> <white>"
+                                + String.join(", ", imported) + "</white>"));
+                        openKeys(current, 0);
+                    }));
         });
     }
 
@@ -1148,21 +1151,36 @@ public final class AdminMenuService {
     }
 
     private void keyEntry(Player player, String keyId, InventoryClickEvent event) throws Exception {
+        boolean shift = event.isShiftClick();
+        boolean left = event.isLeftClick();
+        boolean right = event.isRightClick();
         boolean bound = plugin.keys().definition(keyId).isPresent();
-        if (!bound && event.isShiftClick() && event.isRightClick()) {
+        if (!bound && shift && right) {
             player.sendMessage(Text.parse("<gray>That live category is not bound, so there is no PlexonCrates key definition to delete.</gray>"));
             return;
         }
-        if (!bound) plugin.keys().bindExternal(keyId, player.getName());
+        if (!bound) {
+            plugin.keyMutations().bindExternal(keyId, player.getName())
+                    .whenComplete((ignored, error) -> runFor(player.getUniqueId(), target -> {
+                        if (error != null) { plugin.configError(target, asException(error)); return; }
+                        try { keyEntryBound(target, keyId, shift, left, right); }
+                        catch (Exception actionError) { plugin.configError(target, actionError); }
+                    }));
+            return;
+        }
+        keyEntryBound(player, keyId, shift, left, right);
+    }
+
+    private void keyEntryBound(Player player, String keyId, boolean shift, boolean left, boolean right) throws Exception {
         KeyDefinition definition = plugin.keys().definition(keyId).orElseThrow();
-        if (event.isShiftClick() && event.isLeftClick()) {
+        if (shift && left) {
             if (definition.source() == com.antondev.crates.domain.key.KeySource.PLEXONKEYS) {
                 throw new IllegalStateException("Live PlexonKeys templates are read-only in PlexonCrates");
             }
             ItemStack current = plugin.keys().template(keyId).orElseThrow(() -> new IllegalStateException("This key is unresolved"));
             plugin.editSessions().beginKeyRotation(player, definition, current);
             openKeyTemplate(player);
-        } else if (event.isShiftClick() && event.isRightClick()) {
+        } else if (shift && right) {
             long references = plugin.crates().referencesToKey(keyId);
             if (references > 0) {
                 plugin.editSessions().request(player, Text.parse("<yellow>This key is used by " + references
@@ -1175,7 +1193,7 @@ public final class AdminMenuService {
             } else if (publishedKeyReferences(keyId) > 0) {
                 plugin.messages().send(player, "key-replacement-awaiting-publish");
             } else openKeyDeleteConfirmation(player, keyId);
-        } else if (event.isRightClick()) {
+        } else if (right) {
             plugin.keys().give(player, keyId, 1);
             plugin.messages().send(player, "key-given", Text.value("amount", 1),
                     Text.component("key", plugin.keys().definition(keyId).orElseThrow().displayName()), Text.value("player", player.getName()));
@@ -1273,8 +1291,11 @@ public final class AdminMenuService {
         if (publishedKeyReferences(keyId) > 0) {
             throw new IllegalStateException("Publish every pending key-reference change before deleting this active key");
         }
-        plugin.keys().delete(keyId, player.getName());
-        openKeys(player, 0);
+        plugin.keyMutations().delete(keyId, player.getName())
+                .whenComplete((ignored, error) -> runFor(player.getUniqueId(), target -> {
+                    if (error != null) plugin.configError(target, asException(error));
+                    openKeys(target, 0);
+                }));
     }
 
     private long publishedKeyReferences(String keyId) {
@@ -1283,7 +1304,20 @@ public final class AdminMenuService {
 
     private void selectKey(Player player, String crateId, String keyId) throws Exception {
         if (!requireWritableDraft(player, crateId)) return;
-        if (plugin.keys().definition(keyId).isEmpty()) plugin.keys().bindExternal(keyId, player.getName());
+        if (plugin.keys().definition(keyId).isEmpty()) {
+            plugin.keyMutations().bindExternal(keyId, player.getName())
+                    .whenComplete((ignored, error) -> runFor(player.getUniqueId(), target -> {
+                        if (error != null) { plugin.configError(target, asException(error)); return; }
+                        try { selectBoundKey(target, crateId, keyId); }
+                        catch (Exception actionError) { plugin.configError(target, actionError); }
+                    }));
+            return;
+        }
+        selectBoundKey(player, crateId, keyId);
+    }
+
+    private void selectBoundKey(Player player, String crateId, String keyId) throws Exception {
+        if (!requireWritableDraft(player, crateId)) return;
         Crate crate = plugin.crates().find(crateId).orElseThrow();
         plugin.crates().setAcceptedKeys(crate.id(), List.of(keyId), Math.max(1, crate.keyCost()), player.getName());
         saveDraftRevision(player, crateId, "KEY", "Replaced accepted physical key");
@@ -1306,12 +1340,15 @@ public final class AdminMenuService {
         if (kind == MenuHolder.Kind.KEY_TEMPLATE) {
             EditSessionService.KeyDraft draft = plugin.editSessions().key(player);
             if (draft == null || draft.template() == null) throw new IllegalArgumentException("Capture an exact key item first");
-            if (draft.rotation()) {
-                plugin.keys().replaceCaptured(draft.id(), draft.displayName(), draft.template(),
-                        draft.keepPreviousAsLegacy(), player.getName());
-            } else plugin.keys().createCaptured(draft.id(), draft.displayName(), draft.template(), player.getName());
-            plugin.editSessions().clearKey(player);
-            openKeys(player, 0);
+            java.util.concurrent.CompletableFuture<Void> mutation = draft.rotation()
+                    ? plugin.keyMutations().replaceCaptured(draft.id(), draft.displayName(), draft.template(),
+                            draft.keepPreviousAsLegacy(), player.getName())
+                    : plugin.keyMutations().createCaptured(draft.id(), draft.displayName(), draft.template(), player.getName());
+            mutation.whenComplete((ignored, error) -> runFor(player.getUniqueId(), target -> {
+                if (error != null) { plugin.configError(target, asException(error)); return; }
+                plugin.editSessions().clearKey(target);
+                openKeys(target, 0);
+            }));
         } else if (kind == MenuHolder.Kind.REWARD_BUILDER) {
             EditSessionService.RewardDraft draft = plugin.editSessions().reward(player);
             if (draft == null || !draft.deliverable()) throw new IllegalArgumentException("Add an item, command, XP, or money first");

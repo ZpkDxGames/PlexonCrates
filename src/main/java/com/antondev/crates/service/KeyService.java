@@ -84,6 +84,13 @@ public final class KeyService {
         }
     }
 
+    public record PreparedImport(PreparedMutation mutation, List<String> importedIds) {
+        public PreparedImport {
+            mutation = java.util.Objects.requireNonNull(mutation, "mutation");
+            importedIds = List.copyOf(importedIds);
+        }
+    }
+
     private final PlexonCrates plugin;
     private final DatabaseService database;
     private final Path file;
@@ -431,6 +438,74 @@ public final class KeyService {
         return prepared(yaml, audits);
     }
 
+    public PreparedMutation prepareReplaceCaptured(PreparedMutation base, String rawId, Component displayName,
+                                                    ItemStack item, boolean keepPreviousAsLegacy,
+                                                    String editor) throws Exception {
+        java.util.Objects.requireNonNull(base, "base");
+        String id = normalize(rawId);
+        KeyDefinition definition = base.snapshot().definitions().get(id);
+        if (definition == null) throw new IllegalArgumentException("Unknown key ID");
+        if (definition.source() == KeySource.PLEXONKEYS) {
+            throw new IllegalStateException("Live PlexonKeys templates are read-only");
+        }
+        if (item == null || item.getType().isAir()) throw new IllegalArgumentException("A replacement template is required");
+        ItemStack previous = template(base, id)
+                .orElseThrow(() -> new IllegalStateException("The previous exact template is unresolved"));
+        ItemStack replacement = ItemCodec.one(item);
+        var legacy = new ArrayList<>(definition.legacyTemplates());
+        if (keepPreviousAsLegacy && legacy.stream().noneMatch(previous::isSimilar)
+                && !previous.isSimilar(replacement)) legacy.add(previous);
+        Instant now = Instant.now();
+        YamlConfiguration yaml = preparedYaml(base);
+        String path = "keys." + id;
+        yaml.set(path + ".display-name", Text.serialize(displayName));
+        yaml.set(path + ".item", null);
+        yaml.set(path + ".item.base64", ItemCodec.capture(replacement, true));
+        yaml.set(path + ".legacy-templates", legacy.stream().map(value -> ItemCodec.capture(value, true)).toList());
+        yaml.set(path + ".updated-at", now.toString());
+        var audits = new ArrayList<>(base.audits());
+        audits.add(new DatabaseService.AuditRecord(null, editor, "ROTATE", "KEY", id,
+                keepPreviousAsLegacy ? "Replaced exact template and retained the previous template as legacy"
+                        : "Replaced exact template and retired the previous template", now));
+        return prepared(yaml, audits);
+    }
+
+    public PreparedMutation prepareDelete(PreparedMutation base, String rawId, String editor) throws Exception {
+        java.util.Objects.requireNonNull(base, "base");
+        String id = normalize(rawId);
+        if (!base.snapshot().definitions().containsKey(id)) throw new IllegalArgumentException("Unknown key ID");
+        YamlConfiguration yaml = preparedYaml(base);
+        yaml.set("keys." + id, null);
+        var audits = new ArrayList<>(base.audits());
+        audits.add(new DatabaseService.AuditRecord(null, editor, "DELETE", "KEY", id,
+                "Deleted an unused physical key definition after confirmation", Instant.now()));
+        return prepared(yaml, audits);
+    }
+
+    public PreparedImport prepareImport(PreparedMutation base, String sourceYaml, String editor) throws Exception {
+        java.util.Objects.requireNonNull(base, "base");
+        YamlConfiguration importedYaml = new YamlConfiguration();
+        importedYaml.loadFromString(java.util.Objects.requireNonNull(sourceYaml, "sourceYaml"));
+        Snapshot imported = parseSnapshot(importedYaml);
+        List<KeyDefinition> additions = imported.definitions().values().stream()
+                .sorted(Comparator.comparing(KeyDefinition::id)).toList();
+        for (KeyDefinition definition : additions) {
+            if (base.snapshot().definitions().containsKey(definition.id())) {
+                throw new IllegalArgumentException("Key import conflicts with existing ID: " + definition.id());
+            }
+        }
+        Instant now = Instant.now();
+        YamlConfiguration yaml = preparedYaml(base);
+        additions.forEach(definition -> writeDefinition(yaml, definition, now));
+        var audits = new ArrayList<>(base.audits());
+        for (KeyDefinition definition : additions) {
+            audits.add(new DatabaseService.AuditRecord(null, editor, "IMPORT", "KEY", definition.id(),
+                    "Imported a validated physical key definition", now));
+        }
+        PreparedMutation mutation = prepared(yaml, audits);
+        return new PreparedImport(mutation, additions.stream().map(KeyDefinition::id).toList());
+    }
+
     public Optional<KeyDefinition> definition(PreparedMutation prepared, String id) {
         java.util.Objects.requireNonNull(prepared, "prepared");
         return Optional.ofNullable(prepared.snapshot().definitions().get(normalize(id)));
@@ -591,6 +666,14 @@ public final class KeyService {
         database.removeKeyTemplateCache(id);
         database.audit(new DatabaseService.AuditRecord(null, editor, "DELETE", "KEY", id,
                 "Deleted an unused physical key definition after confirmation", Instant.now()));
+    }
+
+    public void clearCachedTemplate(String rawId) {
+        String id = normalize(rawId);
+        var nextCache = new LinkedHashMap<>(lastKnownGood);
+        nextCache.remove(id);
+        lastKnownGood = normalizedCopies(nextCache);
+        database.removeKeyTemplateCache(id);
     }
 
     public void syncDiscovery() {

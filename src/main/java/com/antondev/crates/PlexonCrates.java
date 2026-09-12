@@ -136,6 +136,7 @@ public class PlexonCrates extends JavaPlugin {
                 crates.apply(CrateRegistry.withDurableDrafts(getDataFolder().toPath().resolve("crates"),
                         crates.snapshot(), durableDrafts));
             }
+            crates.configureMirrorWriter(io, getLogger());
             statistics = new StatsStore(database.loadStatistics());
             rewardStates = new RewardStateService(database.loadRewardStates());
             milestoneProgress = new MilestoneProgressService(database.loadMilestoneStates());
@@ -207,6 +208,13 @@ public class PlexonCrates extends JavaPlugin {
         if (displays != null) displays.stop();
         if (openings != null) openings.clear();
         if (openingLog != null) openingLog.close();
+        if (crates != null) {
+            try {
+                crates.awaitMirrorWrites().get(3, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception error) {
+                getLogger().log(Level.WARNING, "Not every queued crate YAML mirror write finished before shutdown", error);
+            }
+        }
         if (io != null) io.close();
         if (database != null) database.close();
     }

@@ -38,6 +38,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -97,10 +100,57 @@ public final class CrateRegistry {
     private Map<String, Crate> crates;
     private Map<String, Path> files;
     private Map<String, byte[]> payloads;
+    private final Map<Path, CompletableFuture<Void>> mirrorWrites = new LinkedHashMap<>();
+    private AsyncIoService mirrorIo;
+    private Logger mirrorLogger;
 
     public CrateRegistry(Path directory, Snapshot snapshot) {
         this.directory = directory.toAbsolutePath().normalize();
         apply(snapshot);
+    }
+
+    /**
+     * Enables ordered asynchronous writes for non-authoritative editable YAML mirrors.
+     * Standalone/test registries retain synchronous writes until this is configured.
+     */
+    public void configureMirrorWriter(AsyncIoService io, Logger logger) {
+        mirrorIo = java.util.Objects.requireNonNull(io, "io");
+        mirrorLogger = java.util.Objects.requireNonNull(logger, "logger");
+    }
+
+    /** Returns a future covering every mirror write queued before this call. */
+    public CompletableFuture<Void> awaitMirrorWrites() {
+        synchronized (mirrorWrites) {
+            if (mirrorWrites.isEmpty()) return CompletableFuture.completedFuture(null);
+            return CompletableFuture.allOf(mirrorWrites.values().toArray(CompletableFuture[]::new));
+        }
+    }
+
+    private void persistEditableMirror(Path file, String serialized) throws IOException {
+        AsyncIoService io = mirrorIo;
+        if (io == null) {
+            AtomicFiles.write(file, serialized);
+            return;
+        }
+        Path path = file.toAbsolutePath().normalize();
+        CompletableFuture<Void> next;
+        synchronized (mirrorWrites) {
+            CompletableFuture<Void> previous = mirrorWrites.get(path);
+            CompletableFuture<Void> ready = previous == null
+                    ? CompletableFuture.completedFuture(null)
+                    : previous.handle((ignored, failure) -> null);
+            next = ready.thenCompose(ignored -> io.run(() -> AtomicFiles.write(path, serialized)));
+            mirrorWrites.put(path, next);
+        }
+        next.whenComplete((ignored, failure) -> {
+            synchronized (mirrorWrites) {
+                if (mirrorWrites.get(path) == next) mirrorWrites.remove(path);
+            }
+            if (failure != null && mirrorLogger != null) {
+                mirrorLogger.log(Level.SEVERE,
+                        "Could not update editable crate YAML mirror " + path.getFileName(), failure);
+            }
+        });
     }
 
     public static Snapshot load(Path directory) throws IOException {
@@ -1121,7 +1171,7 @@ public void writePublishedMirror(PreparedPublication publication) throws IOExcep
         change.accept(yaml);
         Crate parsed = parse(file, yaml);
         String serialized = yaml.saveToString();
-        AtomicFiles.write(file, serialized);
+        persistEditableMirror(file, serialized);
         install(id, file, parsed);
         payloads.put(id, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(parsed, changeType(previous, parsed));

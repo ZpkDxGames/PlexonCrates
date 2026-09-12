@@ -111,6 +111,14 @@ public final class CrateRegistry {
         @Override public byte[] payload() { return payload.clone(); }
     }
 
+    public record PreparedDeletion(String crateId, Crate crate, Path file) {
+        public PreparedDeletion {
+            crateId = java.util.Objects.requireNonNull(crateId, "crateId");
+            crate = java.util.Objects.requireNonNull(crate, "crate");
+            file = java.util.Objects.requireNonNull(file, "file");
+        }
+    }
+
     private static final Pattern ID = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
     private static final ItemSnapshotCodec ITEM_SNAPSHOTS = new ItemSnapshotCodec();
     private final Path directory;
@@ -835,12 +843,30 @@ public void writePublishedMirror(PreparedPublication publication) throws IOExcep
         });
     }
 
-    public void delete(String crateId) throws Exception {
+    public PreparedDeletion prepareDeletion(String crateId) {
         String id = normalize(crateId);
         Path file = files.get(id);
-        if (file == null) throw new IllegalArgumentException("Unknown crate");
-        Crate deleted = crates.get(id);
-        Files.deleteIfExists(file);
+        Crate crate = crates.get(id);
+        if (file == null || crate == null) throw new IllegalArgumentException("Unknown crate");
+        return new PreparedDeletion(id, crate, file);
+    }
+
+    /** Filesystem-only stage. Safe to execute on the bounded plugin I/O pool. */
+    public void deleteMirror(PreparedDeletion prepared) throws IOException {
+        java.util.Objects.requireNonNull(prepared, "prepared");
+        Files.deleteIfExists(prepared.file());
+    }
+
+    /** Applies a deletion after its mirror/canonical persistence stages have completed. */
+    public void installDeletion(PreparedDeletion prepared) {
+        java.util.Objects.requireNonNull(prepared, "prepared");
+        String id = prepared.crateId();
+        Path currentFile = files.get(id);
+        Crate current = crates.get(id);
+        if (currentFile == null || current == null) throw new IllegalArgumentException("Unknown crate");
+        if (!currentFile.equals(prepared.file()) || current != prepared.crate()) {
+            throw new IllegalStateException("Crate changed before deletion activation: " + id);
+        }
         var nextCrates = new LinkedHashMap<>(crates);
         var nextFiles = new LinkedHashMap<>(files);
         nextCrates.remove(id);
@@ -848,7 +874,14 @@ public void writePublishedMirror(PreparedPublication publication) throws IOExcep
         crates = Collections.unmodifiableMap(nextCrates);
         files = Collections.unmodifiableMap(nextFiles);
         payloads.remove(id);
-        fireChange(deleted, CrateDefinitionChangeEvent.ChangeType.DELETED);
+        fireChange(current, CrateDefinitionChangeEvent.ChangeType.DELETED);
+    }
+
+    /** Synchronous compatibility API retained for tests/offline tooling. */
+    public void delete(String crateId) throws Exception {
+        PreparedDeletion prepared = prepareDeletion(crateId);
+        deleteMirror(prepared);
+        installDeletion(prepared);
     }
 
     public void addCapturedReward(String crateId, String rewardId, double baseChancePercent, ItemStack held) throws Exception {

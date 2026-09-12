@@ -1714,32 +1714,10 @@ public final class AdminMenuService {
         if (crate.state() != CrateState.ARCHIVED && crate.state() != CrateState.DRAFT) {
             throw new IllegalStateException("Archive this crate before deleting it");
         }
-        plugin.draftSessions().discardCrate(player.getUniqueId(), crateId)
-                .whenComplete((ignored, error) -> runFor(player.getUniqueId(), target -> {
-                    if (error != null) {
-                        plugin.configError(target, asException(error));
-                        return;
-                    }
-                    plugin.definitionRepository().delete(crateId, target.getUniqueId(), target.getName())
-                            .whenComplete((deleted, deleteError) -> runFor(target.getUniqueId(), current -> {
-                                if (deleteError != null) {
-                                    plugin.configError(current, asException(deleteError));
-                                    return;
-                                }
-                                try {
-                                    plugin.runtime().remove(deleted.runtimeRevision(), deleted.definitionRevision(), crateId);
-                                    plugin.forgetDefinitionRevision(crateId);
-                                    plugin.crates().delete(crateId);
-                                    if (!deleted.removed()) {
-                                        plugin.database().audit(new DatabaseService.AuditRecord(current.getUniqueId(),
-                                                current.getName(), "DELETE", "CRATE", crateId,
-                                                "Deleted confirmed unpublished crate definition", Instant.now()));
-                                    }
-                                    openCrates(current, 0);
-                                } catch (Exception deleteErrorAfterCommit) {
-                                    plugin.configError(current, deleteErrorAfterCommit);
-                                }
-                            }));
+        plugin.crateDeletions().delete(player.getUniqueId(), player.getName(), crateId)
+                .whenComplete((deleted, error) -> runFor(player.getUniqueId(), target -> {
+                    if (error != null) plugin.configError(target, asException(error));
+                    else openCrates(target, 0);
                 }));
     }
 

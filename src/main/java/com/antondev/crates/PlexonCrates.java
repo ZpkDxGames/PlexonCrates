@@ -23,6 +23,7 @@ import com.antondev.crates.database.DefinitionRepository;
 import com.antondev.crates.database.LegacyMigration;
 import com.antondev.crates.service.CrateRegistry;
 import com.antondev.crates.service.CrateDraftCreationService;
+import com.antondev.crates.service.CrateDeletionService;
 import com.antondev.crates.service.CrateTransferService;
 import com.antondev.crates.service.AsyncIoService;
 import com.antondev.crates.service.CrateSimulationService;
@@ -80,6 +81,7 @@ public class PlexonCrates extends JavaPlugin {
     private MilestoneProgressService milestoneProgress;
     private DraftSessionService draftSessions;
     private CrateDraftCreationService draftCreation;
+    private CrateDeletionService crateDeletions;
     private CrateTransferService crateTransfers;
     private DefinitionPublisher definitionPublisher;
     private DisplayService displays;
@@ -150,6 +152,7 @@ public class PlexonCrates extends JavaPlugin {
             displays = new DisplayService(this);
             draftSessions = new DraftSessionService(database, this::draftStateChanged);
             draftCreation = new CrateDraftCreationService(this);
+            crateDeletions = new CrateDeletionService(this);
             crateTransfers = new CrateTransferService(this);
             keyMutations = new KeyMutationService(this);
             definitionPublisher = new DefinitionPublisher(this, definitionRepository, crates, keys, runtime,
@@ -739,6 +742,7 @@ public class PlexonCrates extends JavaPlugin {
     public MilestoneProgressService milestoneProgress() { return milestoneProgress; }
     public DraftSessionService draftSessions() { return draftSessions; }
     public CrateDraftCreationService draftCreation() { return draftCreation; }
+    public CrateDeletionService crateDeletions() { return crateDeletions; }
     public CrateTransferService crateTransfers() { return crateTransfers; }
     public DefinitionPublisher definitionPublisher() { return definitionPublisher; }
     public DisplayService displays() { return displays; }

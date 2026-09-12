@@ -42,9 +42,11 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertTrue(router.contains("player.click(event)"));
         assertTrue(router.contains("menus.click(event)"));
         assertTrue(router.contains("playerDrag(InventoryDragEvent event)"));
+        assertTrue(router.contains("plugin.requestReload(player)"));
+        assertTrue(main.contains("public void requestReload(CommandSender sender)"));
         assertFalse(commandRouter.contains("@EventHandler(priority = EventPriority.HIGHEST)"));
         assertFalse(main.contains("registerEvents(menus, this)"));
-        assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(menus, playerRouter), this)"));
+        assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(this, menus, playerRouter), this)"));
     }
 
     @Test void normalPlayerUxContainsNoHiddenRightClickConsumeSemantic() throws IOException {

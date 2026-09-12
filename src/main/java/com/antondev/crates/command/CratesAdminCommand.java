@@ -58,7 +58,7 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 case "wand" -> wand(sender, args);
                 case "link" -> link(sender, args);
                 case "unlink" -> unlink(sender);
-                case "reload" -> plugin.reloadFor(sender);
+                case "reload" -> plugin.requestReload(sender);
                 case "validate" -> plugin.validateFor(sender);
                 case "backup" -> plugin.backupFor(sender);
                 case "diagnose" -> plugin.diagnoseFor(sender);

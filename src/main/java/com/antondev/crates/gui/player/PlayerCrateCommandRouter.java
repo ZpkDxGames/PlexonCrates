@@ -1,6 +1,8 @@
 package com.antondev.crates.gui.player;
 
 import com.antondev.crates.PlexonCrates;
+import com.antondev.crates.gui.GuiSessionService;
+import com.antondev.crates.gui.MenuHolder;
 import com.antondev.crates.service.KeyPaymentPlanner;
 import java.util.Locale;
 import java.util.Set;
@@ -41,7 +43,7 @@ public final class PlayerCrateCommandRouter implements Listener {
         if (parts.length == 1) {
             if (!canPreview(player)) return;
             event.setCancelled(true);
-            menus.openHall(player, 0);
+            openHall(player, 0);
             return;
         }
 
@@ -86,7 +88,7 @@ public final class PlayerCrateCommandRouter implements Listener {
             if (!canPreview(player)) return;
             if (parts.length == 2) {
                 event.setCancelled(true);
-                menus.openHall(player, 0);
+                openHall(player, 0);
                 return;
             }
             if (parts.length == 3) {
@@ -111,7 +113,22 @@ public final class PlayerCrateCommandRouter implements Listener {
     /** Routed by the single registered crate inventory listener. */
     public void click(InventoryClickEvent event) {
         if (keyMenus.routeClick(event)) return;
+        if (event.getView().getTopInventory().getHolder() instanceof MenuHolder holder
+                && holder.kind() == MenuHolder.Kind.PLAYER_HALL) {
+            MenuHolder.Action action = holder.action(event.getRawSlot());
+            if (action != null && action.id().equals("keys")) {
+                event.setCancelled(true);
+                if (event.getWhoClicked() instanceof Player player
+                        && event.getClickedInventory() == event.getView().getTopInventory()
+                        && plugin.guiSessions().validate(player, holder, plugin.draftSessions())
+                                == GuiSessionService.Validation.CURRENT) {
+                    keyMenus.openKeys(player, 0);
+                }
+                return;
+            }
+        }
         menus.click(event);
+        if (event.getWhoClicked() instanceof Player player) keyMenus.decorateHall(player);
     }
 
     /** Routed by the single registered crate inventory listener. */
@@ -122,6 +139,11 @@ public final class PlayerCrateCommandRouter implements Listener {
     /** Routed by the single registered crate inventory listener. */
     public void quit(PlayerQuitEvent event) {
         menus.quit(event);
+    }
+
+    private void openHall(Player player, int page) {
+        menus.openHall(player, page);
+        keyMenus.decorateHall(player);
     }
 
     private static boolean canPreview(Player player) {

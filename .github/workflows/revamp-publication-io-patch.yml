@@ -25,15 +25,9 @@ jobs:
 
           registry = Path('src/main/java/com/antondev/crates/service/CrateRegistry.java')
           text = registry.read_text()
-          old = '''    public void installPublished(PreparedPublication publication) throws IOException {
-              AtomicFiles.write(publication.file(), new String(publication.payload(), StandardCharsets.UTF_8));
-              Crate previous = crates.get(publication.crateId());
-              install(publication.crateId(), publication.file(), publication.crate());
-              payloads.put(publication.crateId(), publication.payload());
-              fireChange(publication.crate(), changeType(previous, publication.crate()));
-          }
-          '''.replace('          ', '')
-          new = '''    public void installPublishedInMemory(PreparedPublication publication) {
+          start = text.index('    public void installPublished(PreparedPublication publication) throws IOException {')
+          end = text.index('    public Crate restoreDraftSnapshot(', start)
+          replacement = '''    public void installPublishedInMemory(PreparedPublication publication) {
               Crate previous = crates.get(publication.crateId());
               install(publication.crateId(), publication.file(), publication.crate());
               payloads.put(publication.crateId(), publication.payload());
@@ -43,27 +37,21 @@ jobs:
           public void writePublishedMirror(PreparedPublication publication) throws IOException {
               AtomicFiles.write(publication.file(), new String(publication.payload(), StandardCharsets.UTF_8));
           }
-          '''.replace('          ', '')
-          if old not in text:
-              raise SystemExit('CrateRegistry publication install block changed unexpectedly')
-          registry.write_text(text.replace(old, new, 1))
+
+          '''
+          registry.write_text(text[:start] + replacement + text[end:])
 
           publisher = Path('src/main/java/com/antondev/crates/service/DefinitionPublisher.java')
           text = publisher.read_text()
-          old = '''        CompletableFuture<Publication> result = drafts.freezeCrate(actor, crateId)
-                  .thenCompose(frozen -> primary(() -> prepare(frozen, name)))
-                  .thenCompose(prepared -> repository.publish(request(prepared))
-                          .thenCompose(saved -> primary(() -> activate(prepared, saved))));
-          '''.replace('          ', '')
-          new = '''        CompletableFuture<Publication> result = drafts.freezeCrate(actor, crateId)
+          chain_start = text.index('        CompletableFuture<Publication> result = drafts.freezeCrate(actor, crateId)')
+          chain_end = text.index('        result.whenComplete(', chain_start)
+          chain = '''        CompletableFuture<Publication> result = drafts.freezeCrate(actor, crateId)
                   .thenCompose(frozen -> primary(() -> prepare(frozen, name)))
                   .thenCompose(prepared -> repository.publish(request(prepared))
                           .thenCompose(saved -> primary(() -> activate(prepared, saved))
                                   .thenCompose(publication -> mirror(prepared.publication(), publication))));
-          '''.replace('          ', '')
-          if old not in text:
-              raise SystemExit('DefinitionPublisher publish chain changed unexpectedly')
-          text = text.replace(old, new, 1)
+          '''
+          text = text[:chain_start] + chain + text[chain_end:]
 
           start = text.index('    private Publication activate(Prepared prepared, DatabaseService.PublishResult saved) {')
           end = text.index('    private static DatabaseService.DefinitionBundle bundle(', start)
@@ -115,35 +103,35 @@ jobs:
 
           main = Path('src/main/java/com/antondev/crates/PlexonCrates.java')
           text = main.read_text()
-          old = 'import com.antondev.crates.service.CrateRegistry;\n'
-          new = old + 'import com.antondev.crates.service.AsyncIoService;\n'
-          if old not in text or 'import com.antondev.crates.service.AsyncIoService;' in text:
-              raise SystemExit('PlexonCrates AsyncIoService import marker changed unexpectedly')
-          text = text.replace(old, new, 1)
+          if 'import com.antondev.crates.service.AsyncIoService;' not in text:
+              marker = 'import com.antondev.crates.service.CrateRegistry;\n'
+              if marker not in text:
+                  raise SystemExit('PlexonCrates service import marker changed unexpectedly')
+              text = text.replace(marker, marker + 'import com.antondev.crates.service.AsyncIoService;\n', 1)
 
-          old = '    private CrateRegistry crates;\n'
-          new = old + '    private AsyncIoService io;\n'
-          if old not in text:
-              raise SystemExit('PlexonCrates service field marker changed unexpectedly')
-          text = text.replace(old, new, 1)
+          if '    private AsyncIoService io;\n' not in text:
+              marker = '    private CrateRegistry crates;\n'
+              if marker not in text:
+                  raise SystemExit('PlexonCrates service field marker changed unexpectedly')
+              text = text.replace(marker, marker + '    private AsyncIoService io;\n', 1)
 
-          old = '            database = new DatabaseService(getLogger(), safeDataPath(databaseFile), maximumQueuedWrites);\n'
-          new = old + '            io = new AsyncIoService();\n'
-          if old not in text:
-              raise SystemExit('PlexonCrates database composition marker changed unexpectedly')
-          text = text.replace(old, new, 1)
+          if '            io = new AsyncIoService();\n' not in text:
+              marker = '            database = new DatabaseService(getLogger(), safeDataPath(databaseFile), maximumQueuedWrites);\n'
+              if marker not in text:
+                  raise SystemExit('PlexonCrates database composition marker changed unexpectedly')
+              text = text.replace(marker, marker + '            io = new AsyncIoService();\n', 1)
 
-          old = '        if (openingLog != null) openingLog.close();\n        if (database != null) database.close();\n'
-          new = '        if (openingLog != null) openingLog.close();\n        if (io != null) io.close();\n        if (database != null) database.close();\n'
-          if old not in text:
-              raise SystemExit('PlexonCrates shutdown marker changed unexpectedly')
-          text = text.replace(old, new, 1)
+          if '        if (io != null) io.close();\n' not in text:
+              marker = '        if (openingLog != null) openingLog.close();\n'
+              if marker not in text:
+                  raise SystemExit('PlexonCrates shutdown marker changed unexpectedly')
+              text = text.replace(marker, marker + '        if (io != null) io.close();\n', 1)
 
-          old = '    public CrateRegistry crates() { return crates; }\n'
-          new = old + '    public AsyncIoService io() { return io; }\n'
-          if old not in text:
-              raise SystemExit('PlexonCrates getter marker changed unexpectedly')
-          text = text.replace(old, new, 1)
+          if '    public AsyncIoService io() { return io; }\n' not in text:
+              marker = '    public CrateRegistry crates() { return crates; }\n'
+              if marker not in text:
+                  raise SystemExit('PlexonCrates getter marker changed unexpectedly')
+              text = text.replace(marker, marker + '    public AsyncIoService io() { return io; }\n', 1)
           main.write_text(text)
       - name: Commit patch and remove temporary workflow
         shell: bash

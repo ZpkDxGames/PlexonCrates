@@ -2,6 +2,7 @@ package com.antondev.crates.gui;
 
 import com.antondev.crates.PlexonCrates;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.item.ExactItemInspector;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
 import com.antondev.crates.service.CrateSimulationService;
@@ -35,7 +36,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.jetbrains.annotations.NotNull;
 
-/** Additive, non-granting Phase 2 admin Test Lab. */
+/** Additive, non-granting Phase 2/6.0 admin Test Lab. */
 public final class SimulationAdminListener implements Listener {
     private static final int[] EDITOR_SLOTS = {43, 44};
     private static final int[] REPORT_SLOTS = {
@@ -47,6 +48,7 @@ public final class SimulationAdminListener implements Listener {
 
     private final PlexonCrates plugin;
     private final CrateSimulationService simulations;
+    private final ExactItemInspector exactItems = new ExactItemInspector();
     private final NamespacedKey marker;
 
     public SimulationAdminListener(PlexonCrates plugin, CrateSimulationService simulations) {
@@ -121,10 +123,15 @@ public final class SimulationAdminListener implements Listener {
             else if (slot == 14) runSimulation(player, holder, CrateSimulationService.MAX_SAMPLES);
             else if (slot == 16) openHub(player, holder.crateId,
                     holder.snapshot.mode() == Mode.CONFIGURED ? Mode.PLAYER_CONTEXT : Mode.CONFIGURED);
+            else if (slot == 20) openExactItemAudit(player, holder);
             else if (slot == 22) backToEditor(player, holder.crateId);
             return;
         }
         if (holder.view == View.DRY) {
+            if (slot == 22) openHub(player, holder.crateId, holder.snapshot.mode());
+            return;
+        }
+        if (holder.view == View.EXACT_ITEM) {
             if (slot == 22) openHub(player, holder.crateId, holder.snapshot.mode());
             return;
         }
@@ -182,7 +189,56 @@ public final class SimulationAdminListener implements Listener {
                 line("Active", simulations.activeRequests()),
                 line("Queued", simulations.queuedRequests()),
                 Component.text("One bounded worker • no per-player task", NamedTextColor.DARK_GRAY))));
+        inventory.setItem(20, item(Material.KNOWLEDGE_BOOK, "<aqua><bold>Exact Item Audit</bold></aqua>", List.of(
+                Component.text("Inspect the exact item currently in your main hand.", NamedTextColor.GRAY),
+                Component.text("Shows native-byte fingerprint and safety diagnostics.", NamedTextColor.GRAY),
+                Component.text("The displayed item clone is never relored or rewritten.", NamedTextColor.GREEN))));
         inventory.setItem(22, item(Material.ARROW, "<gray>Back to Crate Editor</gray>", List.of()));
+        player.openInventory(inventory);
+    }
+
+    private void openExactItemAudit(Player player, SimulationHolder source) {
+        if (!current(player, source.snapshot)) {
+            stale(player, source.snapshot);
+            return;
+        }
+        ItemStack held = player.getInventory().getItemInMainHand();
+        if (held == null || held.getType().isAir()) {
+            player.sendActionBar(Text.parse("<yellow>Hold the item you want to audit in your main hand.</yellow>"));
+            return;
+        }
+        ItemStack exactDisplay = held.clone();
+        ExactItemInspector.Diagnostics diagnostics;
+        try {
+            diagnostics = exactItems.inspect(held);
+        } catch (RuntimeException error) {
+            player.sendActionBar(Text.parse("<red>Exact item audit failed:</red> <gray>"
+                    + safe(rootMessage(error)) + "</gray>"));
+            return;
+        }
+        SimulationHolder holder = new SimulationHolder(player.getUniqueId(), source.crateId,
+                View.EXACT_ITEM, source.snapshot, null, 0);
+        Inventory inventory = Bukkit.createInventory(holder, 27,
+                Text.parse("<gradient:#8CDFFF:#D8F6FF><bold>EXACT ITEM AUDIT</bold></gradient>"));
+        holder.attach(inventory);
+        fill(inventory);
+
+        inventory.setItem(4, item(Material.WRITABLE_BOOK, "<white><bold>Native Snapshot</bold></white>", List.of(
+                line("Material", diagnostics.material()),
+                line("Captured quantity", diagnostics.capturedAmount()),
+                line("Serialized bytes", diagnostics.serializedBytes()),
+                line("SHA-256", diagnostics.shortFingerprint() + "…"),
+                line("Custom data", diagnostics.customDataPresent() ? "present" : "not detected"),
+                line("Container contents", diagnostics.containerContentsPresent() ? "present" : "not detected"),
+                line("Maximum stack", diagnostics.maximumStackSize()),
+                Component.empty(),
+                Component.text("Fingerprint is calculated from native Paper bytes.", NamedTextColor.GREEN))));
+        inventory.setItem(13, exactDisplay);
+        inventory.setItem(15, item(Material.SHIELD, "<green><bold>Integrity Contract</bold></green>", List.of(
+                Component.text("Slot 13 is an untouched clone of your held item.", NamedTextColor.GRAY),
+                Component.text("No PlexonCrates lore/name is appended to that clone.", NamedTextColor.GRAY),
+                Component.text("The audit consumes and grants nothing.", NamedTextColor.GREEN))));
+        inventory.setItem(22, item(Material.ARROW, "<gray>Back to Test Lab</gray>", List.of()));
         player.openInventory(inventory);
     }
 
@@ -337,6 +393,7 @@ public final class SimulationAdminListener implements Listener {
         ItemStack item = item(Material.SPYGLASS, "<gradient:#72D9FF:#C8F3FF><bold>Test & Simulate</bold></gradient>", List.of(
                 Component.text("Dry-run reward selection without granting.", NamedTextColor.GRAY),
                 Component.text("Run bounded expected-vs-observed simulations.", NamedTextColor.GRAY),
+                Component.text("Audit native exact-item payloads without mutation.", NamedTextColor.GRAY),
                 Component.text("No key, reward, journal or player state is mutated.", NamedTextColor.GREEN),
                 Component.text("Click to open the Test Lab.", NamedTextColor.DARK_GRAY)));
         ItemMeta meta = item.getItemMeta();
@@ -417,7 +474,7 @@ public final class SimulationAdminListener implements Listener {
         for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
     }
 
-    private enum View { HUB, DRY, REPORT }
+    private enum View { HUB, DRY, EXACT_ITEM, REPORT }
 
     private static final class SimulationHolder implements InventoryHolder {
         private final UUID playerId;

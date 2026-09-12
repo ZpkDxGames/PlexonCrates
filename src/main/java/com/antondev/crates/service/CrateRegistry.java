@@ -291,13 +291,16 @@ public final class CrateRegistry {
         return parsed;
     }
 
-    public void installPublished(PreparedPublication publication) throws IOException {
-        AtomicFiles.write(publication.file(), new String(publication.payload(), StandardCharsets.UTF_8));
-        Crate previous = crates.get(publication.crateId());
-        install(publication.crateId(), publication.file(), publication.crate());
-        payloads.put(publication.crateId(), publication.payload());
-        fireChange(publication.crate(), changeType(previous, publication.crate()));
-    }
+    public void installPublishedInMemory(PreparedPublication publication) {
+    Crate previous = crates.get(publication.crateId());
+    install(publication.crateId(), publication.file(), publication.crate());
+    payloads.put(publication.crateId(), publication.payload());
+    fireChange(publication.crate(), changeType(previous, publication.crate()));
+}
+
+public void writePublishedMirror(PreparedPublication publication) throws IOException {
+    AtomicFiles.write(publication.file(), new String(publication.payload(), StandardCharsets.UTF_8));
+}
 
     public Crate restoreDraftSnapshot(String crateId, byte[] payload) throws Exception {
         String id = normalize(crateId);

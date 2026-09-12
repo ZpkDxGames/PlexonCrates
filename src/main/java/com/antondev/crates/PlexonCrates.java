@@ -22,6 +22,7 @@ import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.database.DefinitionRepository;
 import com.antondev.crates.database.LegacyMigration;
 import com.antondev.crates.service.CrateRegistry;
+import com.antondev.crates.service.AsyncIoService;
 import com.antondev.crates.service.CrateSimulationService;
 import com.antondev.crates.service.ClaimService;
 import com.antondev.crates.service.PortableCrateService;
@@ -66,6 +67,7 @@ public class PlexonCrates extends JavaPlugin {
     private Messages messages;
     private MenuConfig menusConfig;
     private CrateRegistry crates;
+    private AsyncIoService io;
     private RuntimeRegistry runtime;
     private LocationStore locations;
     private KeyService keys;
@@ -98,6 +100,7 @@ public class PlexonCrates extends JavaPlugin {
             String databaseFile = bootstrap.getString("database.file", "data/plexoncrates.db");
             int maximumQueuedWrites = bootstrap.getInt("database.maximum-queued-writes", 4096);
             database = new DatabaseService(getLogger(), safeDataPath(databaseFile), maximumQueuedWrites);
+            io = new AsyncIoService();
             claims = new ClaimService(this);
             claims.recover();
             portables = new PortableCrateService(this);
@@ -204,6 +207,7 @@ public class PlexonCrates extends JavaPlugin {
         if (displays != null) displays.stop();
         if (openings != null) openings.clear();
         if (openingLog != null) openingLog.close();
+        if (io != null) io.close();
         if (database != null) database.close();
     }
 
@@ -655,6 +659,7 @@ public class PlexonCrates extends JavaPlugin {
     public Messages messages() { return messages; }
     public MenuConfig menusConfig() { return menusConfig; }
     public CrateRegistry crates() { return crates; }
+    public AsyncIoService io() { return io; }
     public RuntimeRegistry runtime() { return runtime; }
     public LocationStore locations() { return locations; }
     public KeyService keys() { return keys; }

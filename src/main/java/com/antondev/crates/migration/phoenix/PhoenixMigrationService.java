@@ -403,14 +403,9 @@ public final class PhoenixMigrationService {
         Path report = writeReport(prepared.scan(), prepared.plan(), partial);
         Path marker = reportRoot.resolve("phoenix-" + prepared.scan().fingerprint() + ".imported").normalize();
         if (!marker.getParent().equals(reportRoot)) throw new IllegalStateException("Unsafe migration marker path");
-        Files.writeString(marker, "source=" + SOURCE + "
-fingerprint=" + prepared.scan().fingerprint()
-                + "
-imported-at=" + prepared.importedAt() + "
-backup=" + dataRoot.relativize(prepared.backup())
-                + "
-report=" + dataRoot.relativize(report) + "
-", StandardCharsets.UTF_8);
+        Files.writeString(marker, "source=" + SOURCE + "\nfingerprint=" + prepared.scan().fingerprint()
+                + "\nimported-at=" + prepared.importedAt() + "\nbackup=" + dataRoot.relativize(prepared.backup())
+                + "\nreport=" + dataRoot.relativize(report) + "\n", StandardCharsets.UTF_8);
         plugin.database().audit(new DatabaseService.AuditRecord(actorId, actor, "MIGRATE", "PHOENIX",
                 prepared.scan().fingerprint(), "Imported PhoenixCratesLite source into " + installed.imported().size()
                         + " crate drafts; report=" + report.getFileName(), prepared.importedAt())).join();

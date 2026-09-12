@@ -51,6 +51,7 @@ public final class PlayerCrateMenuService implements Listener {
     private final PlexonCrates plugin;
     private final ItemSnapshotCodec snapshots = new ItemSnapshotCodec();
     private final Map<UUID, ViewState> views = new ConcurrentHashMap<>();
+    private final Map<UUID, UUID> owners = new ConcurrentHashMap<>();
     private final Set<UUID> submitted = ConcurrentHashMap.newKeySet();
 
     public PlayerCrateMenuService(PlexonCrates plugin) {
@@ -434,18 +435,24 @@ public final class PlayerCrateMenuService implements Listener {
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player) || event.getClickedInventory() != event.getView().getTopInventory()) return;
         if (plugin.guiSessions().validate(player, holder, plugin.draftSessions()) != GuiSessionService.Validation.CURRENT) return;
-        ViewState state = views.get(holder.sessionId());
         MenuHolder.Action action = holder.action(event.getRawSlot());
-        if (state == null || action == null) return;
-        switch (holder.kind()) {
-            case PLAYER_HALL -> hallClick(player, holder, state, action);
-            case PLAYER_PREVIEW -> previewClick(player, holder, state, action);
-            case PLAYER_QUANTITY -> quantityClick(player, holder, state, action);
-            case PLAYER_MASS_CONFIRM -> massClick(player, holder, state, action);
-            case PLAYER_SELECTIVE_CONFIRM -> selectiveClick(player, holder, state, action);
-            case PLAYER_PENDING_REWARDS -> pendingClick(player, holder, state, action);
-            default -> { }
-        }
+        if (views.get(holder.sessionId()) == null || action == null) return;
+        UUID sessionId = holder.sessionId();
+        later(() -> {
+            if (!player.isOnline()) return;
+            if (plugin.guiSessions().validate(player, holder, plugin.draftSessions()) != GuiSessionService.Validation.CURRENT) return;
+            ViewState state = views.get(sessionId);
+            if (state == null) return;
+            switch (holder.kind()) {
+                case PLAYER_HALL -> hallClick(player, holder, state, action);
+                case PLAYER_PREVIEW -> previewClick(player, holder, state, action);
+                case PLAYER_QUANTITY -> quantityClick(player, holder, state, action);
+                case PLAYER_MASS_CONFIRM -> massClick(player, holder, state, action);
+                case PLAYER_SELECTIVE_CONFIRM -> selectiveClick(player, holder, state, action);
+                case PLAYER_PENDING_REWARDS -> pendingClick(player, holder, state, action);
+                default -> { }
+            }
+        });
     }
 
     private void hallClick(Player player, MenuHolder holder, ViewState state, MenuHolder.Action action) {
@@ -726,8 +733,14 @@ public final class PlayerCrateMenuService implements Listener {
 
     private void open(Player player, Inventory inventory) {
         player.openInventory(inventory);
-        if (inventory.getHolder() instanceof MenuHolder holder && player.getOpenInventory().getTopInventory() == inventory)
+        if (inventory.getHolder() instanceof MenuHolder holder && player.getOpenInventory().getTopInventory() == inventory) {
+            owners.put(holder.sessionId(), player.getUniqueId());
             plugin.guiSessions().activate(player.getUniqueId(), holder);
+        } else if (inventory.getHolder() instanceof MenuHolder holder) {
+            views.remove(holder.sessionId());
+            submitted.remove(holder.sessionId());
+            owners.remove(holder.sessionId());
+        }
     }
 
     private static void bind(MenuHolder holder, Inventory inventory, int slot, String action, ItemStack item) {
@@ -799,14 +812,22 @@ public final class PlayerCrateMenuService implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void close(InventoryCloseEvent event) {
         if (event.getInventory().getHolder() instanceof MenuHolder holder && playerKind(holder.kind())) {
-            views.remove(holder.sessionId()); submitted.remove(holder.sessionId());
+            views.remove(holder.sessionId());
+            submitted.remove(holder.sessionId());
+            owners.remove(holder.sessionId());
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void quit(PlayerQuitEvent event) {
-        views.keySet().removeIf(id -> !submitted.contains(id) && views.get(id) == null);
-        submitted.removeIf(id -> !views.containsKey(id));
+        UUID playerId = event.getPlayer().getUniqueId();
+        owners.entrySet().removeIf(entry -> {
+            if (!entry.getValue().equals(playerId)) return false;
+            UUID sessionId = entry.getKey();
+            views.remove(sessionId);
+            submitted.remove(sessionId);
+            return true;
+        });
     }
 
     private record ViewState(PlayerMenuContext context, long revision, List<KeyPaymentPlanner.Availability> payment,

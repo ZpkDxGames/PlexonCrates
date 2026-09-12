@@ -48,7 +48,6 @@ import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
-import org.bukkit.scheduler.BukkitRunnable;
 
 public final class MenuService implements Listener {
     private final PlexonCrates plugin;
@@ -56,10 +55,12 @@ public final class MenuService implements Listener {
     private final NamespacedKey editorItem;
     private final Map<UUID, String> rewardSearch = new ConcurrentHashMap<>();
     private final Map<UUID, MassContext> massContexts = new ConcurrentHashMap<>();
+    private final OpeningAnimationCoordinator animations;
 
     public MenuService(PlexonCrates plugin) {
         this.plugin = plugin;
         this.editorItem = new NamespacedKey(plugin, "editor_item");
+        this.animations = new OpeningAnimationCoordinator(plugin);
     }
 
     public void openBrowser(Player player) {
@@ -540,31 +541,8 @@ public final class MenuService implements Listener {
         if (visuals.isEmpty()) visuals = List.of(selected);
         for (int slot : rail) inventory.setItem(slot, randomDisplay(visuals));
         open(player, inventory);
-
-        List<CrateReward> finalVisuals = visuals;
-        int steps = Math.max(1, plugin.settings().animationDuration() / plugin.settings().animationPeriod());
-        new BukkitRunnable() {
-            private int step;
-            @Override public void run() {
-                step++;
-                if (player.isOnline() && player.getOpenInventory().getTopInventory().getHolder() == holder) {
-                    for (int index = 0; index < rail.size() - 1; index++) {
-                        inventory.setItem(rail.get(index), inventory.getItem(rail.get(index + 1)));
-                    }
-                    inventory.setItem(rail.getLast(), randomDisplay(finalVisuals));
-                    if (step % 3 == 0) {
-                        float pitch = Math.min(2.0f, 0.65f + step / (float) steps);
-                        player.playSound(player.getLocation(), plugin.settings().openingSound(), 0.35f, pitch);
-                    }
-                }
-                if (step < steps) return;
-                cancel();
-                if (player.isOnline() && player.getOpenInventory().getTopInventory().getHolder() == holder) {
-                    inventory.setItem(menus.slot("opening.center-slot"), selected.displayCopy());
-                }
-                completed.run();
-            }
-        }.runTaskTimer(plugin, plugin.settings().animationPeriod(), plugin.settings().animationPeriod());
+        animations.start(player, holder, inventory, rail, visuals, selected,
+                menus.slot("opening.center-slot"), completed);
     }
 
     public void reveal(Player player, Crate crate, CrateReward selected, Runnable completed) {
@@ -660,6 +638,10 @@ public final class MenuService implements Listener {
                 view.transactionId().toString());
     }
 
+    public void stop() {
+        animations.stop();
+    }
+
     public void closeAll() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.getOpenInventory().getTopInventory() != null
@@ -669,21 +651,27 @@ public final class MenuService implements Listener {
         massContexts.clear();
     }
 
-    @EventHandler
     public void click(InventoryClickEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) return;
-        if (!accept(player, holder)) return;
+        MenuInteraction.Click click = MenuInteraction.Click.capture(event);
+        UUID playerId = player.getUniqueId();
+        Bukkit.getScheduler().runTask(plugin, () -> dispatchClick(playerId, holder, click));
+    }
+
+    private void dispatchClick(UUID playerId, MenuHolder holder, MenuInteraction.Click event) {
+        Player player = Bukkit.getPlayer(playerId);
+        if (player == null || !player.isOnline() || !currentHolder(player, holder) || !accept(player, holder)) return;
         if (holder.kind() == MenuHolder.Kind.REWARDS) {
-            rewardPoolClick(event, holder);
+            rewardPoolClick(player, event, holder);
             return;
         }
         if (isAdministrative(holder.kind())) {
-            plugin.adminMenus().handleClick(event, holder);
+            plugin.adminMenus().handleClick(player, holder, event);
             return;
         }
-        if (event.getClickedInventory() != event.getView().getTopInventory()) return;
+        if (!event.clickedTop()) return;
         int slot = event.getRawSlot();
         MenuConfig menus = plugin.menusConfig();
         switch (holder.kind()) {
@@ -739,6 +727,11 @@ public final class MenuService implements Listener {
             }
             default -> { }
         }
+    }
+
+    private static boolean currentHolder(Player player, MenuHolder expected) {
+        Inventory top = player.getOpenInventory().getTopInventory();
+        return top != null && top.getHolder() == expected;
     }
 
     private void massOpenClick(Player player, MenuHolder holder, int slot, boolean rightClick) {
@@ -946,13 +939,20 @@ public final class MenuService implements Listener {
         });
     }
 
-    @EventHandler
     public void drag(InventoryDragEvent event) {
         if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;
         event.setCancelled(true);
-        if (!(event.getWhoClicked() instanceof Player player) || !accept(player, holder)) return;
-        if (holder.kind() == MenuHolder.Kind.REWARDS) rewardPoolDrag(event, holder);
-        else if (isAdministrative(holder.kind())) plugin.adminMenus().handleDrag(event, holder);
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        MenuInteraction.Drag drag = MenuInteraction.Drag.capture(event);
+        UUID playerId = player.getUniqueId();
+        Bukkit.getScheduler().runTask(plugin, () -> dispatchDrag(playerId, holder, drag));
+    }
+
+    private void dispatchDrag(UUID playerId, MenuHolder holder, MenuInteraction.Drag event) {
+        Player player = Bukkit.getPlayer(playerId);
+        if (player == null || !player.isOnline() || !currentHolder(player, holder) || !accept(player, holder)) return;
+        if (holder.kind() == MenuHolder.Kind.REWARDS) rewardPoolDrag(player, event, holder);
+        else if (isAdministrative(holder.kind())) plugin.adminMenus().handleDrag(player, holder, event);
     }
 
     @EventHandler
@@ -1075,8 +1075,7 @@ public final class MenuService implements Listener {
         if (!player.hasPermission("plexoncrates.admin")) return;
         MenuConfig menus = plugin.menusConfig();
         if (slot == menus.slot("admin.reload")) {
-            plugin.reloadFor(player);
-            if (plugin.isEnabled()) openAdmin(player);
+            plugin.requestReload(player, () -> { if (player.isOnline()) openAdmin(player); });
             return;
         }
         int index = menus.slots("admin.crate-slots").indexOf(slot);
@@ -1127,9 +1126,7 @@ public final class MenuService implements Listener {
         }
     }
 
-    private void rewardPoolClick(InventoryClickEvent event, MenuHolder holder) {
-        event.setCancelled(true);
-        if (!(event.getWhoClicked() instanceof Player player)) return;
+    private void rewardPoolClick(Player player, MenuInteraction.Click event, MenuHolder holder) {
         if (!player.hasPermission("plexoncrates.admin.rewards")) {
             plugin.messages().send(player, "no-permission");
             return;
@@ -1137,9 +1134,7 @@ public final class MenuService implements Listener {
         MenuConfig menus = plugin.menusConfig();
         Crate crate = plugin.crates().find(holder.crateId()).orElse(null);
         if (crate == null) return;
-        int topSize = event.getView().getTopInventory().getSize();
-        if (event.isShiftClick() && event.getRawSlot() >= topSize
-                && event.getRawSlot() < event.getView().countSlots()) {
+        if (event.isShiftClick() && event.clickedBottom()) {
             if (event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY) {
                 ItemStack source = event.getCurrentItem();
                 if (source == null || source.getType().isAir()) {
@@ -1149,7 +1144,7 @@ public final class MenuService implements Listener {
             }
             return;
         }
-        if (event.getClickedInventory() != event.getView().getTopInventory()) return;
+        if (!event.clickedTop()) return;
         int slot = event.getRawSlot();
         List<Integer> rewardSlots = menus.slots("reward-pool.reward-slots");
         int visibleIndex = rewardSlots.indexOf(slot);
@@ -1205,10 +1200,8 @@ public final class MenuService implements Listener {
         }
     }
 
-    private void rewardPoolDrag(InventoryDragEvent event, MenuHolder holder) {
-        event.setCancelled(true);
-        if (!(event.getWhoClicked() instanceof Player player)
-                || !player.hasPermission("plexoncrates.admin.rewards")) return;
+    private void rewardPoolDrag(Player player, MenuInteraction.Drag event, MenuHolder holder) {
+        if (!player.hasPermission("plexoncrates.admin.rewards")) return;
         Crate crate = plugin.crates().find(holder.crateId()).orElse(null);
         ItemStack source = event.getOldCursor();
         if (crate == null || source == null || source.getType().isAir()) return;
@@ -1264,7 +1257,7 @@ public final class MenuService implements Listener {
                 });
     }
 
-    private void balanceRewardPool(Player player, Crate crate, InventoryClickEvent event) throws Exception {
+    private void balanceRewardPool(Player player, Crate crate, MenuInteraction.Click event) throws Exception {
         if (!plugin.adminMenus().requireWritableDraft(player, crate.id())) return;
         CrateRegistry.ChanceBalanceMode mode;
         if (event.isShiftClick() && event.isRightClick()) {

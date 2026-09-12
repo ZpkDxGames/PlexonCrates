@@ -17,8 +17,8 @@ env:
   PHASE2_SHA: 'ec9623857dd09437c29a251c4f1fb01f5b4fd98e'
   ACCEPTED_PHASE3_SHA: 'f1bcb27186489b47c8692d126e0b1974e25881fa'
   RELIABILITY_SHA: 'c1b84c76430fd7196acc6ea4d45976e1b0740786'
-  ROLLBACK_TAG: 'v4.6.0'
-  ROLLBACK_SHA: '261270243beb9ff4a8992f53095f16c20458f770'
+  ROLLBACK_TAG: 'v5.0.0'
+  ROLLBACK_SHA: 'f24e3f7f942f7c886352e71c7105af499828096f'
   PLEXONCORE_SHA256: '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
   PLEXONKEYS_VERSION: '2.0.0-rc.2'
   PLEXONKEYS_SHA256: '0cc87449754b7e5dec34e57091f856f2bfa98a3c256eb41617b510911cbe0ee4'
@@ -66,7 +66,7 @@ jobs:
           echo "PLUGIN_VERSION=$version" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=v${version}" >> "$GITHUB_ENV"
 
-      - name: Verify exact stable boundary
+      - name: Verify exact stable boundary and certified runtime candidate
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,11 +78,56 @@ jobs:
           test "$(mvn -q -DforceStdout help:evaluate -Dexpression=paper.version)" = '26.2.build.121-stable'
           test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexoncore.version)" = '2.0.4'
           test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexonkeys.version)" = "$PLEXONKEYS_VERSION"
+          test "$(git rev-list -n 1 "$ROLLBACK_TAG")" = "$ROLLBACK_SHA"
+          git merge-base --is-ancestor "$ROLLBACK_SHA" HEAD
           git merge-base --is-ancestor "$PHASE2_SHA" HEAD
           git merge-base --is-ancestor "$RELIABILITY_SHA" HEAD
           git merge-base --is-ancestor "$ACCEPTED_PHASE3_SHA" HEAD
           git merge-base --is-ancestor "$ACCEPTED_RC4_SHA" HEAD
           test -s "releases/${PLUGIN_VERSION}.md"
+
+          runtime_file="releases/${PLUGIN_VERSION}.runtime-certification.env"
+          test -s "$runtime_file"
+          grep -Fx 'RUNTIME_CERTIFICATION=PASS' "$runtime_file"
+          grep -Fx 'PAPER_VERSION=26.2.build.121-stable' "$runtime_file"
+          certified_rc_tag="$(sed -n 's/^CERTIFIED_RC_TAG=//p' "$runtime_file" | head -n 1)"
+          certified_rc_sha="$(sed -n 's/^CERTIFIED_RC_SHA=//p' "$runtime_file" | head -n 1)"
+          certified_rc_jar_sha256="$(sed -n 's/^CERTIFIED_RC_JAR_SHA256=//p' "$runtime_file" | head -n 1)"
+          test -n "$certified_rc_tag"
+          test -n "$certified_rc_sha"
+          test -n "$certified_rc_jar_sha256"
+          [[ "$certified_rc_tag" == "v${PLUGIN_VERSION}-rc."* ]] || {
+            echo "Certified tag $certified_rc_tag does not belong to stable line v${PLUGIN_VERSION}." >&2
+            exit 1
+          }
+          test "$(git rev-list -n 1 "$certified_rc_tag")" = "$certified_rc_sha"
+          git merge-base --is-ancestor "$certified_rc_sha" HEAD
+
+          rc_json="$(gh release view "$certified_rc_tag" --repo "$GITHUB_REPOSITORY" --json tagName,isPrerelease)"
+          echo "$rc_json" | jq -e --arg tag "$certified_rc_tag" \
+            '.tagName == $tag and .isPrerelease == true' >/dev/null
+          rc_version="${certified_rc_tag#v}"
+          rm -rf certified-rc
+          mkdir certified-rc
+          gh release download "$certified_rc_tag" --repo "$GITHUB_REPOSITORY" --dir certified-rc \
+            --pattern "PlexonCrates-${rc_version}.jar"
+          echo "${certified_rc_jar_sha256}  certified-rc/PlexonCrates-${rc_version}.jar" | sha256sum --check
+
+          while IFS= read -r changed; do
+            case "$changed" in
+              pom.xml|"releases/${PLUGIN_VERSION}.md"|"releases/${PLUGIN_VERSION}.runtime-certification.env"|docs/REVAMP_5_1_IMPLEMENTATION_STATUS.md)
+                ;;
+              *)
+                echo "Stable candidate changed non-promotion path after certified RC: $changed" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --name-only "$certified_rc_sha"..HEAD)
+
+          echo "CERTIFIED_RC_TAG=$certified_rc_tag" >> "$GITHUB_ENV"
+          echo "CERTIFIED_RC_SHA=$certified_rc_sha" >> "$GITHUB_ENV"
+          echo "CERTIFIED_RC_JAR_SHA256=$certified_rc_jar_sha256" >> "$GITHUB_ENV"
+
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
             echo "$RELEASE_TAG already exists; refusing to move a stable tag." >&2
             exit 1
@@ -169,9 +214,12 @@ jobs:
             echo 'database_schema=4'
             echo "rollback_tag=$ROLLBACK_TAG"
             echo "rollback_sha=$ROLLBACK_SHA"
+            echo "certified_rc_tag=$CERTIFIED_RC_TAG"
+            echo "certified_rc_sha=$CERTIFIED_RC_SHA"
+            echo "certified_rc_jar_sha256=$CERTIFIED_RC_JAR_SHA256"
             echo "jar_size=$size"
             echo "jar_sha256=$digest"
-            echo 'runtime_certification=NOT_EXECUTED'
+            echo 'runtime_certification=PASS'
           } > target/PROVENANCE.txt
 
       - name: Publish GitHub stable release
@@ -218,7 +266,10 @@ jobs:
           grep -Fx "source_sha=$GITHUB_SHA" published/PROVENANCE.txt
           grep -Fx "accepted_rc4_head=$ACCEPTED_RC4_SHA" published/PROVENANCE.txt
           grep -Fx "version=$PLUGIN_VERSION" published/PROVENANCE.txt
-          grep -Fx 'runtime_certification=NOT_EXECUTED' published/PROVENANCE.txt
+          grep -Fx "certified_rc_tag=$CERTIFIED_RC_TAG" published/PROVENANCE.txt
+          grep -Fx "certified_rc_sha=$CERTIFIED_RC_SHA" published/PROVENANCE.txt
+          grep -Fx "certified_rc_jar_sha256=$CERTIFIED_RC_JAR_SHA256" published/PROVENANCE.txt
+          grep -Fx 'runtime_certification=PASS' published/PROVENANCE.txt
           grep -Eq '^TEST_COUNT=[1-9][0-9]* FAILURES=0 ERRORS=0 SKIPPED=0$' published/TEST_SUMMARY.txt
 
       - name: Upload release verification evidence

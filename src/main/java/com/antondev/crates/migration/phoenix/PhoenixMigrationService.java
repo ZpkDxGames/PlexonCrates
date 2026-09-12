@@ -11,6 +11,7 @@ import com.antondev.crates.migration.phoenix.PhoenixFixtureAdapter.PhoenixLocati
 import com.antondev.crates.migration.phoenix.PhoenixFixtureAdapter.PhoenixPlayer;
 import com.antondev.crates.migration.phoenix.PhoenixFixtureAdapter.PhoenixReward;
 import com.antondev.crates.model.Crate;
+import com.antondev.crates.service.KeyService;
 import com.antondev.crates.service.LocationStore;
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,6 +36,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
@@ -121,9 +123,38 @@ public final class PhoenixMigrationService {
         return new ScanResult(Instant.now(), fingerprint, List.copyOf(files), warnings);
     }
 
+    /** Captures all live plugin state needed by read-only migration planning on the primary thread. */
+    public PlanningState capturePlanningState() {
+        requirePlugin();
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("Phoenix planning state must be captured on the primary thread");
+        }
+        var keys = new LinkedHashMap<String, PlanningKey>();
+        for (var definition : plugin.keys().definitions()) {
+            ItemStack template = plugin.keys().template(definition.id()).orElse(null);
+            keys.put(definition.id().toLowerCase(Locale.ROOT), new PlanningKey(template));
+        }
+        var crateFingerprints = new LinkedHashMap<String, String>();
+        var crates = plugin.crates().snapshot();
+        Map<String, byte[]> payloads = crates.payloads();
+        for (String crateId : crates.crates().keySet()) {
+            byte[] payload = payloads.get(crateId);
+            crateFingerprints.put(crateId.toLowerCase(Locale.ROOT),
+                    payload == null ? "" : migrationFingerprint(payload));
+        }
+        Plugin phoenix = plugin.getServer().getPluginManager().getPlugin("PhoenixCratesLite");
+        return new PlanningState(phoenix != null && phoenix.isEnabled(), keys, crateFingerprints,
+                List.copyOf(plugin.locations().all()));
+    }
+
     /** Parses the supplied live fixture and produces a non-mutating mapping plan. */
     public PlanResult plan(ScanResult scan) {
+        return plan(scan, plugin == null ? PlanningState.empty() : capturePlanningState());
+    }
+
+    public PlanResult plan(ScanResult scan, PlanningState state) {
         Objects.requireNonNull(scan, "scan");
+        Objects.requireNonNull(state, "state");
         if (scan.files().isEmpty()) {
             return blockedPlan(scan, "No Phoenix source files were found.", List.of());
         }
@@ -133,8 +164,7 @@ public final class PhoenixMigrationService {
             var warnings = new ArrayList<>(fixture.warnings());
             boolean enabled = true;
 
-            Plugin phoenix = plugin == null ? null : plugin.getServer().getPluginManager().getPlugin("PhoenixCratesLite");
-            if (phoenix != null && phoenix.isEnabled()) {
+            if (state.phoenixEnabled()) {
                 enabled = false;
                 warnings.add("PhoenixCratesLite is enabled. Stop the server and remove its JAR from active plugins before importing.");
             }
@@ -143,8 +173,9 @@ public final class PhoenixMigrationService {
                     .sorted(Comparator.comparing(PhoenixKey::sourceId)).toList()) {
                 MigrationStatus status = MigrationStatus.EXACT;
                 String detail = key.sourceId() + " -> " + key.targetId();
-                if (plugin != null && plugin.keys().definition(key.targetId()).isPresent()) {
-                    ItemStack existing = plugin.keys().template(key.targetId()).orElse(null);
+                PlanningKey existingKey = state.keys().get(key.targetId().toLowerCase(Locale.ROOT));
+                if (existingKey != null) {
+                    ItemStack existing = existingKey.template();
                     if (existing == null) {
                         status = MigrationStatus.MANUAL_REVIEW;
                         enabled = false;
@@ -161,8 +192,8 @@ public final class PhoenixMigrationService {
                 MigrationStatus status = MigrationStatus.EXACT;
                 String detail = crate.sourceId() + " -> " + crate.targetId() + " as DRAFT; "
                         + crate.rewards().size() + " rewards";
-                if (plugin != null && plugin.crates().find(crate.targetId()).isPresent()) {
-                    String existingFingerprint = migrationFingerprint(crate.targetId());
+                if (state.crateFingerprints().containsKey(crate.targetId())) {
+                    String existingFingerprint = state.crateFingerprints().get(crate.targetId());
                     if (scan.fingerprint().equals(existingFingerprint)) {
                         status = MigrationStatus.SKIPPED;
                         detail += " (already imported from this source fingerprint)";
@@ -200,18 +231,16 @@ public final class PhoenixMigrationService {
                             MigrationStatus.CONFLICT, "Location references an unavailable Phoenix crate"));
                     continue;
                 }
-                if (plugin != null) {
-                    var existing = plugin.locations().all().stream().filter(link ->
-                            link.position().worldName().equalsIgnoreCase(location.worldName())
-                                    && link.position().x() == location.x() && link.position().y() == location.y()
-                                    && link.position().z() == location.z()).findFirst().orElse(null);
-                    if (existing != null && !existing.crateId().equalsIgnoreCase(target)) {
-                        enabled = false;
-                        entries.add(new PlanEntry("location:" + location.worldName() + ":" + location.x()
-                                + ":" + location.y() + ":" + location.z(), target, MigrationStatus.CONFLICT,
-                                "Block is already linked to " + existing.crateId()));
-                        continue;
-                    }
+                var existing = state.locations().stream().filter(link ->
+                        link.position().worldName().equalsIgnoreCase(location.worldName())
+                                && link.position().x() == location.x() && link.position().y() == location.y()
+                                && link.position().z() == location.z()).findFirst().orElse(null);
+                if (existing != null && !existing.crateId().equalsIgnoreCase(target)) {
+                    enabled = false;
+                    entries.add(new PlanEntry("location:" + location.worldName() + ":" + location.x()
+                            + ":" + location.y() + ":" + location.z(), target, MigrationStatus.CONFLICT,
+                            "Block is already linked to " + existing.crateId()));
+                    continue;
                 }
                 entries.add(new PlanEntry("location:" + location.worldName() + ":" + location.x()
                         + ":" + location.y() + ":" + location.z(), target, MigrationStatus.EXACT,
@@ -248,6 +277,259 @@ public final class PhoenixMigrationService {
             return blockedPlan(scan, "Phoenix fixture could not be parsed: " + concise(error),
                     List.of(concise(error)));
         }
+    }
+
+    /**
+     * Live destructive import coordinator. Heavy source/database/filesystem work stays on the bounded
+     * plugin I/O pool; Bukkit registry/world mutations are marshalled back to the primary thread.
+     */
+    public CompletableFuture<ImportResult> importToDraftsAsync(
+            PlanningState planningState, UUID actorId, String actorName) {
+        requirePlugin();
+        Objects.requireNonNull(planningState, "planningState");
+        String actor = actorName == null || actorName.isBlank() ? "CONSOLE" : actorName;
+        return plugin.io().submit(() -> prepareAsyncImport(planningState))
+                .thenCompose(prepared -> primary(() -> prepareKeys(prepared, actor)))
+                .thenCompose(preparedKeys -> plugin.io().submit(() -> writePreparedKeys(preparedKeys)))
+                .thenCompose(preparedKeys -> primary(() -> installPreparedKeys(preparedKeys)))
+                .thenCompose(keyed -> plugin.io().submit(() -> buildDraftPayloads(keyed)))
+                .thenCompose(payloads -> primary(() -> prepareDraftBatch(payloads, actor)))
+                .thenCompose(batch -> plugin.io().submit(() -> writeDraftBatch(batch)))
+                .thenCompose(batch -> primary(() -> installDraftBatch(batch)))
+                .thenCompose(installed -> plugin.io().submit(() -> persistAsyncImport(installed, actorId, actor)))
+                .thenCompose(persisted -> primary(() -> activatePersistedImport(persisted)));
+    }
+
+    private AsyncImportPreparation prepareAsyncImport(PlanningState planningState) throws Exception {
+        ScanResult currentScan = scan();
+        PlanResult currentPlan = plan(currentScan, planningState);
+        if (!currentPlan.importEnabled()) {
+            throw new IllegalStateException("Phoenix import plan is blocked: "
+                    + String.join("; ", currentPlan.warnings()));
+        }
+        Fixture fixture = adapter.load(sourceRoot);
+        Instant importedAt = Instant.now();
+        String shortFingerprint = currentScan.fingerprint().substring(0, 12);
+        Path backup = dataRoot.resolve("backups").resolve("phoenix-import-"
+                + REPORT_TIME.format(importedAt) + "-" + shortFingerprint).normalize();
+        if (!backup.startsWith(dataRoot.resolve("backups").normalize())) {
+            throw new IllegalStateException("Unsafe Phoenix migration backup path");
+        }
+        Files.createDirectories(backup);
+        copyTree(fixture.root(), backup.resolve("PhoenixCratesLite"));
+        plugin.database().createBackup(dataRoot, backup.resolve("PlexonCrates")).join();
+        return new AsyncImportPreparation(currentScan, currentPlan, fixture, backup, importedAt);
+    }
+
+    private PreparedKeyImport prepareKeys(AsyncImportPreparation prepared, String actor) throws Exception {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Phoenix key preparation requires primary thread");
+        KeyService.PreparedMutation mutation = plugin.keys().beginPreparedMutation();
+        var mappings = new LinkedHashMap<String, KeyMapping>();
+        for (PhoenixKey source : prepared.fixture().keys().values().stream()
+                .sorted(Comparator.comparing(PhoenixKey::sourceId)).toList()) {
+            String preferred = source.targetId();
+            if (plugin.keys().definition(mutation, preferred).isEmpty()
+                    && plugin.keys().discovered().containsKey(preferred)) {
+                mutation = plugin.keys().prepareBindExternal(mutation, preferred, actor);
+            }
+            if (plugin.keys().definition(mutation, preferred).isEmpty()) {
+                mutation = plugin.keys().prepareCreateCaptured(
+                        mutation, preferred, keyDisplayName(source), source.template(), actor);
+            }
+            ItemStack current = plugin.keys().template(mutation, preferred).orElseThrow(() ->
+                    new IllegalStateException("Mapped Plexon key is unresolved: " + preferred));
+            if (ItemCodec.one(current).isSimilar(ItemCodec.one(source.template()))) {
+                mappings.put(source.sourceId().toLowerCase(Locale.ROOT),
+                        new KeyMapping(source.sourceId(), List.of(preferred), false));
+                continue;
+            }
+            String legacy = legacyKeyId(preferred);
+            if (plugin.keys().definition(mutation, legacy).isEmpty()) {
+                mutation = plugin.keys().prepareCreateCaptured(
+                        mutation, legacy, keyDisplayName(source), source.template(), actor);
+            } else {
+                ItemStack existingLegacy = plugin.keys().template(mutation, legacy).orElseThrow(() ->
+                        new IllegalStateException("Existing Phoenix legacy key is unresolved: " + legacy));
+                if (!ItemCodec.one(existingLegacy).isSimilar(ItemCodec.one(source.template()))) {
+                    throw new IllegalStateException("Legacy key ID conflicts with a different exact item: " + legacy);
+                }
+            }
+            mappings.put(source.sourceId().toLowerCase(Locale.ROOT),
+                    new KeyMapping(source.sourceId(), List.of(preferred, legacy), true));
+        }
+        return new PreparedKeyImport(prepared, mutation, Map.copyOf(mappings));
+    }
+
+    private PreparedKeyImport writePreparedKeys(PreparedKeyImport prepared) throws Exception {
+        plugin.keys().writePreparedMutation(prepared.mutation());
+        return prepared;
+    }
+
+    private KeyedImport installPreparedKeys(PreparedKeyImport prepared) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Phoenix key activation requires primary thread");
+        plugin.keys().installPreparedMutation(prepared.mutation());
+        return new KeyedImport(prepared.prepared(), prepared.keyMappings());
+    }
+
+    private DraftPayloadBatch buildDraftPayloads(KeyedImport keyed) throws Exception {
+        AsyncImportPreparation prepared = keyed.prepared();
+        Path generated = generatedRoot.resolve(prepared.scan().fingerprint()).normalize();
+        if (!generated.startsWith(generatedRoot)) throw new IllegalStateException("Unsafe generated migration path");
+        Files.createDirectories(generated);
+        var payloads = new ArrayList<DraftPayload>();
+        for (PhoenixCrate source : prepared.fixture().crates()) {
+            List<String> acceptedKeys = new ArrayList<>();
+            for (String sourceKeyId : source.sourceKeyIds()) {
+                PhoenixKey sourceKey = prepared.fixture().keys().get(sourceKeyId.toLowerCase(Locale.ROOT));
+                if (sourceKey == null) throw new IllegalStateException("Unknown Phoenix key " + sourceKeyId);
+                KeyMapping mapping = keyed.keyMappings().get(sourceKey.sourceId().toLowerCase(Locale.ROOT));
+                if (mapping == null) throw new IllegalStateException("Missing key mapping for " + sourceKey.sourceId());
+                acceptedKeys.addAll(mapping.acceptedIds());
+            }
+            String yaml = crateYaml(source, acceptedKeys, prepared.scan().fingerprint(), prepared.importedAt());
+            Path definition = generated.resolve(source.targetId() + ".yml").normalize();
+            if (!definition.getParent().equals(generated)) throw new IllegalStateException("Unsafe generated crate path");
+            Files.writeString(definition, yaml, StandardCharsets.UTF_8);
+            payloads.add(new DraftPayload(source.targetId(), yaml));
+        }
+        return new DraftPayloadBatch(keyed, List.copyOf(payloads));
+    }
+
+    private PreparedDraftBatch prepareDraftBatch(DraftPayloadBatch payloads, String actor) throws Exception {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Phoenix draft preparation requires primary thread");
+        var current = plugin.crates().snapshot();
+        Map<String, byte[]> currentPayloads = current.payloads();
+        var prepared = new ArrayList<com.antondev.crates.service.CrateRegistry.PreparedDraftImport>();
+        int skipped = 0;
+        for (DraftPayload payload : payloads.payloads()) {
+            if (current.crates().containsKey(payload.crateId())) {
+                byte[] existing = currentPayloads.get(payload.crateId());
+                String fingerprint = existing == null ? "" : migrationFingerprint(existing);
+                if (payloads.keyed().prepared().scan().fingerprint().equals(fingerprint)) {
+                    skipped++;
+                    continue;
+                }
+                throw new IllegalStateException("Target crate ID already exists: " + payload.crateId());
+            }
+            prepared.add(plugin.crates().prepareImportedDraft(payload.yaml(), payload.crateId(), actor));
+        }
+        return new PreparedDraftBatch(payloads, List.copyOf(prepared), skipped);
+    }
+
+    private PreparedDraftBatch writeDraftBatch(PreparedDraftBatch batch) throws Exception {
+        for (var prepared : batch.prepared()) plugin.crates().writeImportedDraft(prepared);
+        return batch;
+    }
+
+    private InstalledBatch installDraftBatch(PreparedDraftBatch batch) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Phoenix draft activation requires primary thread");
+        var imported = new ArrayList<Crate>();
+        for (var prepared : batch.prepared()) imported.add(plugin.crates().installImportedDraft(prepared));
+        var crateKeyIds = new LinkedHashMap<String, String>();
+        for (PhoenixCrate source : batch.payloads().keyed().prepared().fixture().crates()) {
+            plugin.crates().find(source.targetId()).ifPresent(crate -> crateKeyIds.put(crate.id(), crate.keyId()));
+        }
+        var worldIds = new LinkedHashMap<String, UUID>();
+        for (PhoenixLocation location : batch.payloads().keyed().prepared().fixture().locations()) {
+            World world = Bukkit.getWorld(location.worldName());
+            worldIds.put(location.worldName().toLowerCase(Locale.ROOT), world == null ? null : world.getUID());
+        }
+        return new InstalledBatch(batch, List.copyOf(imported), Map.copyOf(crateKeyIds), worldIds);
+    }
+
+    private PersistedImport persistAsyncImport(InstalledBatch installed, UUID actorId, String actor) throws Exception {
+        AsyncImportPreparation prepared = installed.batch().payloads().keyed().prepared();
+        for (Crate imported : installed.imported()) {
+            plugin.database().audit(new DatabaseService.AuditRecord(actorId, actor, "MIGRATE", "CRATE",
+                    imported.id(), "Imported PhoenixCratesLite definition as DRAFT from "
+                            + prepared.scan().fingerprint(), prepared.importedAt())).join();
+        }
+        HistoryImport history = importAggregateHistoryAsync(prepared.fixture(), prepared.scan().fingerprint(),
+                prepared.importedAt(), installed.crateKeyIds());
+        int locations = importLocationsAsync(prepared.fixture(), prepared.importedAt(), installed.worldIds());
+        List<DatabaseService.StoredLocation> storedLocations = plugin.database().loadLocations();
+        long orphanWins = prepared.fixture().orphanRewardWins().values().stream().mapToLong(Long::longValue).sum();
+        ImportResult partial = new ImportResult(prepared.scan().fingerprint(), prepared.backup(), null,
+                installed.imported().size(), installed.batch().skipped(), history.rows(), locations,
+                orphanWins, prepared.importedAt());
+        Path report = writeReport(prepared.scan(), prepared.plan(), partial);
+        Path marker = reportRoot.resolve("phoenix-" + prepared.scan().fingerprint() + ".imported").normalize();
+        if (!marker.getParent().equals(reportRoot)) throw new IllegalStateException("Unsafe migration marker path");
+        Files.writeString(marker, "source=" + SOURCE + "\nfingerprint=" + prepared.scan().fingerprint()
+                + "\nimported-at=" + prepared.importedAt() + "\nbackup=" + dataRoot.relativize(prepared.backup())
+                + "\nreport=" + dataRoot.relativize(report) + "\n", StandardCharsets.UTF_8);
+        plugin.database().audit(new DatabaseService.AuditRecord(actorId, actor, "MIGRATE", "PHOENIX",
+                prepared.scan().fingerprint(), "Imported PhoenixCratesLite source into " + installed.imported().size()
+                        + " crate drafts; report=" + report.getFileName(), prepared.importedAt())).join();
+        ImportResult result = new ImportResult(prepared.scan().fingerprint(), prepared.backup(), report,
+                installed.imported().size(), installed.batch().skipped(), history.rows(), locations,
+                orphanWins, prepared.importedAt());
+        return new PersistedImport(result, storedLocations, history.stats());
+    }
+
+    private ImportResult activatePersistedImport(PersistedImport persisted) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Phoenix import activation requires primary thread");
+        for (StatDelta delta : persisted.stats()) {
+            plugin.statistics().record(delta.playerId(), delta.crateId(), delta.amount());
+        }
+        plugin.locations().apply(LocationStore.fromDatabase(persisted.locations(), plugin.crates()));
+        return persisted.result();
+    }
+
+    private HistoryImport importAggregateHistoryAsync(Fixture fixture, String fingerprint, Instant importedAt,
+                                                       Map<String, String> crateKeyIds) throws Exception {
+        Map<String, String> crateTargets = fixture.crates().stream().collect(java.util.stream.Collectors.toMap(
+                PhoenixCrate::sourceId, PhoenixCrate::targetId, (left, right) -> left, LinkedHashMap::new));
+        int imported = 0;
+        var stats = new ArrayList<StatDelta>();
+        for (PhoenixPlayer player : fixture.players()) {
+            Set<UUID> existingTransactions = plugin.database().history(player.playerId(), 100, 0).stream()
+                    .map(DatabaseService.OpeningRecord::transactionId)
+                    .collect(java.util.stream.Collectors.toSet());
+            for (Map.Entry<String, Long> opening : player.openedCrates().entrySet()) {
+                if (opening.getValue() <= 0) continue;
+                String target = crateTargets.get(opening.getKey());
+                if (target == null) continue;
+                if (opening.getValue() > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("Phoenix opening count exceeds PlexonCrates aggregate history limit");
+                }
+                UUID transaction = UUID.nameUUIDFromBytes(("PlexonCrates:Phoenix:" + fingerprint + ":"
+                        + player.playerId() + ":" + opening.getKey()).getBytes(StandardCharsets.UTF_8));
+                if (existingTransactions.contains(transaction)) continue;
+                List<String> wins = player.rewardWins().entrySet().stream()
+                        .filter(entry -> opening.getKey().equals(fixture.rewardToCrate().get(entry.getKey())))
+                        .filter(entry -> entry.getValue() > 0)
+                        .sorted(Map.Entry.comparingByKey())
+                        .map(entry -> entry.getKey() + "=" + entry.getValue()).toList();
+                String rewardSummary = wins.isEmpty() ? "aggregate:no-current-reward-wins" : String.join(",", wins);
+                String keyId = crateKeyIds.getOrDefault(target, "");
+                int amount = opening.getValue().intValue();
+                DatabaseService.OpeningRecord record = new DatabaseService.OpeningRecord(transaction,
+                        player.playerId(), player.playerName(), target, keyId, 0, amount,
+                        "PHOENIX_MIGRATION", rewardSummary, "PHOENIX_AGGREGATE", 0,
+                        "Imported aggregate Phoenix history; source database has no per-opening timestamp. sourceCrate="
+                                + opening.getKey(), importedAt);
+                plugin.database().completeOpening(record).join();
+                stats.add(new StatDelta(player.playerId(), target, amount));
+                imported++;
+            }
+        }
+        return new HistoryImport(imported, List.copyOf(stats));
+    }
+
+    private int importLocationsAsync(Fixture fixture, Instant importedAt, Map<String, UUID> worldIds) {
+        Map<String, String> crateTargets = fixture.crates().stream().collect(java.util.stream.Collectors.toMap(
+                PhoenixCrate::sourceId, PhoenixCrate::targetId, (left, right) -> left, LinkedHashMap::new));
+        int count = 0;
+        for (PhoenixLocation location : fixture.locations()) {
+            String target = crateTargets.get(location.sourceCrateId());
+            if (target == null) continue;
+            UUID worldUuid = worldIds.get(location.worldName().toLowerCase(Locale.ROOT));
+            plugin.database().saveLocation(new DatabaseService.StoredLocation(worldUuid, location.worldName(),
+                    location.x(), location.y(), location.z(), target, importedAt)).join();
+            count++;
+        }
+        return count;
     }
 
     /** Compatibility overload; live imports require the plugin-aware constructor and actor metadata. */
@@ -350,14 +632,19 @@ public final class PhoenixMigrationService {
 
     /** Revalidates the current source and all mapping conflicts without changing data. */
     public ValidationResult validate(PlanResult plan) {
+        return validate(plan, plugin == null ? PlanningState.empty() : capturePlanningState());
+    }
+
+    public ValidationResult validate(PlanResult plan, PlanningState state) {
         Objects.requireNonNull(plan, "plan");
+        Objects.requireNonNull(state, "state");
         var issues = new ArrayList<String>();
         try {
             ScanResult current = scan();
             if (!current.fingerprint().equals(plan.sourceFingerprint())) {
                 issues.add("Phoenix source fingerprint changed after the plan was generated.");
             }
-            PlanResult fresh = plan(current);
+            PlanResult fresh = plan(current, state);
             if (!fresh.importEnabled()) issues.addAll(fresh.warnings());
             fresh.entries().stream().filter(entry -> entry.status() == MigrationStatus.CONFLICT)
                     .forEach(entry -> issues.add(entry.source() + ": " + entry.detail()));
@@ -581,8 +868,16 @@ public final class PhoenixMigrationService {
 
     private String migrationFingerprint(String crateId) {
         try {
+            return migrationFingerprint(plugin.crates().serialized(crateId).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String migrationFingerprint(byte[] payload) {
+        try {
             YamlConfiguration yaml = new YamlConfiguration();
-            yaml.loadFromString(plugin.crates().serialized(crateId));
+            yaml.loadFromString(new String(payload, StandardCharsets.UTF_8));
             return yaml.getString("migration.source-fingerprint", "");
         } catch (Exception ignored) {
             return "";
@@ -649,6 +944,21 @@ public final class PhoenixMigrationService {
         catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException("SHA-256 unavailable", impossible); }
     }
 
+    private <T> CompletableFuture<T> primary(CheckedSupplier<T> supplier) {
+        var future = new CompletableFuture<T>();
+        Runnable task = () -> {
+            try {
+                if (!plugin.isEnabled()) throw new IllegalStateException("Plugin disabled during Phoenix migration");
+                future.complete(supplier.get());
+            } catch (Throwable error) {
+                future.completeExceptionally(error);
+            }
+        };
+        if (Bukkit.isPrimaryThread()) task.run();
+        else Bukkit.getScheduler().runTask(plugin, task);
+        return future;
+    }
+
     private void requirePlugin() {
         if (plugin == null) throw new IllegalStateException("Phoenix import requires a running PlexonCrates instance");
     }
@@ -665,6 +975,25 @@ public final class PhoenixMigrationService {
     private static Component keyDisplayName(PhoenixKey key) {
         Component name = key.template().getItemMeta().displayName();
         return name == null ? Text.parse("<white>" + key.targetId() + " key</white>") : name;
+    }
+
+    public record PlanningKey(ItemStack template) {
+        public PlanningKey {
+            template = template == null ? null : template.clone();
+        }
+        @Override public ItemStack template() { return template == null ? null : template.clone(); }
+    }
+
+    public record PlanningState(boolean phoenixEnabled, Map<String, PlanningKey> keys,
+                                Map<String, String> crateFingerprints, List<LocationStore.Link> locations) {
+        public PlanningState {
+            keys = Map.copyOf(keys);
+            crateFingerprints = Map.copyOf(crateFingerprints);
+            locations = List.copyOf(locations);
+        }
+        public static PlanningState empty() {
+            return new PlanningState(false, Map.of(), Map.of(), List.of());
+        }
     }
 
     public enum Phase { SCAN, PLAN, IMPORT_TO_DRAFTS, VALIDATE, CUTOVER_REPORT }
@@ -692,6 +1021,49 @@ public final class PhoenixMigrationService {
     public record ImportResult(String sourceFingerprint, Path backupDirectory, Path report,
                                int importedCrates, int skippedCrates, int historyRows, int locations,
                                long orphanRewardWins, Instant importedAt) {}
+    private record AsyncImportPreparation(ScanResult scan, PlanResult plan, Fixture fixture,
+                                          Path backup, Instant importedAt) {}
+    private record PreparedKeyImport(AsyncImportPreparation prepared, KeyService.PreparedMutation mutation,
+                                     Map<String, KeyMapping> keyMappings) {
+        private PreparedKeyImport { keyMappings = Map.copyOf(keyMappings); }
+    }
+    private record KeyedImport(AsyncImportPreparation prepared, Map<String, KeyMapping> keyMappings) {
+        private KeyedImport { keyMappings = Map.copyOf(keyMappings); }
+    }
+    private record DraftPayload(String crateId, String yaml) {}
+    private record DraftPayloadBatch(KeyedImport keyed, List<DraftPayload> payloads) {
+        private DraftPayloadBatch { payloads = List.copyOf(payloads); }
+    }
+    private record PreparedDraftBatch(DraftPayloadBatch payloads,
+                                      List<com.antondev.crates.service.CrateRegistry.PreparedDraftImport> prepared,
+                                      int skipped) {
+        private PreparedDraftBatch { prepared = List.copyOf(prepared); }
+    }
+    private record InstalledBatch(PreparedDraftBatch batch, List<Crate> imported,
+                                  Map<String, String> crateKeyIds, Map<String, UUID> worldIds) {
+        private InstalledBatch {
+            imported = List.copyOf(imported);
+            crateKeyIds = Map.copyOf(crateKeyIds);
+            worldIds = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(worldIds));
+        }
+    }
+    private record StatDelta(UUID playerId, String crateId, int amount) {}
+    private record HistoryImport(int rows, List<StatDelta> stats) {
+        private HistoryImport { stats = List.copyOf(stats); }
+    }
+    private record PersistedImport(ImportResult result, List<DatabaseService.StoredLocation> locations,
+                                   List<StatDelta> stats) {
+        private PersistedImport {
+            locations = List.copyOf(locations);
+            stats = List.copyOf(stats);
+        }
+    }
+
+    @FunctionalInterface
+    private interface CheckedSupplier<T> {
+        T get() throws Exception;
+    }
+
     private record KeyMapping(String sourceId, List<String> acceptedIds, boolean legacyAdded) {
         private KeyMapping { acceptedIds = List.copyOf(acceptedIds); }
     }

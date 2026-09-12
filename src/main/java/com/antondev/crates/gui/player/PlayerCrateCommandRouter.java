@@ -14,11 +14,8 @@ import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 /**
- * Routes the ordinary player command surface into the Phase 3 product UI.
- *
- * <p>It intentionally does not delegate InventoryOpenEvent. Direct MenuService
- * calls, physical crate interactions, portable previews and admin compatibility
- * surfaces therefore retain their accepted Pipeline 4 behavior.</p>
+ * Owns only the ordinary player command surface for the Phase 3 product UI.
+ * Inventory lifecycle is centralized by CrateMenuEventRouter.
  */
 public final class PlayerCrateCommandRouter implements Listener {
     private static final Set<String> ROOTS = Set.of("crates", "crate", "plexoncrates");
@@ -93,17 +90,17 @@ public final class PlayerCrateCommandRouter implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    /** Routed by the single registered crate inventory listener. */
     public void click(InventoryClickEvent event) {
         menus.click(event);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    /** Routed by the single registered crate inventory listener. */
     public void close(InventoryCloseEvent event) {
         menus.close(event);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    /** Routed by the single registered crate inventory listener. */
     public void quit(PlayerQuitEvent event) {
         menus.quit(event);
     }

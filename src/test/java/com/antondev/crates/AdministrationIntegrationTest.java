@@ -76,6 +76,7 @@ class AdministrationIntegrationTest {
         InventoryDragEvent distributed = new InventoryDragEvent(player.getOpenInventory(), null,
                 original, false, spread);
         plugin.adminMenus().handleDrag(distributed, holder);
+        tickInventoryDispatch();
         assertTrue(distributed.isCancelled());
         assertNull(plugin.editSessions().key(player).template());
 
@@ -83,11 +84,13 @@ class AdministrationIntegrationTest {
         InventoryDragEvent rejected = new InventoryDragEvent(player.getOpenInventory(), null,
                 editorItem, false, java.util.Map.of(input, editorItem));
         plugin.adminMenus().handleDrag(rejected, holder);
+        tickInventoryDispatch();
         assertNull(plugin.editSessions().key(player).template());
 
         InventoryDragEvent accepted = new InventoryDragEvent(player.getOpenInventory(), null,
                 original, false, java.util.Map.of(input, original.clone()));
         plugin.adminMenus().handleDrag(accepted, holder);
+        tickInventoryDispatch();
 
         ItemStack captured = plugin.editSessions().key(player).template();
         assertTrue(accepted.isCancelled());
@@ -117,6 +120,7 @@ class AdministrationIntegrationTest {
         InventoryDragEvent drag = new InventoryDragEvent(player.getOpenInventory(), null,
                 original, false, targets);
         plugin.menus().drag(drag);
+        tickInventoryDispatch();
 
         var updated = plugin.crates().find("basic").orElseThrow();
         var captured = updated.rewards().values().stream()
@@ -148,6 +152,7 @@ class AdministrationIntegrationTest {
         InventoryClickEvent cursorClick = new InventoryClickEvent(player.getOpenInventory(),
                 InventoryType.SlotType.CONTAINER, slots.get(8), ClickType.LEFT, InventoryAction.SWAP_WITH_CURSOR);
         plugin.menus().click(cursorClick);
+        tickInventoryDispatch();
         assertTrue(cursorClick.isCancelled());
         assertArrayEquals(cursorBefore, cursorSource.serializeAsBytes());
         assertEquals(9, plugin.crates().find("basic").orElseThrow().rewards().size());
@@ -159,6 +164,7 @@ class AdministrationIntegrationTest {
                 InventoryType.SlotType.QUICKBAR, player.getOpenInventory().getTopInventory().getSize() + 27,
                 ClickType.SHIFT_LEFT, InventoryAction.MOVE_TO_OTHER_INVENTORY);
         plugin.menus().click(shiftClick);
+        tickInventoryDispatch();
         assertTrue(shiftClick.isCancelled());
         assertArrayEquals(shiftBefore, shiftSource.serializeAsBytes());
         assertEquals(13, player.getInventory().getItem(0).getAmount());
@@ -184,6 +190,7 @@ class AdministrationIntegrationTest {
 
         int confirm = plugin.menusConfig().slot("reward-builder.confirm");
         player.simulateInventoryClick(player.getOpenInventory(), ClickType.LEFT, confirm);
+        tickInventoryDispatch();
 
         var updatedCrate = plugin.crates().find("basic").orElseThrow();
         var updated = updatedCrate.rewards().get(original.id());
@@ -215,6 +222,7 @@ class AdministrationIntegrationTest {
         InventoryClickEvent delayed = new InventoryClickEvent(player.getOpenInventory(),
                 InventoryType.SlotType.CONTAINER, crates, ClickType.LEFT, InventoryAction.PICKUP_ALL);
         plugin.adminMenus().handleClick(delayed, stale);
+        tickInventoryDispatch();
 
         assertTrue(delayed.isCancelled());
         assertSame(current, player.getOpenInventory().getTopInventory().getHolder());
@@ -229,6 +237,12 @@ class AdministrationIntegrationTest {
 
         player.simulateInventoryClick(player.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("crate-list.create"));
+        tickInventoryDispatch();
+
+        // New drafts are durable-first: keep the crate list visible while SQLite establishes
+        // the writable draft, then transition to the editor on the primary thread.
+        plugin.database().awaitIdle().join();
+        server.getScheduler().performTicks(2);
 
         MenuHolder holder = (MenuHolder) player.getOpenInventory().getTopInventory().getHolder();
         assertEquals(MenuHolder.Kind.EDITOR, holder.kind());
@@ -268,8 +282,10 @@ class AdministrationIntegrationTest {
         awaitDraft(second, crate.id());
         second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("editor.takeover"));
+        tickInventoryDispatch();
         second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("confirm-takeover.confirm"));
+        tickInventoryDispatch();
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
 
@@ -283,6 +299,7 @@ class AdministrationIntegrationTest {
         InventoryClickEvent staleBack = new InventoryClickEvent(first.getOpenInventory(),
                 InventoryType.SlotType.CONTAINER, back, ClickType.LEFT, InventoryAction.PICKUP_ALL);
         plugin.adminMenus().handleClick(staleBack, firstHolder);
+        tickInventoryDispatch();
         assertTrue(staleBack.isCancelled());
         assertSame(firstHolder, first.getOpenInventory().getTopInventory().getHolder());
     }
@@ -310,15 +327,18 @@ class AdministrationIntegrationTest {
         InventoryClickEvent rejected = new InventoryClickEvent(second.getOpenInventory(),
                 InventoryType.SlotType.CONTAINER, slots.get(8), ClickType.LEFT, InventoryAction.SWAP_WITH_CURSOR);
         plugin.menus().click(rejected);
+        tickInventoryDispatch();
         assertEquals(before, plugin.crates().find(crate.id()).orElseThrow().rewards().size());
 
         plugin.adminMenus().openCrateEditor(second, crate);
         second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("editor.takeover"));
+        tickInventoryDispatch();
         assertEquals(MenuHolder.Kind.CONFIRM_TAKEOVER,
                 ((MenuHolder) second.getOpenInventory().getTopInventory().getHolder()).kind());
         second.simulateInventoryClick(second.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("confirm-takeover.confirm"));
+        tickInventoryDispatch();
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
 
@@ -414,15 +434,18 @@ class AdministrationIntegrationTest {
 
         editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("editor.milestones"));
+        tickInventoryDispatch();
         assertEquals(MenuHolder.Kind.MILESTONES,
                 ((MenuHolder) editor.getOpenInventory().getTopInventory().getHolder()).kind());
         editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("milestone-list.create"));
+        tickInventoryDispatch();
         MenuHolder selector = (MenuHolder) editor.getOpenInventory().getTopInventory().getHolder();
         assertEquals(MenuHolder.Kind.MILESTONE_REWARD_SELECT, selector.kind());
         int rewardSlot = plugin.menusConfig().slots("milestone-reward-select.reward-slots").stream()
                 .filter(slot -> selector.action(slot) != null).findFirst().orElseThrow();
         editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT, rewardSlot);
+        tickInventoryDispatch();
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
 
@@ -438,6 +461,7 @@ class AdministrationIntegrationTest {
 
         editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("milestone-detail.repeat"));
+        tickInventoryDispatch();
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
         var repeating = plugin.crates().find(crate.id()).orElseThrow().milestones().get(detail.rewardId());
@@ -447,10 +471,12 @@ class AdministrationIntegrationTest {
 
         editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("milestone-detail.delivery"));
+        tickInventoryDispatch();
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
         editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("milestone-detail.preview"));
+        tickInventoryDispatch();
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
         var configured = plugin.crates().find(crate.id()).orElseThrow().milestones().get(detail.rewardId());
@@ -467,6 +493,7 @@ class AdministrationIntegrationTest {
                 InventoryAction.SWAP_WITH_CURSOR);
         plugin.adminMenus().handleClick(capture,
                 (MenuHolder) editor.getOpenInventory().getTopInventory().getHolder());
+        tickInventoryDispatch();
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
         assertArrayEquals(beforeCapture, source.serializeAsBytes());
@@ -475,10 +502,12 @@ class AdministrationIntegrationTest {
 
         editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("milestone-detail.delete"));
+        tickInventoryDispatch();
         assertEquals(MenuHolder.Kind.CONFIRM_MILESTONE_DELETE,
                 ((MenuHolder) editor.getOpenInventory().getTopInventory().getHolder()).kind());
         editor.simulateInventoryClick(editor.getOpenInventory(), ClickType.LEFT,
                 plugin.menusConfig().slot("confirm-milestone-delete.confirm"));
+        tickInventoryDispatch();
         plugin.database().awaitIdle().join();
         server.getScheduler().performTicks(2);
         assertEquals(before, plugin.crates().find(crate.id()).orElseThrow().milestones().size());
@@ -714,6 +743,10 @@ class AdministrationIntegrationTest {
                     PersistentDataType.STRING, "preserve-me");
         });
         return item;
+    }
+
+    private void tickInventoryDispatch() {
+        server.getScheduler().performTicks(1);
     }
 
     private void awaitDraft(Player player, String crateId) {

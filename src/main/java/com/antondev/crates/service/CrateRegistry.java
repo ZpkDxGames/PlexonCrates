@@ -38,6 +38,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -81,16 +84,98 @@ public final class CrateRegistry {
         @Override public byte[] payload() { return payload.clone(); }
     }
 
+    public record PreparedDraftImport(String crateId, Crate crate, byte[] payload, Path file) {
+        public PreparedDraftImport {
+            crateId = java.util.Objects.requireNonNull(crateId, "crateId");
+            crate = java.util.Objects.requireNonNull(crate, "crate");
+            payload = java.util.Objects.requireNonNull(payload, "payload").clone();
+            file = java.util.Objects.requireNonNull(file, "file");
+        }
+        @Override public byte[] payload() { return payload.clone(); }
+    }
+
+    public record PreparedExport(Path destination, String payload) {
+        public PreparedExport {
+            destination = java.util.Objects.requireNonNull(destination, "destination");
+            payload = java.util.Objects.requireNonNull(payload, "payload");
+        }
+    }
+
+    public record PreparedDraftActivation(String crateId, Crate crate, byte[] payload, Path file) {
+        public PreparedDraftActivation {
+            crateId = java.util.Objects.requireNonNull(crateId, "crateId");
+            crate = java.util.Objects.requireNonNull(crate, "crate");
+            payload = java.util.Objects.requireNonNull(payload, "payload").clone();
+            file = java.util.Objects.requireNonNull(file, "file");
+        }
+        @Override public byte[] payload() { return payload.clone(); }
+    }
+
+    public record PreparedDeletion(String crateId, Crate crate, Path file) {
+        public PreparedDeletion {
+            crateId = java.util.Objects.requireNonNull(crateId, "crateId");
+            crate = java.util.Objects.requireNonNull(crate, "crate");
+            file = java.util.Objects.requireNonNull(file, "file");
+        }
+    }
+
     private static final Pattern ID = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
     private static final ItemSnapshotCodec ITEM_SNAPSHOTS = new ItemSnapshotCodec();
     private final Path directory;
     private Map<String, Crate> crates;
     private Map<String, Path> files;
     private Map<String, byte[]> payloads;
+    private final Map<Path, CompletableFuture<Void>> mirrorWrites = new LinkedHashMap<>();
+    private AsyncIoService mirrorIo;
+    private Logger mirrorLogger;
 
     public CrateRegistry(Path directory, Snapshot snapshot) {
         this.directory = directory.toAbsolutePath().normalize();
         apply(snapshot);
+    }
+
+    /**
+     * Enables ordered asynchronous writes for non-authoritative editable YAML mirrors.
+     * Standalone/test registries retain synchronous writes until this is configured.
+     */
+    public void configureMirrorWriter(AsyncIoService io, Logger logger) {
+        mirrorIo = java.util.Objects.requireNonNull(io, "io");
+        mirrorLogger = java.util.Objects.requireNonNull(logger, "logger");
+    }
+
+    /** Returns a future covering every mirror write queued before this call. */
+    public CompletableFuture<Void> awaitMirrorWrites() {
+        synchronized (mirrorWrites) {
+            if (mirrorWrites.isEmpty()) return CompletableFuture.completedFuture(null);
+            return CompletableFuture.allOf(mirrorWrites.values().toArray(CompletableFuture[]::new));
+        }
+    }
+
+    private void persistEditableMirror(Path file, String serialized) throws IOException {
+        AsyncIoService io = mirrorIo;
+        if (io == null) {
+            AtomicFiles.write(file, serialized);
+            return;
+        }
+        Path path = file.toAbsolutePath().normalize();
+        CompletableFuture<Void> next;
+        synchronized (mirrorWrites) {
+            CompletableFuture<Void> previous = mirrorWrites.get(path);
+            CompletableFuture<Void> ready = previous == null
+                    ? CompletableFuture.completedFuture(null)
+                    : previous.handle((ignored, failure) -> null);
+            next = ready.thenCompose(ignored -> io.run(() -> AtomicFiles.write(path, serialized)));
+            mirrorWrites.put(path, next);
+        }
+        next.whenComplete((ignored, failure) -> {
+            synchronized (mirrorWrites) {
+                if (mirrorWrites.get(path) == next) mirrorWrites.remove(path);
+            }
+            if (failure != null && mirrorLogger != null) {
+                mirrorLogger.log(Level.SEVERE,
+                        "Could not update editable crate YAML mirror " + path.getFileName(), failure);
+            }
+        });
     }
 
     public static Snapshot load(Path directory) throws IOException {
@@ -291,13 +376,16 @@ public final class CrateRegistry {
         return parsed;
     }
 
-    public void installPublished(PreparedPublication publication) throws IOException {
-        AtomicFiles.write(publication.file(), new String(publication.payload(), StandardCharsets.UTF_8));
-        Crate previous = crates.get(publication.crateId());
-        install(publication.crateId(), publication.file(), publication.crate());
-        payloads.put(publication.crateId(), publication.payload());
-        fireChange(publication.crate(), changeType(previous, publication.crate()));
-    }
+    public void installPublishedInMemory(PreparedPublication publication) {
+    Crate previous = crates.get(publication.crateId());
+    install(publication.crateId(), publication.file(), publication.crate());
+    payloads.put(publication.crateId(), publication.payload());
+    fireChange(publication.crate(), changeType(previous, publication.crate()));
+}
+
+public void writePublishedMirror(PreparedPublication publication) throws IOException {
+    AtomicFiles.write(publication.file(), new String(publication.payload(), StandardCharsets.UTF_8));
+}
 
     public Crate restoreDraftSnapshot(String crateId, byte[] payload) throws Exception {
         String id = normalize(crateId);
@@ -310,27 +398,27 @@ public final class CrateRegistry {
             throw new IllegalArgumentException("Draft snapshot targets a different crate ID");
         }
         String serialized = yaml.saveToString();
-        AtomicFiles.write(file, serialized);
+        persistEditableMirror(file, serialized);
         install(id, file, restored);
         payloads.put(id, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(restored, changeType(previous, restored));
         return restored;
     }
 
-    public Crate createDraft(String rawId, String editor) throws Exception {
-        return createDraft(rawId, editor, null);
+    public PreparedDraftActivation prepareNewDraft(String rawId, String editor) throws Exception {
+        return prepareNewDraft(rawId, editor, null);
     }
 
-    /** Creates the normal GUI draft without asking an administrator for a technical identifier. */
-    public Crate createQuickDraft(String editor) throws Exception {
+    /** Creates the normal GUI draft candidate without touching disk or live registry state. */
+    public PreparedDraftActivation prepareQuickDraft(String editor) throws Exception {
         String id;
         do {
             id = "crate_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         } while (crates.containsKey(id));
-        return createDraft(id, editor, "New Crate");
+        return prepareNewDraft(id, editor, "New Crate");
     }
 
-    private Crate createDraft(String rawId, String editor, String requestedDisplayName) throws Exception {
+    private PreparedDraftActivation prepareNewDraft(String rawId, String editor, String requestedDisplayName) throws Exception {
         String id = normalize(rawId);
         if (!validId(id)) throw new IllegalArgumentException("Invalid crate ID");
         if (crates.containsKey(id)) throw new IllegalArgumentException("Crate already exists");
@@ -382,45 +470,85 @@ public final class CrateRegistry {
         yaml.set("audit.updated-at", now.toString());
         yaml.set("audit.last-editor", editor);
         Crate parsed = parse(file, yaml);
-        String serialized = yaml.saveToString();
-        AtomicFiles.write(file, serialized);
-        install(id, file, parsed);
-        payloads.put(id, serialized.getBytes(StandardCharsets.UTF_8));
-        fireChange(parsed, CrateDefinitionChangeEvent.ChangeType.CREATED);
-        return parsed;
+        return new PreparedDraftActivation(id, parsed,
+                yaml.saveToString().getBytes(StandardCharsets.UTF_8), file);
     }
 
-    public Crate cloneAsDraft(String sourceId, String rawNewId, String editor) throws Exception {
-        Crate source = find(sourceId).orElseThrow(() -> new IllegalArgumentException("Unknown source crate"));
+    public PreparedDraftActivation prepareCloneDraft(String sourceId, String rawNewId, String editor) throws Exception {
+        Crate sourceCrate = find(sourceId).orElseThrow(() -> new IllegalArgumentException("Unknown source crate"));
         String newId = normalize(rawNewId);
-        if (!validId(newId) || crates.containsKey(newId)) throw new IllegalArgumentException("Invalid or existing new crate ID");
-        YamlConfiguration yaml = decode(serialized(source.id()).getBytes(StandardCharsets.UTF_8));
+        if (!validId(newId) || crates.containsKey(newId)) {
+            throw new IllegalArgumentException("Invalid or existing new crate ID");
+        }
+        YamlConfiguration yaml = decode(serialized(sourceCrate.id()).getBytes(StandardCharsets.UTF_8));
         yaml.set("id", newId);
         yaml.set("state", "DRAFT");
         yaml.set("display-order", nextDisplayOrder());
         yaml.set("audit.created-at", Instant.now().toString());
         yaml.set("audit.updated-at", Instant.now().toString());
         yaml.set("audit.last-editor", editor);
-        Path file = directory.resolve(newId + ".yml");
+        Path file = directory.resolve(newId + ".yml").normalize();
+        if (!file.getParent().equals(directory.normalize())) throw new IllegalArgumentException("Invalid clone path");
         Crate parsed = parse(file, yaml);
-        String serialized = yaml.saveToString();
-        AtomicFiles.write(file, serialized);
-        install(newId, file, parsed);
-        payloads.put(newId, serialized.getBytes(StandardCharsets.UTF_8));
-        fireChange(parsed, CrateDefinitionChangeEvent.ChangeType.CREATED);
-        return parsed;
+        return new PreparedDraftActivation(newId, parsed,
+                yaml.saveToString().getBytes(StandardCharsets.UTF_8), file);
     }
 
-    public Crate importAsDraft(Path sourceFile, String rawNewId, String editor) throws Exception {
+    /** Parses the payload returned by the durable draft session before live activation. */
+    public PreparedDraftActivation prepareDurableDraft(String rawId, byte[] payload) throws Exception {
+        String id = normalize(rawId);
+        if (!validId(id) || crates.containsKey(id)) throw new IllegalArgumentException("Invalid or existing crate ID");
+        Path file = directory.resolve(id + ".yml").normalize();
+        if (!file.getParent().equals(directory.normalize())) throw new IllegalArgumentException("Invalid draft path");
+        YamlConfiguration yaml = decode(payload);
+        Crate parsed = parse(file, yaml);
+        if (!parsed.id().equals(id) || parsed.state() != CrateState.DRAFT) {
+            throw new IllegalArgumentException("Durable new-crate draft payload is invalid");
+        }
+        return new PreparedDraftActivation(id, parsed, payload, file);
+    }
+
+    public Crate installPreparedDraft(PreparedDraftActivation prepared) {
+        String id = prepared.crateId();
+        if (crates.containsKey(id)) throw new IllegalArgumentException("Draft crate ID became occupied: " + id);
+        install(id, prepared.file(), prepared.crate());
+        payloads.put(id, prepared.payload());
+        fireChange(prepared.crate(), CrateDefinitionChangeEvent.ChangeType.CREATED);
+        return prepared.crate();
+    }
+
+    public void queuePreparedDraftMirror(PreparedDraftActivation prepared) throws IOException {
+        persistEditableMirror(prepared.file(), new String(prepared.payload(), StandardCharsets.UTF_8));
+    }
+
+    /** Synchronous compatibility API retained for tests/offline tooling. */
+    public Crate createDraft(String rawId, String editor) throws Exception {
+        PreparedDraftActivation prepared = prepareNewDraft(rawId, editor);
+        AtomicFiles.write(prepared.file(), new String(prepared.payload(), StandardCharsets.UTF_8));
+        return installPreparedDraft(prepared);
+    }
+
+    /** Synchronous compatibility API retained for tests/offline tooling. */
+    public Crate createQuickDraft(String editor) throws Exception {
+        PreparedDraftActivation prepared = prepareQuickDraft(editor);
+        AtomicFiles.write(prepared.file(), new String(prepared.payload(), StandardCharsets.UTF_8));
+        return installPreparedDraft(prepared);
+    }
+
+    /** Synchronous compatibility API retained for tests/offline tooling. */
+    public Crate cloneAsDraft(String sourceId, String rawNewId, String editor) throws Exception {
+        PreparedDraftActivation prepared = prepareCloneDraft(sourceId, rawNewId, editor);
+        AtomicFiles.write(prepared.file(), new String(prepared.payload(), StandardCharsets.UTF_8));
+        return installPreparedDraft(prepared);
+    }
+
+    public PreparedDraftImport prepareImportedDraft(String sourceYaml, String rawNewId, String editor) throws Exception {
         String newId = normalize(rawNewId);
         if (!validId(newId) || crates.containsKey(newId)) {
             throw new IllegalArgumentException("Invalid or existing imported crate ID");
         }
-        Path source = sourceFile.toAbsolutePath().normalize();
-        if (!Files.isRegularFile(source) || !source.getFileName().toString().endsWith(".yml")) {
-            throw new IllegalArgumentException("Import source must be an existing .yml file");
-        }
-        YamlConfiguration yaml = read(source);
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.loadFromString(java.util.Objects.requireNonNull(sourceYaml, "sourceYaml"));
         yaml.set("id", newId);
         yaml.set("state", "DRAFT");
         yaml.set("display-order", nextDisplayOrder());
@@ -432,24 +560,60 @@ public final class CrateRegistry {
             throw new IllegalArgumentException("Invalid imported crate path");
         }
         Crate parsed = parse(destination, yaml);
-        String serialized = yaml.saveToString();
-        AtomicFiles.write(destination, serialized);
-        install(newId, destination, parsed);
-        payloads.put(newId, serialized.getBytes(StandardCharsets.UTF_8));
-        fireChange(parsed, CrateDefinitionChangeEvent.ChangeType.CREATED);
-        return parsed;
+        byte[] payload = yaml.saveToString().getBytes(StandardCharsets.UTF_8);
+        return new PreparedDraftImport(newId, parsed, payload, destination);
     }
 
-    public Path exportDefinition(String crateId, Path exportDirectory) throws Exception {
+    public void writeImportedDraft(PreparedDraftImport prepared) throws IOException {
+        AtomicFiles.write(prepared.file(), new String(prepared.payload(), StandardCharsets.UTF_8));
+    }
+
+    public PreparedDraftActivation prepareImportedActivation(
+            String sourceYaml, String rawNewId, String editor) throws Exception {
+        PreparedDraftImport prepared = prepareImportedDraft(sourceYaml, rawNewId, editor);
+        return new PreparedDraftActivation(prepared.crateId(), prepared.crate(), prepared.payload(), prepared.file());
+    }
+
+    public Crate installImportedDraft(PreparedDraftImport prepared) {
+        String id = prepared.crateId();
+        if (crates.containsKey(id)) throw new IllegalArgumentException("Imported crate ID became occupied: " + id);
+        install(id, prepared.file(), prepared.crate());
+        payloads.put(id, prepared.payload());
+        fireChange(prepared.crate(), CrateDefinitionChangeEvent.ChangeType.CREATED);
+        return prepared.crate();
+    }
+
+    public Crate importAsDraft(Path sourceFile, String rawNewId, String editor) throws Exception {
+        Path source = sourceFile.toAbsolutePath().normalize();
+        if (!Files.isRegularFile(source) || !source.getFileName().toString().endsWith(".yml")) {
+            throw new IllegalArgumentException("Import source must be an existing .yml file");
+        }
+        PreparedDraftImport prepared = prepareImportedDraft(
+                Files.readString(source, StandardCharsets.UTF_8), rawNewId, editor);
+        writeImportedDraft(prepared);
+        return installImportedDraft(prepared);
+    }
+
+    public PreparedExport prepareExport(String crateId, Path exportDirectory) {
         String id = normalize(crateId);
-        Path source = files.get(id);
-        if (source == null) throw new IllegalArgumentException("Unknown crate");
+        if (!files.containsKey(id)) throw new IllegalArgumentException("Unknown crate");
+        byte[] payload = payloads.get(id);
+        if (payload == null) throw new IllegalStateException("Crate payload is unavailable for export");
         Path root = exportDirectory.toAbsolutePath().normalize();
-        Files.createDirectories(root);
         Path destination = root.resolve(id + ".yml").normalize();
         if (!destination.getParent().equals(root)) throw new IllegalArgumentException("Invalid export path");
-        AtomicFiles.write(destination, serialized(id));
-        return destination;
+        return new PreparedExport(destination, new String(payload, StandardCharsets.UTF_8));
+    }
+
+    public Path writeExport(PreparedExport prepared) throws Exception {
+        Files.createDirectories(prepared.destination().getParent());
+        AtomicFiles.write(prepared.destination(), prepared.payload());
+        return prepared.destination();
+    }
+
+    /** Synchronous compatibility API retained for tests/offline tooling. */
+    public Path exportDefinition(String crateId, Path exportDirectory) throws Exception {
+        return writeExport(prepareExport(crateId, exportDirectory));
     }
 
     public void setDisplayName(String crateId, Component displayName, String editor) throws Exception {
@@ -679,12 +843,30 @@ public final class CrateRegistry {
         });
     }
 
-    public void delete(String crateId) throws Exception {
+    public PreparedDeletion prepareDeletion(String crateId) {
         String id = normalize(crateId);
         Path file = files.get(id);
-        if (file == null) throw new IllegalArgumentException("Unknown crate");
-        Crate deleted = crates.get(id);
-        Files.deleteIfExists(file);
+        Crate crate = crates.get(id);
+        if (file == null || crate == null) throw new IllegalArgumentException("Unknown crate");
+        return new PreparedDeletion(id, crate, file);
+    }
+
+    /** Filesystem-only stage. Safe to execute on the bounded plugin I/O pool. */
+    public void deleteMirror(PreparedDeletion prepared) throws IOException {
+        java.util.Objects.requireNonNull(prepared, "prepared");
+        Files.deleteIfExists(prepared.file());
+    }
+
+    /** Applies a deletion after its mirror/canonical persistence stages have completed. */
+    public void installDeletion(PreparedDeletion prepared) {
+        java.util.Objects.requireNonNull(prepared, "prepared");
+        String id = prepared.crateId();
+        Path currentFile = files.get(id);
+        Crate current = crates.get(id);
+        if (currentFile == null || current == null) throw new IllegalArgumentException("Unknown crate");
+        if (!currentFile.equals(prepared.file()) || current != prepared.crate()) {
+            throw new IllegalStateException("Crate changed before deletion activation: " + id);
+        }
         var nextCrates = new LinkedHashMap<>(crates);
         var nextFiles = new LinkedHashMap<>(files);
         nextCrates.remove(id);
@@ -692,7 +874,14 @@ public final class CrateRegistry {
         crates = Collections.unmodifiableMap(nextCrates);
         files = Collections.unmodifiableMap(nextFiles);
         payloads.remove(id);
-        fireChange(deleted, CrateDefinitionChangeEvent.ChangeType.DELETED);
+        fireChange(current, CrateDefinitionChangeEvent.ChangeType.DELETED);
+    }
+
+    /** Synchronous compatibility API retained for tests/offline tooling. */
+    public void delete(String crateId) throws Exception {
+        PreparedDeletion prepared = prepareDeletion(crateId);
+        deleteMirror(prepared);
+        installDeletion(prepared);
     }
 
     public void addCapturedReward(String crateId, String rewardId, double baseChancePercent, ItemStack held) throws Exception {
@@ -1091,7 +1280,7 @@ public final class CrateRegistry {
         change.accept(yaml);
         Crate parsed = parse(file, yaml);
         String serialized = yaml.saveToString();
-        AtomicFiles.write(file, serialized);
+        persistEditableMirror(file, serialized);
         install(id, file, parsed);
         payloads.put(id, serialized.getBytes(StandardCharsets.UTF_8));
         fireChange(parsed, changeType(previous, parsed));

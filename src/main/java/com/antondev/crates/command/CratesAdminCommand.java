@@ -58,8 +58,8 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
                 case "wand" -> wand(sender, args);
                 case "link" -> link(sender, args);
                 case "unlink" -> unlink(sender);
-                case "reload" -> plugin.reloadFor(sender);
-                case "validate" -> plugin.validateFor(sender);
+                case "reload" -> plugin.requestReload(sender);
+                case "validate" -> plugin.requestValidation(sender);
                 case "backup" -> plugin.backupFor(sender);
                 case "diagnose" -> plugin.diagnoseFor(sender);
                 case "migrate" -> PhoenixMigrationCommand.execute(plugin, sender, args);
@@ -88,13 +88,19 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private void create(CommandSender sender, String[] args) throws Exception {
+    private void create(CommandSender sender, String[] args) {
         if (args.length < 2) { help(sender); return; }
-        Crate created = plugin.crates().createDraft(args[1], sender.getName());
-        registerDraft(sender, created);
-        if (sender instanceof Player player) {
-            plugin.menus().openEditor(player, created);
-        } else sender.sendMessage(Text.parse("<green>Created persistent crate draft</green> <white>" + created.id() + "</white><green>.</green>"));
+        plugin.draftCreation().create(actorId(sender), sender.getName(), args[1])
+                .whenComplete((created, error) -> runSync(() -> {
+                    if (error != null) {
+                        plugin.configError(sender, asException(error));
+                    } else if (sender instanceof Player player) {
+                        if (player.isOnline()) plugin.menus().openEditor(player, created);
+                    } else {
+                        sender.sendMessage(Text.parse("<green>Created persistent crate draft</green> <white>"
+                                + created.id() + "</white><green>.</green>"));
+                    }
+                }));
     }
 
     private void edit(CommandSender sender, String[] args) {
@@ -103,34 +109,48 @@ public final class CratesAdminCommand implements CommandExecutor, TabCompleter {
         if (crate != null) plugin.menus().openEditor(player, crate);
     }
 
-    private void cloneCrate(CommandSender sender, String[] args) throws Exception {
+    private void cloneCrate(CommandSender sender, String[] args) {
         if (args.length < 3) { help(sender); return; }
-        Crate clone = plugin.crates().cloneAsDraft(args[1], args[2], sender.getName());
-        registerDraft(sender, clone);
-        if (sender instanceof Player player) plugin.menus().openEditor(player, clone);
-        else sender.sendMessage(Text.parse("<green>Cloned crate as draft:</green> <white>" + clone.id() + "</white>"));
+        plugin.draftCreation().cloneDraft(actorId(sender), sender.getName(), args[1], args[2])
+                .whenComplete((clone, error) -> runSync(() -> {
+                    if (error != null) {
+                        plugin.configError(sender, asException(error));
+                    } else if (sender instanceof Player player) {
+                        if (player.isOnline()) plugin.menus().openEditor(player, clone);
+                    } else {
+                        sender.sendMessage(Text.parse("<green>Cloned crate as draft:</green> <white>"
+                                + clone.id() + "</white>"));
+                    }
+                }));
     }
 
-    private void importCrate(CommandSender sender, String[] args) throws Exception {
+    private void importCrate(CommandSender sender, String[] args) {
         if (args.length < 3) { help(sender); return; }
         String fileName = args[1];
         if (!safeYamlName(fileName)) throw new IllegalArgumentException("Import filename must be a simple .yml name");
         Path root = plugin.getDataFolder().toPath().resolve("imports").toAbsolutePath().normalize();
         Path source = root.resolve(fileName).normalize();
         if (!source.getParent().equals(root)) throw new IllegalArgumentException("Import path leaves the imports directory");
-        Crate imported = plugin.crates().importAsDraft(source, args[2], sender.getName());
-        registerDraft(sender, imported);
-        if (sender instanceof Player player) plugin.menus().openEditor(player, imported);
-        else sender.sendMessage(Text.parse("<green>Imported crate as draft:</green> <white>" + imported.id() + "</white>"));
+        plugin.crateTransfers().importDraft(actorId(sender), sender.getName(), source, args[2])
+                .whenComplete((imported, error) -> runSync(() -> {
+                    if (error != null) plugin.configError(sender, asException(error));
+                    else if (sender instanceof Player player) {
+                        if (player.isOnline()) plugin.menus().openEditor(player, imported);
+                    } else sender.sendMessage(Text.parse("<green>Imported crate as draft:</green> <white>"
+                            + imported.id() + "</white>"));
+                }));
     }
 
-    private void exportCrate(CommandSender sender, String[] args) throws Exception {
+    private void exportCrate(CommandSender sender, String[] args) {
         Crate crate = crate(sender, args, 1);
         if (crate == null) return;
-        Path destination = plugin.crates().exportDefinition(crate.id(),
-                plugin.getDataFolder().toPath().resolve("exports"));
-        sender.sendMessage(Text.parse("<green>Exported</green> <white>" + crate.id()
-                + "</white> <green>to</green> <white>exports/" + destination.getFileName() + "</white><green>.</green>"));
+        plugin.crateTransfers().export(crate.id(), plugin.getDataFolder().toPath().resolve("exports"))
+                .whenComplete((destination, error) -> runSync(() -> {
+                    if (error != null) plugin.configError(sender, asException(error));
+                    else sender.sendMessage(Text.parse("<green>Exported</green> <white>" + crate.id()
+                            + "</white> <green>to</green> <white>exports/" + destination.getFileName()
+                            + "</white><green>.</green>"));
+                }));
     }
 
     private void publishCrate(CommandSender sender, String[] args) throws Exception {

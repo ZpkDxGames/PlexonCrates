@@ -36,6 +36,19 @@ class CrateParticleCoordinatorArchitectureTest {
     }
 
     @Test
+    void eachLinkedCrateResolvesItsIdleProfileWithoutCreatingMoreSchedulers() throws Exception {
+        String source = Files.readString(COORDINATOR);
+        assertTrue(source.contains("IdleAnimationProfileStore.shared(plugin)"));
+        assertTrue(source.contains("profiles.maximumReceiverRange(legacy)"));
+        assertTrue(source.contains("profiles.resolve(crate.id(), legacy)"));
+        assertTrue(source.contains("profile.receiverRange() * profile.receiverRange()"));
+        assertTrue(source.contains("profile.particlesPerPoint()"));
+        assertTrue(source.contains("profile.maxPerCratePerTick()"));
+        assertTrue(source.contains("profile.maxPerViewerPerTick()"));
+        assertFalse(source.contains("runTaskLater"));
+    }
+
+    @Test
     void displayServiceDelegatesInsteadOfRunningSecondParticleLoop() throws Exception {
         String source = Files.readString(DISPLAY);
         assertTrue(source.contains("CrateParticleCoordinator particles"));

@@ -205,7 +205,7 @@ class Phase3PlayerCrateUxArchitectureTest {
         assertFalse(session.contains("registerEvents"));
         assertFalse(session.contains("PlayerCrateCommandRouter"));
         assertTrue(main.contains("PlayerCrateCommandRouter playerRouter = new PlayerCrateCommandRouter(this)"));
-        assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(menus, playerRouter), this)"));
+        assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(this, menus, playerRouter), this)"));
         assertTrue(main.contains("registerEvents(playerRouter, this)"));
         assertTrue(main.contains("registerEvents(new SimulationAdminListener(this, simulations), this)"));
         assertTrue(main.contains("if (simulations != null) simulations.close()"));

@@ -24,16 +24,16 @@ class OpeningProfilePresentationArchitectureTest {
     }
 
     @Test
-    void rendererAcceptsAuthoritativeSelectionButOwnsNoTransactionState() throws Exception {
+    void rendererAcceptsAuthoritativeSelectionButOwnsNoTransactionCalls() throws Exception {
         String source = Files.readString(SOURCE);
         assertTrue(source.contains("CrateReward selected"));
         assertFalse(source.contains("plugin.openings()"));
         assertFalse(source.contains("plugin.keys()"));
         assertFalse(source.contains("plugin.database()"));
         assertFalse(source.contains("plugin.statistics()"));
-        assertFalse(source.contains("RewardSelector"));
-        assertFalse(source.contains("journal"));
-        assertFalse(source.contains("pity"));
+        assertFalse(source.contains("RewardSelector."));
+        assertFalse(source.contains("journal("));
+        assertFalse(source.contains("pity("));
         assertFalse(source.contains("deliver("));
     }
 

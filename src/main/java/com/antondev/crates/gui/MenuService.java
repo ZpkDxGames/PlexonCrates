@@ -1057,8 +1057,7 @@ public final class MenuService implements Listener {
         if (!player.hasPermission("plexoncrates.admin")) return;
         MenuConfig menus = plugin.menusConfig();
         if (slot == menus.slot("admin.reload")) {
-            plugin.reloadFor(player);
-            if (plugin.isEnabled()) openAdmin(player);
+            plugin.requestReload(player, () -> { if (player.isOnline()) openAdmin(player); });
             return;
         }
         int index = menus.slots("admin.crate-slots").indexOf(slot);

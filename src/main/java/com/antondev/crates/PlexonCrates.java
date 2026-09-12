@@ -214,98 +214,106 @@ public class PlexonCrates extends JavaPlugin {
     /** Synchronous compatibility path used by startup/integration callers. Live admin surfaces use requestReload(). */
     public boolean reloadFor(CommandSender sender) {
         try {
-            PluginSettings nextSettings = PluginSettings.load(file("config.yml"));
-            Messages nextMessages = Messages.load(file("messages.yml"));
-            MenuConfig nextMenus = MenuConfig.load(file("menus.yml"));
             DatabaseService.PublishedSnapshot canonical = definitionRepository.loadPublished().join();
             List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts = definitionRepository.loadDrafts().join();
-            CrateRegistry validationRegistry;
-            if (canonical.definitions().isEmpty()) {
-                Path crateDirectory = getDataFolder().toPath().resolve("crates");
-                validationRegistry = new CrateRegistry(crateDirectory,
-                        CrateRegistry.withDurableDrafts(crateDirectory,
-                                CrateRegistry.load(crateDirectory), durableDrafts));
-            } else {
-                validationRegistry = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"),
-                        canonical.definitions(), durableDrafts);
-            }
-            CrateRegistry.Snapshot nextCrates = validationRegistry.snapshot();
-            for (LocationStore.Link link : locations.all()) {
-                if (validationRegistry.find(link.crateId()).isEmpty()) {
-                    throw new IllegalArgumentException("Linked location references a crate missing from the reload: " + link.crateId());
-                }
-            }
-            KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(
-                    definitionRepository.loadKeys().join(), getLogger());
-            return applyReload(sender, nextSettings, nextMessages, nextMenus, canonical, durableDrafts,
-                    validationRegistry, nextCrates, canonicalKeys);
+            List<DatabaseService.StoredKeyDefinition> keyRows = definitionRepository.loadKeys().join();
+            ReloadPreparation prepared = prepareReload(canonical, durableDrafts, keyRows,
+                    List.copyOf(locations.all()));
+            return applyReload(sender, prepared);
         } catch (Exception error) {
             configError(sender, error);
             return false;
         }
     }
 
-    /**
-     * Live reload entry point. Canonical SQLite reads run on DatabaseService's
-     * async executors; only validation/application and Bukkit-facing reconciliation
-     * return to the primary thread.
-     */
+    /** Starts a live reload and returns to the caller immediately. */
     public void requestReload(CommandSender sender) {
+        requestReload(sender, null);
+    }
+
+    /**
+     * Live reload entry point. Every database/file read and YAML parse is completed away from
+     * the server thread. Only the validated immutable state swap and Bukkit-facing reconciliation
+     * return to the primary thread. The optional callback runs only after a successful reload.
+     */
+    public void requestReload(CommandSender sender, Runnable onSuccess) {
         if (!isEnabled()) return;
+        List<LocationStore.Link> locationSnapshot = List.copyOf(locations.all());
         sender.sendMessage(Text.parse("<gray>Reloading PlexonCrates configuration…</gray>"));
         var publishedFuture = definitionRepository.loadPublished();
         var draftsFuture = definitionRepository.loadDrafts();
         var keyRowsFuture = definitionRepository.loadKeys();
-        CompletableFuture.allOf(publishedFuture, draftsFuture, keyRowsFuture).whenComplete((ignored, failure) -> {
+        CompletableFuture.allOf(publishedFuture, draftsFuture, keyRowsFuture).whenComplete((ignored, databaseFailure) -> {
             if (!isEnabled()) return;
-            getServer().getScheduler().runTask(this, () -> {
-                if (!isEnabled()) return;
-                if (failure != null) {
-                    configError(sender, completionException(failure));
-                    return;
-                }
-                try {
-                    PluginSettings nextSettings = PluginSettings.load(file("config.yml"));
-                    Messages nextMessages = Messages.load(file("messages.yml"));
-                    MenuConfig nextMenus = MenuConfig.load(file("menus.yml"));
-                    DatabaseService.PublishedSnapshot canonical = publishedFuture.getNow(null);
-                    List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts =
-                            draftsFuture.getNow(List.of());
-                    if (canonical == null) throw new IllegalStateException("Published definition snapshot was unavailable");
-                    CrateRegistry validationRegistry;
-                    if (canonical.definitions().isEmpty()) {
-                        Path crateDirectory = getDataFolder().toPath().resolve("crates");
-                        validationRegistry = new CrateRegistry(crateDirectory,
-                                CrateRegistry.withDurableDrafts(crateDirectory,
-                                        CrateRegistry.load(crateDirectory), durableDrafts));
-                    } else {
-                        validationRegistry = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"),
-                                canonical.definitions(), durableDrafts);
-                    }
-                    CrateRegistry.Snapshot nextCrates = validationRegistry.snapshot();
-                    for (LocationStore.Link link : locations.all()) {
-                        if (validationRegistry.find(link.crateId()).isEmpty()) {
-                            throw new IllegalArgumentException(
-                                    "Linked location references a crate missing from the reload: " + link.crateId());
-                        }
-                    }
-                    KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(
-                            keyRowsFuture.getNow(List.of()), getLogger());
-                    applyReload(sender, nextSettings, nextMessages, nextMenus, canonical, durableDrafts,
-                            validationRegistry, nextCrates, canonicalKeys);
-                } catch (Exception error) {
-                    configError(sender, error);
-                }
-            });
+            if (databaseFailure != null) {
+                getServer().getScheduler().runTask(this, () -> {
+                    if (isEnabled()) configError(sender, completionException(databaseFailure));
+                });
+                return;
+            }
+            DatabaseService.PublishedSnapshot canonical = publishedFuture.getNow(null);
+            List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts = draftsFuture.getNow(List.of());
+            List<DatabaseService.StoredKeyDefinition> keyRows = keyRowsFuture.getNow(List.of());
+            io.submit(() -> prepareReload(canonical, durableDrafts, keyRows, locationSnapshot))
+                    .whenComplete((prepared, preparationFailure) -> {
+                        if (!isEnabled()) return;
+                        getServer().getScheduler().runTask(this, () -> {
+                            if (!isEnabled()) return;
+                            if (preparationFailure != null) {
+                                configError(sender, completionException(preparationFailure));
+                                return;
+                            }
+                            try {
+                                if (applyReload(sender, prepared) && onSuccess != null && isEnabled()) onSuccess.run();
+                            } catch (Exception error) {
+                                configError(sender, error);
+                            }
+                        });
+                    });
         });
     }
 
-    private boolean applyReload(CommandSender sender, PluginSettings nextSettings, Messages nextMessages,
-                                MenuConfig nextMenus, DatabaseService.PublishedSnapshot canonical,
-                                List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts,
-                                CrateRegistry validationRegistry, CrateRegistry.Snapshot nextCrates,
-                                KeyService.CanonicalSnapshot canonicalKeys) throws Exception {
+    private ReloadPreparation prepareReload(
+            DatabaseService.PublishedSnapshot canonical,
+            List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts,
+            List<DatabaseService.StoredKeyDefinition> keyRows,
+            List<LocationStore.Link> locationSnapshot) throws Exception {
+        if (canonical == null) throw new IllegalStateException("Published definition snapshot was unavailable");
+        PluginSettings nextSettings = PluginSettings.load(file("config.yml"));
+        Messages nextMessages = Messages.load(file("messages.yml"));
+        MenuConfig nextMenus = MenuConfig.load(file("menus.yml"));
+        Path crateDirectory = getDataFolder().toPath().resolve("crates");
+        CrateRegistry validationRegistry;
+        if (canonical.definitions().isEmpty()) {
+            validationRegistry = new CrateRegistry(crateDirectory,
+                    CrateRegistry.withDurableDrafts(crateDirectory,
+                            CrateRegistry.load(crateDirectory), durableDrafts));
+        } else {
+            validationRegistry = CrateRegistry.fromPublished(crateDirectory, canonical.definitions(), durableDrafts);
+        }
+        CrateRegistry.Snapshot nextCrates = validationRegistry.snapshot();
+        for (LocationStore.Link link : locationSnapshot) {
+            if (validationRegistry.find(link.crateId()).isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Linked location references a crate missing from the reload: " + link.crateId());
+            }
+        }
+        KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(keyRows, getLogger());
         KeyService.Snapshot nextKeys = loadKeySnapshot(nextSettings.fallbackFile(), canonicalKeys);
+        Map<String, ItemStack> nextKeyCache = mergeKeyCaches(canonicalKeys);
+        return new ReloadPreparation(nextSettings, nextMessages, nextMenus, canonical,
+                validationRegistry, nextCrates, nextKeys, nextKeyCache);
+    }
+
+    private boolean applyReload(CommandSender sender, ReloadPreparation prepared) throws Exception {
+        PluginSettings nextSettings = prepared.settings();
+        Messages nextMessages = prepared.messages();
+        MenuConfig nextMenus = prepared.menus();
+        DatabaseService.PublishedSnapshot canonical = prepared.canonical();
+        CrateRegistry validationRegistry = prepared.validationRegistry();
+        CrateRegistry.Snapshot nextCrates = prepared.crates();
+        KeyService.Snapshot nextKeys = prepared.keys();
+        Map<String, ItemStack> nextKeyCache = prepared.keyCache();
         if (!nextSettings.databaseFile().equals(settings.databaseFile())) {
             throw new IllegalArgumentException(
                     "database.file cannot be changed by reload; restart the server after moving data safely");
@@ -322,9 +330,9 @@ public class PlexonCrates extends JavaPlugin {
             messages = nextMessages;
             menusConfig = nextMenus;
             crates.apply(nextCrates);
-            keys.apply(nextKeys, mergeKeyCaches(canonicalKeys));
-            for (var crate : crates.ordered()) {
-                List<String> issues = crates.publishingIssues(crate.id(), keys);
+            keys.apply(nextKeys, nextKeyCache);
+            for (var crate : validationRegistry.ordered()) {
+                List<String> issues = validationRegistry.publishingIssues(crate.id(), keys);
                 if (!issues.isEmpty()) throw new IllegalArgumentException("crates/" + crate.id()
                         + ".yml cannot remain published: " + String.join(" ", issues));
             }
@@ -352,6 +360,20 @@ public class PlexonCrates extends JavaPlugin {
         }
         messages.send(sender, "reloaded");
         return true;
+    }
+
+    private record ReloadPreparation(
+            PluginSettings settings,
+            Messages messages,
+            MenuConfig menus,
+            DatabaseService.PublishedSnapshot canonical,
+            CrateRegistry validationRegistry,
+            CrateRegistry.Snapshot crates,
+            KeyService.Snapshot keys,
+            Map<String, ItemStack> keyCache) {
+        private ReloadPreparation {
+            keyCache = Map.copyOf(keyCache);
+        }
     }
 
     private static Exception completionException(Throwable error) {

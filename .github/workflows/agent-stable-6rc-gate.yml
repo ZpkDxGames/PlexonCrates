@@ -1,0 +1,76 @@
+name: One-shot 6.0 Stable Gate Alignment
+
+on:
+  push:
+    branches: [revamp/6.0.0-gui-animation-overhaul]
+    paths:
+      - '.agent/apply-stable-6rc-gate'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: revamp/6.0.0-gui-animation-overhaul
+          fetch-depth: 0
+      - name: Align stable promotion gate with 6.0 RC
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/release.yml')
+          source = path.read_text()
+
+          old = 'pom.xml|"releases/${PLUGIN_VERSION}.md"|"releases/${PLUGIN_VERSION}.runtime-certification.env"|docs/REVAMP_5_1_IMPLEMENTATION_STATUS.md)'
+          new = 'pom.xml|"releases/${PLUGIN_VERSION}.md"|"releases/${PLUGIN_VERSION}.runtime-certification.env"|docs/REVAMP_6_0_IMPLEMENTATION_STATUS.md)'
+          if source.count(old) != 1:
+              raise SystemExit(f'Expected one stable promotion whitelist target, found {source.count(old)}')
+          source = source.replace(old, new, 1)
+
+          old = '''          for r in \\
+            plugin.yml \\
+            com/antondev/crates/PlexonCrates.class \\
+            com/antondev/crates/service/OpeningService.class \\
+            com/antondev/crates/service/ClaimService.class \\
+            com/antondev/crates/service/CrateSimulationService.class \\
+            com/antondev/crates/integration/plexonkeys/PlexonKeysServiceAdapter.class \\
+            com/antondev/crates/api/event/CrateOpenEvent.class \\
+            org/sqlite/JDBC.class; do
+'''
+          new = '''          for r in \\
+            plugin.yml \\
+            animations.yml \\
+            idle-animations.yml \\
+            com/antondev/crates/PlexonCrates.class \\
+            com/antondev/crates/service/OpeningService.class \\
+            com/antondev/crates/gui/OpeningProfilePresentationService.class \\
+            com/antondev/crates/gui/OpeningAnimationCoordinator.class \\
+            com/antondev/crates/animation/CrateParticleCoordinator.class \\
+            com/antondev/crates/item/ExactItemInspector.class \\
+            com/antondev/crates/service/ClaimService.class \\
+            com/antondev/crates/service/CrateSimulationService.class \\
+            com/antondev/crates/integration/plexonkeys/PlexonKeysServiceAdapter.class \\
+            com/antondev/crates/api/event/CrateOpenEvent.class \\
+            org/sqlite/JDBC.class; do
+'''
+          if source.count(old) != 1:
+              raise SystemExit(f'Expected one stable distribution list target, found {source.count(old)}')
+          source = source.replace(old, new, 1)
+          path.write_text(source)
+          PY
+          git diff --check
+          git diff -- .github/workflows/release.yml
+      - name: Commit stable gate alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Tonim'
+          git config user.email '99552287+ZpkDxGames@users.noreply.github.com'
+          git add .github/workflows/release.yml
+          git commit -m 'Align stable release gate with PlexonCrates 6.0'
+          git push origin HEAD:revamp/6.0.0-gui-animation-overhaul

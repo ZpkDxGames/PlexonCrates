@@ -8,6 +8,7 @@ import com.antondev.crates.config.MenuConfig;
 import com.antondev.crates.config.Messages;
 import com.antondev.crates.config.PluginSettings;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.gui.CrateMenuEventRouter;
 import com.antondev.crates.gui.GuiSessionService;
 import com.antondev.crates.gui.MenuService;
 import com.antondev.crates.gui.EditSessionService;
@@ -149,9 +150,10 @@ public class PlexonCrates extends JavaPlugin {
             getServer().getServicesManager().register(PlexonCratesApi.class, new PlexonCratesApiImpl(this), this,
                     ServicePriority.Normal);
 
-            getServer().getPluginManager().registerEvents(menus, this);
+            PlayerCrateCommandRouter playerRouter = new PlayerCrateCommandRouter(this);
+            getServer().getPluginManager().registerEvents(new CrateMenuEventRouter(menus, playerRouter), this);
             getServer().getPluginManager().registerEvents(new SimulationAdminListener(this, simulations), this);
-            getServer().getPluginManager().registerEvents(new PlayerCrateCommandRouter(this), this);
+            getServer().getPluginManager().registerEvents(playerRouter, this);
             getServer().getPluginManager().registerEvents(editSessions, this);
             getServer().getPluginManager().registerEvents(new CrateListener(this), this);
             getServer().getPluginManager().registerEvents(wand, this);
@@ -181,7 +183,10 @@ public class PlexonCrates extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        if (menus != null) menus.closeAll();
+        if (menus != null) {
+            menus.closeAll();
+            menus.stop();
+        }
         if (editSessions != null) editSessions.stop();
         if (draftSessions != null) {
             try {

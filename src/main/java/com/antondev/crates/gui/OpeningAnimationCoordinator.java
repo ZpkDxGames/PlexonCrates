@@ -79,39 +79,46 @@ public final class OpeningAnimationCoordinator {
         Iterator<Map.Entry<UUID, Animation>> iterator = active.entrySet().iterator();
         while (iterator.hasNext()) {
             Animation animation = iterator.next().getValue();
-            int step = ++animation.step;
             Player player = animation.player();
-            if (player.isOnline()
-                    && player.getOpenInventory().getTopInventory().getHolder() == animation.holder()) {
-                List<Integer> rail = animation.rail();
-                for (int index = 0; index < rail.size() - 1; index++) {
-                    animation.inventory().setItem(rail.get(index),
-                            animation.inventory().getItem(rail.get(index + 1)));
-                }
-                if (!rail.isEmpty()) {
-                    animation.inventory().setItem(rail.getLast(), randomDisplay(animation.visuals()));
-                }
-                if (step % 3 == 0) {
-                    float pitch = Math.min(2.0f, 0.65f + step / (float) animation.steps());
-                    player.playSound(player.getLocation(), plugin.settings().openingSound(), 0.35f, pitch);
-                }
+            boolean visible = player.isOnline()
+                    && player.getOpenInventory().getTopInventory().getHolder() == animation.holder();
+            if (!visible) {
+                iterator.remove();
+                complete(animation);
+                continue;
+            }
+
+            int step = ++animation.step;
+            List<Integer> rail = animation.rail();
+            for (int index = 0; index < rail.size() - 1; index++) {
+                animation.inventory().setItem(rail.get(index),
+                        animation.inventory().getItem(rail.get(index + 1)));
+            }
+            if (!rail.isEmpty()) {
+                animation.inventory().setItem(rail.getLast(), randomDisplay(animation.visuals()));
+            }
+            if (step % 3 == 0) {
+                float pitch = Math.min(2.0f, 0.65f + step / (float) animation.steps());
+                player.playSound(player.getLocation(), plugin.settings().openingSound(), 0.35f, pitch);
             }
             if (step < animation.steps()) continue;
+
             iterator.remove();
-            if (player.isOnline()
-                    && player.getOpenInventory().getTopInventory().getHolder() == animation.holder()) {
-                animation.inventory().setItem(animation.centerSlot(), animation.selected().displayCopy());
-            }
-            try {
-                animation.completed().run();
-            } catch (RuntimeException error) {
-                plugin.getLogger().log(Level.WARNING, "Opening animation completion callback failed", error);
-            }
+            animation.inventory().setItem(animation.centerSlot(), animation.selected().displayCopy());
+            complete(animation);
         }
         if (active.isEmpty() && task != null) {
             task.cancel();
             task = null;
             taskPeriod = 0L;
+        }
+    }
+
+    private void complete(Animation animation) {
+        try {
+            animation.completed().run();
+        } catch (RuntimeException error) {
+            plugin.getLogger().log(Level.WARNING, "Opening animation completion callback failed", error);
         }
     }
 

@@ -1,0 +1,31 @@
+name: Revamp Phoenix readonly threading patch
+
+on:
+  push:
+    branches:
+      - revamp/5.1.0-full-source-hardening
+    paths:
+      - .github/workflows/revamp-phoenix-readonly-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: revamp/5.1.0-full-source-hardening
+          fetch-depth: 0
+      - name: Apply Phoenix readonly threading patch
+        run: python tools/revamp_patch_phoenix_readonly.py
+      - name: Commit source patch and remove temporary helpers
+        run: |
+          git rm .github/workflows/revamp-phoenix-readonly-patch.yml tools/revamp_patch_phoenix_readonly.py
+          git add src/main/java/com/antondev/crates/migration/phoenix/PhoenixMigrationService.java \
+                  src/main/java/com/antondev/crates/command/PhoenixMigrationCommand.java
+          git config user.name "Tonim"
+          git config user.email "99552287+ZpkDxGames@users.noreply.github.com"
+          git commit -m "perf: move Phoenix read-only migration work off main thread"
+          git push origin HEAD:revamp/5.1.0-full-source-hardening

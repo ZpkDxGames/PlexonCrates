@@ -22,10 +22,12 @@ public final class PlayerCrateCommandRouter implements Listener {
 
     private final PlexonCrates plugin;
     private final PlayerCrateMenuService menus;
+    private final PlayerKeyMenuService keyMenus;
 
     public PlayerCrateCommandRouter(PlexonCrates plugin) {
         this.plugin = plugin;
         this.menus = new PlayerCrateMenuService(plugin);
+        this.keyMenus = new PlayerKeyMenuService(plugin, menus);
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -44,6 +46,22 @@ public final class PlayerCrateCommandRouter implements Listener {
         }
 
         String action = parts[1].toLowerCase(Locale.ROOT);
+        if (action.equals("keys")) {
+            if (!canPreview(player) || parts.length > 3) return;
+            int page = 1;
+            if (parts.length == 3) {
+                try {
+                    page = Integer.parseInt(parts[2]);
+                    if (page < 1) return;
+                } catch (NumberFormatException ignored) {
+                    return;
+                }
+            }
+            event.setCancelled(true);
+            keyMenus.openKeys(player, page - 1);
+            return;
+        }
+
         if (action.equals("claim")) {
             if (!player.hasPermission("plexoncrates.claim") && !player.hasPermission("plexoncrates.use")) return;
             if (!plugin.settings().claimInboxEnabled()) return;
@@ -81,7 +99,7 @@ public final class PlayerCrateCommandRouter implements Listener {
         }
 
         // /crates <crate> remains a convenient direct preview route. Explicit
-        // opening/admin/history/key commands continue through CratesCommand.
+        // opening/admin/history commands continue through CratesCommand.
         if (parts.length == 2 && canPreview(player)) {
             plugin.runtime().find(parts[1]).ifPresent(crate -> {
                 event.setCancelled(true);
@@ -92,6 +110,7 @@ public final class PlayerCrateCommandRouter implements Listener {
 
     /** Routed by the single registered crate inventory listener. */
     public void click(InventoryClickEvent event) {
+        if (keyMenus.routeClick(event)) return;
         menus.click(event);
     }
 

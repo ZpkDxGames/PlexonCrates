@@ -1,0 +1,44 @@
+# PlexonCrates 6.0 opening-animation profiles.
+# Presentation only: profiles never select rewards, consume payment, update pity,
+# alter limits, grant items, or write opening statistics.
+config-version: 1
+
+global-profile: default
+
+profiles:
+  default:
+    style: ROULETTE
+    stages:
+      start-ticks: 4
+      charge-ticks: 6
+      selection-ticks: 40
+      reveal-ticks: 10
+      celebration-ticks: 10
+      finish-ticks: 4
+    particle: END_ROD
+    sound: BLOCK_NOTE_BLOCK_PLING
+    sound-volume: 1.0
+    sound-pitch: 1.0
+    particle-budget-per-tick: 96
+    receiver-range: 48.0
+    summary-on-finish: false
+
+  quick-reveal:
+    style: CHARGE_REVEAL
+    stages:
+      start-ticks: 4
+      charge-ticks: 30
+      selection-ticks: 0
+      reveal-ticks: 12
+      celebration-ticks: 12
+      finish-ticks: 4
+    particle: END_ROD
+    sound: BLOCK_NOTE_BLOCK_PLING
+    sound-volume: 1.0
+    sound-pitch: 1.0
+    particle-budget-per-tick: 96
+    receiver-range: 48.0
+    summary-on-finish: false
+
+# Per-crate assignments are optional. A crate absent here inherits global-profile.
+crate-profiles: {}

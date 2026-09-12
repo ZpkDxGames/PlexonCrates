@@ -1,0 +1,83 @@
+name: One-shot Idle Profile Editor Wiring
+
+on:
+  push:
+    branches: [revamp/6.0.0-gui-animation-overhaul]
+    paths:
+      - '.agent/apply-idle-profile-editor-wire'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v5
+        with:
+          ref: revamp/6.0.0-gui-animation-overhaul
+          fetch-depth: 0
+
+      - name: Wire idle profile editor into Test Lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/main/java/com/antondev/crates/gui/SimulationAdminListener.java')
+          source = path.read_text()
+          replacements = [
+              (
+                  '''import com.antondev.crates.animation.OpeningAnimationProfile;\nimport com.antondev.crates.animation.OpeningAnimationProfileStore;\n''',
+                  '''import com.antondev.crates.animation.IdleAnimationProfile;\nimport com.antondev.crates.animation.IdleAnimationProfileStore;\nimport com.antondev.crates.animation.OpeningAnimationProfile;\nimport com.antondev.crates.animation.OpeningAnimationProfileStore;\n'''
+              ),
+              (
+                  '''    private final OpeningAnimationProfileStore animationProfiles;\n    private final OpeningAnimationProfileEditor animationEditor;\n    private final OpeningProfilePresentationService profilePresentation;\n''',
+                  '''    private final OpeningAnimationProfileStore animationProfiles;\n    private final OpeningAnimationProfileEditor animationEditor;\n    private final OpeningProfilePresentationService profilePresentation;\n    private final IdleAnimationProfileStore idleProfiles;\n    private final IdleAnimationProfileEditor idleEditor;\n'''
+              ),
+              (
+                  '''        this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);\n        this.animationEditor = new OpeningAnimationProfileEditor(plugin, animationProfiles, this::openHub);\n        this.profilePresentation = OpeningProfilePresentationService.shared(plugin);\n        this.marker = new NamespacedKey(plugin, "phase2_simulation");\n''',
+                  '''        this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);\n        this.animationEditor = new OpeningAnimationProfileEditor(plugin, animationProfiles, this::openHub);\n        this.profilePresentation = OpeningProfilePresentationService.shared(plugin);\n        this.idleProfiles = IdleAnimationProfileStore.shared(plugin);\n        this.idleEditor = new IdleAnimationProfileEditor(plugin, idleProfiles, this::openHub);\n        this.marker = new NamespacedKey(plugin, "phase2_simulation");\n'''
+              ),
+              (
+                  '''    public boolean routeClick(InventoryClickEvent event) {\n        if (animationEditor.routeClick(event)) return true;\n''',
+                  '''    public boolean routeClick(InventoryClickEvent event) {\n        if (idleEditor.routeClick(event)) return true;\n        if (animationEditor.routeClick(event)) return true;\n'''
+              ),
+              (
+                  '''    public boolean routeDrag(InventoryDragEvent event) {\n        if (animationEditor.routeDrag(event)) return true;\n''',
+                  '''    public boolean routeDrag(InventoryDragEvent event) {\n        if (idleEditor.routeDrag(event)) return true;\n        if (animationEditor.routeDrag(event)) return true;\n'''
+              ),
+              (
+                  '''            else if (slot == 21) animationEditor.open(player, holder.crateId, holder.snapshot.mode());\n            else if (slot == 22) backToEditor(player, holder.crateId);\n''',
+                  '''            else if (slot == 21) animationEditor.open(player, holder.crateId, holder.snapshot.mode());\n            else if (slot == 22) backToEditor(player, holder.crateId);\n            else if (slot == 23) idleEditor.open(player, holder.crateId, holder.snapshot.mode());\n'''
+              ),
+              (
+                  '''        OpeningAnimationProfile openingProfile = animationProfiles.resolve(crate.id(), crate.animation());\n        SimulationHolder holder = new SimulationHolder''',
+                  '''        OpeningAnimationProfile openingProfile = animationProfiles.resolve(crate.id(), crate.animation());\n        IdleAnimationProfile idleProfile = idleProfiles.resolve(crate.id(), plugin.settings().idleParticleProfile());\n        SimulationHolder holder = new SimulationHolder'''
+              ),
+              (
+                  '''        inventory.setItem(22, item(Material.ARROW, "<gray>Back to Crate Editor</gray>", List.of()));\n        player.openInventory(inventory);\n''',
+                  '''        inventory.setItem(22, item(Material.ARROW, "<gray>Back to Crate Editor</gray>", List.of()));\n        inventory.setItem(23, item(Material.END_ROD, "<gradient:#8CDFFF:#D8F6FF><bold>Idle Profiles</bold></gradient>", List.of(\n                line("Effective style", idleProfile.style()),\n                line("Particle", idleProfile.particle()),\n                line("Receiver range", idleProfile.receiverRange() + " blocks"),\n                Component.text("Edit geometry, particle and bounded per-crate/viewer budgets.", NamedTextColor.GRAY),\n                Component.text("Assign globally/per crate, clone, reset or render a one-frame preview.", NamedTextColor.GRAY),\n                Component.text("Idle presentation never enters the opening transaction path.", NamedTextColor.GREEN))));\n        player.openInventory(inventory);\n'''
+              )
+          ]
+          for old, new in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one replacement target, found {count}: {old[:100]!r}')
+              source = source.replace(old, new, 1)
+          path.write_text(source)
+          PY
+          git diff --check
+          git diff -- src/main/java/com/antondev/crates/gui/SimulationAdminListener.java
+
+      - name: Commit focused source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Tonim'
+          git config user.email '99552287+ZpkDxGames@users.noreply.github.com'
+          git add src/main/java/com/antondev/crates/gui/SimulationAdminListener.java
+          test -n "$(git status --porcelain)"
+          git commit -m 'Wire idle profile editor into Test Lab'
+          git push origin HEAD:revamp/6.0.0-gui-animation-overhaul

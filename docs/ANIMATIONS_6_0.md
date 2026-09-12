@@ -1,12 +1,73 @@
 # PlexonCrates 6.0 — Animation Architecture
 
-## Principle
+## Boundary
 
-Animations are presentation only. Reward selection, payment, durable journal state, limits, pity, claims, rerolls, and delivery remain owned by the existing opening transaction pipeline. Closing a GUI or losing a cosmetic effect must never change the selected reward or cause a second grant/payment path.
+Animation is presentation only. Reward selection, eligibility, payment, key consumption, durable journal state, item/money/XP/command delivery, claims, pity, limits, milestones, rerolls and statistics remain owned by the existing opening/services pipeline.
 
-## Physical crate idle effects
+An animation may show an already-authoritative selected reward. It may never select a replacement reward, consume payment, grant delivery, increment state, or finalize an opening transaction.
 
-6.0 ships bounded idle styles:
+## Opening animation profiles
+
+Opening profiles are stored in `animations.yml` and consumed through `OpeningAnimationProfileStore`.
+
+Built-in styles:
+
+- `INSTANT`
+- `ROULETTE`
+- `SPIN`
+- `CHARGE_REVEAL`
+- `SPIRAL_BURST`
+- `ORB_REVEAL`
+- `CASCADE`
+- `FIREWORK_STYLE`
+
+Every profile defines explicit durations for `START`, `CHARGE`, `SELECTION`, `REVEAL`, `CELEBRATION`, and `FINISH` plus particle, sound, volume, pitch, per-tick particle budget, receiver range, and optional summary-on-finish behavior. Validation bounds timing, duration, audio, budget, and range before runtime use.
+
+### Assignment and migration behavior
+
+`animations.yml` supports named profiles, one global assignment, and per-crate assignments. `legacy` is reserved inheritance: it projects the crate's existing 5.x `AnimationType` (`INSTANT`, `ROULETTE`, `REVEAL`, `SUMMARY`) into a compatible 6.0 profile. The bundled file uses `global-profile: legacy`, so upgrading does not silently change existing opening presentation.
+
+Administrators can explicitly assign a named profile globally or per crate, return a crate to global inheritance, preserve legacy globally/per crate, clone an effective profile, or reset editable values.
+
+## Shared opening coordinator
+
+`OpeningAnimationCoordinator` remains the single repeating-task authority for opening animations.
+
+- one shared Bukkit scheduler task, never one repeating task per opening/player/profile;
+- active sessions are main-thread confined;
+- only changed rail/presentation slots are updated;
+- receiver-scoped particles are bounded by the profile and a coordinator-wide global ceiling;
+- sounds/particles fail as cosmetic presentation only;
+- closed, stale or offline viewers are removed promptly;
+- completion callback runs through one terminal path;
+- `INSTANT` profiles complete without entering the repeating scheduler.
+
+`OpeningProfilePresentationService` prepares the ordinary opening inventory surface and delegates timed presentation to that coordinator. It owns no transaction state.
+
+## Production integration
+
+`OpeningService` resolves the effective profile only at the finalized result-presentation boundary, after reward delivery and durable completion work has succeeded.
+
+For single openings, global animation disable preserves immediate announcement, non-animated profiles announce immediately, and animated profiles use the shared renderer before the normal result announcement. Cosmetic failure falls back to the already-delivered result. Bulk openings remain non-animated and may open the summary according to `summary-on-finish` or the existing bulk summary threshold.
+
+No profile callback reaches reward selection, payment, journal, grant, pity/limit, or statistics authority.
+
+## Test Lab opening preview
+
+Test Lab first performs deterministic `CrateSimulationService.dryRun` selection and then resolves the same effective opening profile used by production.
+
+- zero-duration profiles stay on the non-granting dry-result surface;
+- animated profiles call the same `OpeningProfilePresentationService` as production;
+- closing/leaving the opening preview prevents Test Lab from force-reopening itself afterward;
+- Test Lab never calls the production opening transaction, consumes keys, writes journals, records statistics, or grants the previewed reward.
+
+This keeps preview fidelity high without creating a second animation engine.
+
+## Physical idle profiles
+
+Idle presentation is stored separately in `idle-animations.yml` and consumed through `IdleAnimationProfileStore`.
+
+Built-in styles:
 
 - `NONE`
 - `SPARKLE`
@@ -18,47 +79,32 @@ Animations are presentation only. Reward selection, payment, durable journal sta
 - `RISING`
 - `AURA`
 
-`IdleAnimationMath` is pure deterministic geometry. `CrateParticleCoordinator` is the only scheduler for linked-crate idle particles.
+Each idle profile includes particle, radius/height, geometry point count, rotation/vertical speed, particles per point, receiver range, and per-crate/per-viewer particle ceilings. `IdleAnimationMath` generates deterministic offsets independently of Bukkit calls; `CrateParticleCoordinator` performs actual runtime emission.
 
-### Scheduler contract
+### Idle assignment and migration behavior
 
-- one shared Bukkit repeating task for all physical crate idle effects;
-- no task per crate;
-- no task per player;
-- no task per chunk;
-- candidate crates come from `LocationStore`'s existing world/chunk indexes;
-- unloaded chunks are skipped;
-- disabled/unpublished crates are skipped;
-- receivers are scoped to nearby online players;
-- emissions use player-scoped particle delivery rather than world-wide broadcasting;
-- a particle API failure disables the cosmetic coordinator without touching crate state.
+`idle-animations.yml` has the same product assignment model: named profiles, global assignment, and per-crate assignment. Reserved `legacy` means “use the already-validated `particles.*` profile from `config.yml`.” The bundled registry defaults to `global-profile: legacy`, so upgrading alone does not change existing physical crate effects.
 
-### Budgets
+The existing `particles.enabled`, scheduler interval, maximum locations per tick, global particle ceiling, and stagger settings remain master runtime safety controls. Named idle profiles refine per-crate geometry/range/local budgets underneath those ceilings.
 
-`config.yml` exposes:
+## Shared physical particle coordinator
 
-- `performance.particles.max-locations-per-tick`
-- `performance.particles.max-particles-per-tick`
-- `performance.particles.max-per-crate-per-tick`
-- `performance.particles.max-per-viewer-per-tick`
-- staggered candidate rotation.
+There is exactly one `CrateParticleCoordinator` scheduler. Each pass derives candidates through `LocationStore.nearbyChunks`, rejects unloaded worlds/chunks and missing/disabled crates, resolves the effective named/legacy idle profile, samples deterministic geometry, emits only to nearby receivers with profile budgets, and enforces the existing coordinator-wide global particle/location ceilings.
 
-If a budget is exhausted, cosmetic work is deferred/dropped for that pass. Transaction behavior is unaffected.
+There is no task per crate, linked block, player, or idle profile.
 
-## Opening GUI animation
+## Idle profile editor and preview
 
-The accepted 5.1 `OpeningAnimationCoordinator` remains the scheduling authority for opening roulette presentation. It owns one task for all active opening animations and stops when the active set becomes empty.
+The Test Lab/Crate Studio idle editor supports named profile browsing, style and safe-particle selection, radius/height/point count, rotation/vertical speed, particles-per-point, receiver range, per-crate/per-viewer budgets, clone/reset, global/per-crate assignment, and explicit legacy inheritance.
 
-6.0 may add richer profile-driven presentation, but new styles must reuse this shared authority or one-shot main-thread callbacks. A new visual style is not allowed to create an independent reward-selection or payment path.
+Preview renders one geometry frame around the administrator and is additionally capped at 256 particles. It creates no repeating preview task and never touches opening state.
 
-## GUI motion
+## Persistence/threading
 
-Menu motion is intentionally subtle. Animation may update decorative or presentation slots only; stable functional controls and holder/action identity remain authoritative. No animation may parse visible lore/title text as state.
+Both profile stores keep immutable live snapshots and serialize changes through ordered off-thread writes with atomic file replacement where supported. Animation ticks consume prepared in-memory values only; they perform no file, database, or network I/O.
 
-## Cleanup
-
-Reload/disable must cancel shared coordinators and clear transient animation state. Chunk unload removes hologram entities for that chunk; particle work relies on the indexed linked-location set and loaded-chunk checks rather than persistent particle entities.
+SQLite remains schema `4` because profile configuration is presentation-only and has no durable player/transaction semantics.
 
 ## Runtime certification
 
-The 6.0 RC must be tested with multiple linked crates and multiple nearby viewers. Capture spark/MSPT evidence while idle particles and repeated opening animations are active, and compare it with the accepted 5.0/5.1 baseline. A cosmetic feature that produces unbounded scheduler growth or material TPS/MSPT regression fails certification.
+The exact 6.0 RC must be exercised with multiple linked crates/viewers and repeated opening animations on the real Paper 26.2 host. Capture TPS/MSPT/scheduler evidence under idle and active presentation load and compare it with the accepted baseline. Unbounded task growth, forced chunk loading, or material TPS/MSPT regression fails certification.

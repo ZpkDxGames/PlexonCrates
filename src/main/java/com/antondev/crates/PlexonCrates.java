@@ -168,8 +168,10 @@ public class PlexonCrates extends JavaPlugin {
                     ServicePriority.Normal);
 
             PlayerCrateCommandRouter playerRouter = new PlayerCrateCommandRouter(this);
-            getServer().getPluginManager().registerEvents(new CrateMenuEventRouter(this, menus, playerRouter), this);
-            getServer().getPluginManager().registerEvents(new SimulationAdminListener(this, simulations), this);
+            SimulationAdminListener simulationMenus = new SimulationAdminListener(this, simulations);
+            getServer().getPluginManager().registerEvents(
+                    new CrateMenuEventRouter(this, menus, playerRouter, simulationMenus), this);
+            getServer().getPluginManager().registerEvents(simulationMenus, this);
             getServer().getPluginManager().registerEvents(playerRouter, this);
             getServer().getPluginManager().registerEvents(editSessions, this);
             getServer().getPluginManager().registerEvents(new CrateListener(this), this);

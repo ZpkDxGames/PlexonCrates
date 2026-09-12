@@ -42,12 +42,16 @@ class PlayerKeyMenuArchitectureTest {
     }
 
     @Test
-    void commandAndCentralRouterOwnBothKeySurfaces() throws Exception {
+    void commandHallAndCentralRouterOwnKeySurfaces() throws Exception {
+        String service = Files.readString(SERVICE);
         String commandRouter = Files.readString(ROUTER);
         String eventRouter = Files.readString(EVENT_ROUTER);
         assertTrue(commandRouter.contains("action.equals(\"keys\")"));
         assertTrue(commandRouter.contains("keyMenus.openKeys(player, page - 1)"));
         assertTrue(commandRouter.contains("keyMenus.routeClick(event)"));
+        assertTrue(commandRouter.contains("keyMenus.decorateHall(player)"));
+        assertTrue(commandRouter.contains("action.id().equals(\"keys\")"));
+        assertTrue(service.contains("holder.bind(PlayerCrateLayout.PAYMENT, \"keys\")"));
         assertTrue(eventRouter.contains("PLAYER_KEYS, PLAYER_KEY_CRATES"));
     }
 }

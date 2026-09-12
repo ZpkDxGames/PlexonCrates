@@ -119,7 +119,7 @@ public final class CrateMenuEventRouter implements Listener {
     private static boolean playerKind(MenuHolder.Kind kind) {
         return switch (kind) {
             case PLAYER_HALL, PLAYER_PREVIEW, PLAYER_QUANTITY, PLAYER_MASS_CONFIRM,
-                    PLAYER_SELECTIVE_CONFIRM, PLAYER_PENDING_REWARDS -> true;
+                    PLAYER_SELECTIVE_CONFIRM, PLAYER_PENDING_REWARDS, PLAYER_KEYS, PLAYER_KEY_CRATES -> true;
             default -> false;
         };
     }

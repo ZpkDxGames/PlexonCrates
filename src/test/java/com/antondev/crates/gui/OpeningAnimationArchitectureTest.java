@@ -32,6 +32,27 @@ class OpeningAnimationArchitectureTest {
     }
 
     @Test
+    void invisibleOrClosedAnimationIsRetiredBeforeAnotherVisualTick() throws Exception {
+        String source = Files.readString(COORDINATOR);
+        assertTrue(source.contains("boolean visible = player.isOnline()"));
+        assertTrue(source.contains("if (!visible)"));
+        assertTrue(source.contains("iterator.remove()"));
+        assertTrue(source.contains("complete(animation)"));
+        String invisible = section(source, "if (!visible)", "int step = ++animation.step");
+        assertFalse(invisible.contains("inventory().setItem"));
+        assertFalse(invisible.contains("playSound"));
+    }
+
+    @Test
+    void completionCallbackHasOneCentralInvocationPath() throws Exception {
+        String source = Files.readString(COORDINATOR);
+        assertTrue(source.contains("private void complete(Animation animation)"));
+        assertTrue(source.contains("animation.completed().run()"));
+        assertFalse(source.contains("animation.completed().run();\n            } catch")
+                && source.indexOf("animation.completed().run()") != source.lastIndexOf("animation.completed().run()"));
+    }
+
+    @Test
     void menuExposesExplicitAnimationShutdown() throws Exception {
         String source = Files.readString(MENU);
         assertTrue(source.contains("public void stop()"));

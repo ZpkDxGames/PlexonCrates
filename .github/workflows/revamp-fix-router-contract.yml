@@ -1,0 +1,40 @@
+name: Fix router source contract
+
+on:
+  push:
+    branches:
+      - revamp/5.1.0-full-source-hardening
+    paths:
+      - .github/workflows/revamp-fix-router-contract.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: revamp/5.1.0-full-source-hardening
+          fetch-depth: 0
+      - name: Fix exact source contract
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/test/java/com/antondev/crates/gui/player/Phase3PlayerCrateUxArchitectureTest.java')
+          text = path.read_text()
+          old = 'assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(menus, playerRouter), this)"));'
+          new = 'assertTrue(main.contains("registerEvents(new CrateMenuEventRouter(this, menus, playerRouter), this)"));'
+          if old not in text:
+              raise SystemExit('Expected stale router assertion was not found')
+          path.write_text(text.replace(old, new, 1))
+      - name: Commit source-contract correction
+        shell: bash
+        run: |
+          git rm .github/workflows/revamp-fix-router-contract.yml
+          git add src/test/java/com/antondev/crates/gui/player/Phase3PlayerCrateUxArchitectureTest.java
+          git config user.name "Tonim"
+          git config user.email "99552287+ZpkDxGames@users.noreply.github.com"
+          git commit -m "test: align router contract with explicit plugin composition"
+          git push origin HEAD:revamp/5.1.0-full-source-hardening

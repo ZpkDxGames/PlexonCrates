@@ -34,12 +34,23 @@ class Phase2SimulationContractTest {
         String lifecycle = source("PlexonCrates.java");
         String sessions = source("gui/GuiSessionService.java");
         String listener = source("gui/SimulationAdminListener.java");
+        String router = source("gui/CrateMenuEventRouter.java");
         assertTrue(lifecycle.contains("simulations = new CrateSimulationService()"));
-        assertTrue(lifecycle.contains("registerEvents(new SimulationAdminListener(this, simulations), this)"));
+        assertTrue(lifecycle.contains(
+                "SimulationAdminListener simulationMenus = new SimulationAdminListener(this, simulations)"));
+        assertTrue(lifecycle.contains(
+                "new CrateMenuEventRouter(this, menus, playerRouter, simulationMenus)"));
+        assertTrue(lifecycle.contains("registerEvents(simulationMenus, this)"));
         assertTrue(lifecycle.contains("if (simulations != null) simulations.close()"));
         assertFalse(sessions.contains("new CrateSimulationService()"));
         assertFalse(sessions.contains("registerEvents"));
         assertFalse(listener.contains("holder.action"));
+        assertTrue(listener.contains("public boolean routeClick(InventoryClickEvent event)"));
+        assertTrue(listener.contains("public boolean routeDrag(InventoryDragEvent event)"));
+        assertTrue(listener.contains("Bukkit.getScheduler().runTask(plugin"));
+        assertTrue(listener.contains("currentHolder(target, holder)"));
+        assertTrue(router.contains("simulation.routeClick(event)"));
+        assertTrue(router.contains("simulation.routeDrag(event)"));
         assertTrue(listener.contains("simulateAsync(snapshot"));
         assertTrue(listener.contains("CrateSimulationService.isCurrent"));
         assertTrue(listener.contains("Simulation result discarded: the crate revision changed"));

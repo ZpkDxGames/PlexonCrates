@@ -546,9 +546,15 @@ public final class AdminMenuService {
         openCrateConfirmation(player, crateId, "delete");
     }
 
+    /** Compatibility entrypoint: cancel/capture now, dispatch only after the event returns. */
     public void handleClick(InventoryClickEvent event, MenuHolder holder) {
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) return;
+        MenuInteraction.Click click = MenuInteraction.Click.capture(event);
+        deferInteraction(player.getUniqueId(), holder, target -> handleClick(target, holder, click));
+    }
+
+    void handleClick(Player player, MenuHolder holder, MenuInteraction.Click event) {
         if (!accept(player, holder)) return;
         if (holder.kind() == MenuHolder.Kind.KEY_TEMPLATE && allowed(player, "plexoncrates.admin.keys")
                 && captureKeyClick(event, player)) return;
@@ -559,7 +565,7 @@ public final class AdminMenuService {
                 && captureMilestoneDisplayClick(event, player, holder)) return;
         if (holder.kind() == MenuHolder.Kind.EDITOR && allowed(player, "plexoncrates.admin.crates")
                 && captureIconClick(event, player, holder)) return;
-        if (event.getClickedInventory() != event.getView().getTopInventory()) return;
+        if (!event.clickedTop()) return;
         MenuHolder.Action action = holder.action(event.getRawSlot());
         if (action == null) return;
         if (!allowed(player, permission(holder.kind(), action.id()))) {
@@ -573,9 +579,15 @@ public final class AdminMenuService {
         }
     }
 
+    /** Compatibility entrypoint: cancel/capture now, dispatch only after the event returns. */
     public void handleDrag(InventoryDragEvent event, MenuHolder holder) {
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) return;
+        MenuInteraction.Drag drag = MenuInteraction.Drag.capture(event);
+        deferInteraction(player.getUniqueId(), holder, target -> handleDrag(target, holder, drag));
+    }
+
+    void handleDrag(Player player, MenuHolder holder, MenuInteraction.Drag event) {
         if (!accept(player, holder)) return;
         if (!allowed(player, permission(holder.kind(), "capture"))) return;
         ItemStack item = event.getOldCursor();
@@ -598,7 +610,7 @@ public final class AdminMenuService {
         }
     }
 
-    private void route(Player player, MenuHolder holder, MenuHolder.Action action, InventoryClickEvent event) throws Exception {
+    private void route(Player player, MenuHolder holder, MenuHolder.Action action, MenuInteraction.Click event) throws Exception {
         switch (action.id()) {
             case "close" -> player.closeInventory();
             case "dashboard" -> openDashboard(player);
@@ -764,7 +776,7 @@ public final class AdminMenuService {
         });
     }
 
-    private void editOpening(Player player, String crateId, InventoryClickEvent event) throws Exception {
+    private void editOpening(Player player, String crateId, MenuInteraction.Click event) throws Exception {
         if (!requireWritableDraft(player, crateId)) return;
         Crate crate = plugin.crates().find(crateId).orElseThrow();
         if (event.isShiftClick() && event.isRightClick()) {
@@ -811,7 +823,7 @@ public final class AdminMenuService {
         refreshCrate(player, crateId);
     }
 
-    private void editRerolls(Player player, String crateId, InventoryClickEvent event) throws Exception {
+    private void editRerolls(Player player, String crateId, MenuInteraction.Click event) throws Exception {
         if (!requireWritableDraft(player, crateId)) return;
         Crate crate = plugin.crates().find(crateId).orElseThrow();
         if (!event.isRightClick()) {
@@ -1150,7 +1162,7 @@ public final class AdminMenuService {
         });
     }
 
-    private void keyEntry(Player player, String keyId, InventoryClickEvent event) throws Exception {
+    private void keyEntry(Player player, String keyId, MenuInteraction.Click event) throws Exception {
         boolean shift = event.isShiftClick();
         boolean left = event.isLeftClick();
         boolean right = event.isRightClick();
@@ -1388,7 +1400,7 @@ public final class AdminMenuService {
         }
     }
 
-    private void editChance(Player player, InventoryClickEvent event) {
+    private void editChance(Player player, MenuInteraction.Click event) {
         EditSessionService.RewardDraft draft = plugin.editSessions().reward(player);
         if (!event.isShiftClick()) {
             double delta = event.isRightClick() ? -1.0 : 1.0;
@@ -1403,7 +1415,7 @@ public final class AdminMenuService {
         });
     }
 
-    private void editCommand(Player player, InventoryClickEvent event) {
+    private void editCommand(Player player, MenuInteraction.Click event) {
         if (event.isShiftClick() && event.isRightClick()) {
             plugin.editSessions().request(player, Text.parse("<gold>Enter command positions as <white>from,to</white>:</gold>"), (target, value) -> {
                 String[] parts = value.split(",", -1);
@@ -1685,6 +1697,17 @@ public final class AdminMenuService {
         }
     }
 
+    private void deferInteraction(UUID playerId, MenuHolder holder, java.util.function.Consumer<Player> action) {
+        if (!plugin.isEnabled()) return;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player target = Bukkit.getPlayer(playerId);
+            if (target == null || !target.isOnline()) return;
+            Inventory top = target.getOpenInventory().getTopInventory();
+            if (top == null || top.getHolder() != holder || !accept(target, holder)) return;
+            action.accept(target);
+        });
+    }
+
     private void runFor(UUID playerId, java.util.function.Consumer<Player> action) {
         if (!plugin.isEnabled()) return;
         Bukkit.getScheduler().runTask(plugin, () -> {
@@ -1721,51 +1744,51 @@ public final class AdminMenuService {
                 }));
     }
 
-    private boolean captureKeyClick(InventoryClickEvent event, Player player) {
+    private boolean captureKeyClick(MenuInteraction.Click event, Player player) {
         int input = plugin.menusConfig().slot("key-template.input-placeholder");
-        if (event.getClickedInventory() == event.getView().getTopInventory() && event.getRawSlot() == input) {
+        if (event.clickedTop() && event.getRawSlot() == input) {
             ItemStack cursor = event.getCursor();
             if (cursor != null && !cursor.getType().isAir()) captureKey(player, cursor);
             return true;
         }
-        if (event.isShiftClick() && event.getClickedInventory() == event.getView().getBottomInventory()) {
+        if (event.isShiftClick() && event.clickedBottom()) {
             captureKey(player, event.getCurrentItem());
             return true;
         }
         return false;
     }
 
-    private boolean captureRewardClick(InventoryClickEvent event, Player player) {
+    private boolean captureRewardClick(MenuInteraction.Click event, Player player) {
         List<Integer> slots = plugin.menusConfig().slots("reward-builder.item-slots");
-        if (event.getClickedInventory() == event.getView().getTopInventory() && slots.contains(event.getRawSlot())) {
+        if (event.clickedTop() && slots.contains(event.getRawSlot())) {
             ItemStack cursor = event.getCursor();
             if (cursor != null && !cursor.getType().isAir()) captureReward(player, cursor);
             return true;
         }
-        if (event.isShiftClick() && event.getClickedInventory() == event.getView().getBottomInventory()) {
+        if (event.isShiftClick() && event.clickedBottom()) {
             captureReward(player, event.getCurrentItem());
             return true;
         }
         return false;
     }
 
-    private boolean captureIconClick(InventoryClickEvent event, Player player, MenuHolder holder) {
-        if (event.getClickedInventory() == event.getView().getTopInventory() && event.getRawSlot() == 4) {
+    private boolean captureIconClick(MenuInteraction.Click event, Player player, MenuHolder holder) {
+        if (event.clickedTop() && event.getRawSlot() == 4) {
             ItemStack cursor = event.getCursor();
             if (cursor != null && !cursor.getType().isAir()) captureIcon(player, holder.crateId(), cursor);
             return true;
         }
-        if (event.isShiftClick() && event.getClickedInventory() == event.getView().getBottomInventory()) {
+        if (event.isShiftClick() && event.clickedBottom()) {
             captureIcon(player, holder.crateId(), event.getCurrentItem());
             return true;
         }
         return false;
     }
 
-    private boolean captureMilestoneDisplayClick(InventoryClickEvent event, Player player,
+    private boolean captureMilestoneDisplayClick(MenuInteraction.Click event, Player player,
                                                  MenuHolder holder) {
         int display = plugin.menusConfig().slot("milestone-detail.display");
-        if (event.getClickedInventory() == event.getView().getTopInventory()
+        if (event.clickedTop()
                 && event.getRawSlot() == display) {
             ItemStack cursor = event.getCursor();
             if (cursor != null && !cursor.getType().isAir()) {
@@ -1773,7 +1796,7 @@ public final class AdminMenuService {
             }
             return true;
         }
-        if (event.isShiftClick() && event.getClickedInventory() == event.getView().getBottomInventory()) {
+        if (event.isShiftClick() && event.clickedBottom()) {
             captureMilestoneDisplay(player, holder.crateId(), holder.rewardId(), event.getCurrentItem());
             return true;
         }

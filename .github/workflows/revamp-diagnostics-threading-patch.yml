@@ -1,0 +1,238 @@
+name: Revamp diagnostics threading patch
+
+on:
+  push:
+    branches:
+      - revamp/5.1.0-full-source-hardening
+    paths:
+      - .github/workflows/revamp-diagnostics-threading-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: revamp/5.1.0-full-source-hardening
+          fetch-depth: 0
+      - name: Move diagnostic database probes off the primary thread
+        shell: python
+        run: |
+          from pathlib import Path
+
+          main = Path('src/main/java/com/antondev/crates/PlexonCrates.java')
+          text = main.read_text()
+
+          start = text.index('    public void diagnoseFor(CommandSender sender) {')
+          end = text.index('    private void updateCoreHealth() {', start)
+          replacement = '''    public void diagnoseFor(CommandSender sender) {
+              if (!sender.hasPermission("plexoncrates.admin.diagnose")) {
+                  messages.send(sender, "no-permission");
+                  return;
+              }
+              long onlineLocations = locations.all().stream()
+                      .filter(link -> link.position().loadedWorld() != null).count();
+              long drafts = crates.all().stream()
+                      .filter(crate -> crate.state() == com.antondev.crates.domain.crate.CrateState.DRAFT).count();
+              boolean signerServiceReady = portables != null && portables.ready();
+              sender.sendMessage(Text.parse("<gray>Collecting PlexonCrates diagnostics…</gray>"));
+              getServer().getScheduler().runTaskAsynchronously(this, () -> {
+                  DiagnosticDatabaseSnapshot diagnostic = collectDiagnosticDatabaseSnapshot();
+                  if (!isEnabled()) return;
+                  getServer().getScheduler().runTask(this, () -> {
+                      if (!isEnabled()) return;
+                      renderDiagnostics(sender, onlineLocations, drafts, signerServiceReady, diagnostic);
+                  });
+              });
+          }
+
+          private DiagnosticDatabaseSnapshot collectDiagnosticDatabaseSnapshot() {
+              int pendingJournals = -1;
+              DatabaseService.JournalHealth journalHealth = null;
+              List<DatabaseService.JournalDiagnostic> journalEntries = List.of();
+              try {
+                  pendingJournals = database.pendingJournalCount();
+                  journalHealth = database.journalHealth();
+                  journalEntries = database.journalDiagnostics(5);
+              } catch (Exception error) {
+                  getLogger().log(Level.WARNING, "Could not read opening-journal diagnostics", error);
+              }
+              DatabaseService.ClaimCounts claimCounts = null;
+              try {
+                  claimCounts = database.claimCounts().join();
+              } catch (Exception error) {
+                  getLogger().log(Level.WARNING, "Could not read Claim Inbox diagnostics", error);
+              }
+              DatabaseService.PortableIssueCounts portableCounts = null;
+              boolean portableSecretPresent = false;
+              try {
+                  portableCounts = database.portableIssueCounts().join();
+                  portableSecretPresent = database.portableSecretPresent().join();
+              } catch (Exception error) {
+                  getLogger().log(Level.WARNING, "Could not read portable-crate diagnostics", error);
+              }
+              return new DiagnosticDatabaseSnapshot(pendingJournals, journalHealth, journalEntries,
+                      claimCounts, portableCounts, portableSecretPresent);
+          }
+
+          private void renderDiagnostics(CommandSender sender, long onlineLocations, long drafts,
+                                         boolean signerServiceReady, DiagnosticDatabaseSnapshot diagnostic) {
+              DatabaseService.JournalHealth journalHealth = diagnostic.journalHealth();
+              List<DatabaseService.JournalDiagnostic> journalEntries = diagnostic.journalEntries();
+              DatabaseService.ClaimCounts claimCounts = diagnostic.claimCounts();
+              DatabaseService.PortableIssueCounts portableCounts = diagnostic.portableCounts();
+              boolean portableSignerHealthy = signerServiceReady && diagnostic.portableSecretPresent();
+              sender.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>PlexonCrates Diagnostics</bold></gradient>"));
+              sender.sendMessage(Text.parse("<gray>Plugin:</gray> <white>" + getPluginMeta().getVersion() + "</white> <dark_gray>•</dark_gray> <gray>Paper API:</gray> <white>26.2</white> <dark_gray>•</dark_gray> <gray>Java:</gray> <white>" + Runtime.version().feature() + "</white>"));
+              if (coreBridge != null) {
+                  sender.sendMessage(Text.parse("<gray>Mode:</gray> <white>" + coreBridge.mode()
+                          + "</white> <dark_gray>•</dark_gray> <gray>Core plugin/API:</gray> <white>"
+                          + coreBridge.pluginVersion() + " / " + coreBridge.apiVersion()
+                          + "</white> <dark_gray>•</dark_gray> <gray>Supported:</gray> <white>"
+                          + CoreBridge.SUPPORTED_API_RANGE + "</white>"));
+                  sender.sendMessage(Text.parse("<gray>Core module:</gray> <white>" + coreBridge.registrationState()
+                          + "</white> <dark_gray>•</dark_gray> <gray>Detail:</gray> <white>"
+                          + coreBridge.detail() + "</white>"));
+              }
+              boolean apiRegistered = getServer().getServicesManager().getRegistration(PlexonCratesApi.class) != null;
+              sender.sendMessage(Text.parse("<gray>PlexonCratesApi:</gray> "
+                      + (apiRegistered ? "<green>registered</green>" : "<red>missing</red>")
+                      + " <dark_gray>•</dark_gray> <gray>CrateOpenEvent:</gray> <green>available</green>"));
+              sender.sendMessage(Text.parse("<gray>Crates:</gray> <white>" + crates.all().size() + "</white> <dark_gray>(" + drafts + " drafts)</dark_gray> <dark_gray>•</dark_gray> <gray>Rewards:</gray> <white>" + crates.rewardCount() + "</white>"));
+              sender.sendMessage(Text.parse("<gray>Keys:</gray> <white>" + keys.definitions().size() + "</white> <dark_gray>•</dark_gray> <gray>Provider:</gray> <white>" + keys.providerStatus() + "</white>"));
+              sender.sendMessage(Text.parse("<gray>Key detail:</gray> <white>" + keys.providerDiagnostic() + "</white>"));
+              sender.sendMessage(Text.parse("<gray>Unresolved:</gray> <white>" + keys.unresolved().size() + "</white> <dark_gray>•</dark_gray> <gray>Collisions:</gray> <white>" + keys.collisions().size() + "</white>"));
+              sender.sendMessage(Text.parse("<gray>Locations:</gray> <white>" + locations.all().size() + "</white> <dark_gray>(" + onlineLocations + " online)</dark_gray>"));
+              sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + diagnostic.pendingJournals() + "</white>"));
+              if (journalHealth != null) {
+                  sender.sendMessage(Text.parse("<gray>Journal recovery:</gray> <white>manual=" + journalHealth.manualReview()
+                          + ", pre-payment=" + journalHealth.paymentNotConsumed() + ", payment-committed="
+                          + journalHealth.paymentCommitted() + ", pending-reward=" + journalHealth.rewardPending()
+                          + ", oldest=" + journalHealth.oldestUnresolvedAgeSeconds() + "s</white>"));
+                  sender.sendMessage(Text.parse("<gray>Startup reconciliation:</gray> <white>safe-cancelled="
+                          + journalHealth.startupRecovered() + ", compacted=" + journalHealth.startupCompacted() + "</white>"));
+              }
+              for (DatabaseService.JournalDiagnostic entry : journalEntries) {
+                  sender.sendMessage(Text.parse("<dark_gray>Journal " + entry.transactionId() + "</dark_gray> <gray>crate=</gray><white>"
+                          + entry.crateId() + "@" + entry.crateRevision() + "</white> <gray>stage=</gray><white>"
+                          + entry.stage() + "</white> <gray>payment=</gray><white>" + entry.paymentState()
+                          + "</white> <gray>grant=</gray><white>" + entry.grantState()
+                          + "</white> <gray>recovery=</gray><white>" + entry.recoveryClassification()
+                          + "</white> <gray>created=</gray><white>" + entry.createdAt()
+                          + "</white> <gray>updated=</gray><white>" + entry.updatedAt() + "</white>"));
+              }
+              sender.sendMessage(Text.parse("<gray>PlexonKeys durable consume latency:</gray> <white>"
+                      + openings.plexonKeysLatencyDiagnostic() + "</white>"));
+              sender.sendMessage(Text.parse(claimCounts == null
+                      ? "<gray>Claim Inbox:</gray> <red>diagnostic unavailable</red>"
+                      : "<gray>Claim Inbox:</gray> <white>" + claimCounts.pending()
+                      + " pending</white> <dark_gray>•</dark_gray> <white>" + claimCounts.review()
+                      + " review</white> <dark_gray>•</dark_gray> <gray>claimed:</gray> <white>"
+                      + claimCounts.claimed() + "</white>"));
+              String signer = portableSignerHealthy ? "<green>healthy</green>" : "<red>unavailable</red>";
+              sender.sendMessage(Text.parse(portableCounts == null
+                      ? "<gray>Portable crates:</gray> " + signer + " <dark_gray>•</dark_gray> <red>counts unavailable</red>"
+                      : "<gray>Portable crates:</gray> " + signer
+                      + " <dark_gray>•</dark_gray> <white>" + portableCounts.unused()
+                      + " unused</white> <dark_gray>•</dark_gray> <white>" + portableCounts.reserved()
+                      + " reserved</white> <dark_gray>•</dark_gray> <white>" + portableCounts.consumed()
+                      + " consumed</white> <dark_gray>•</dark_gray> <white>" + portableCounts.review()
+                      + " review</white>"));
+              sender.sendMessage(Text.parse("<gray>Runtime snapshot:</gray> <white>" + runtime.snapshot().revision()
+                      + "</white> <dark_gray>•</dark_gray> <gray>Published crates:</gray> <white>"
+                      + runtime.all().size() + "</white>"));
+              sender.sendMessage(Text.parse("<gray>Active opening/edit sessions:</gray> <white>"
+                      + (openings.pendingCount() + draftSessions.activeSessions()) + "</white>"));
+          }
+
+          private record DiagnosticDatabaseSnapshot(
+                  int pendingJournals,
+                  DatabaseService.JournalHealth journalHealth,
+                  List<DatabaseService.JournalDiagnostic> journalEntries,
+                  DatabaseService.ClaimCounts claimCounts,
+                  DatabaseService.PortableIssueCounts portableCounts,
+                  boolean portableSecretPresent) {
+              private DiagnosticDatabaseSnapshot {
+                  journalEntries = List.copyOf(journalEntries);
+              }
+          }
+
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          old = '''            if (coreBridge != null) {
+                  coreBridge.registerStarting();
+                  updateCoreHealth();
+              }
+              messages.send(sender, "reloaded");
+          '''
+          old = old.replace('              ', '')
+          new = '''            if (coreBridge != null) {
+                  coreBridge.registerStarting();
+                  updateCoreHealthAsync();
+              }
+              messages.send(sender, "reloaded");
+          '''.replace('              ', '')
+          if old not in text:
+              raise SystemExit('Reload Core health block changed unexpectedly')
+          text = text.replace(old, new, 1)
+
+          health_start = text.index('    private void updateCoreHealth() {')
+          health_end = text.index('    private void draftStateChanged(', health_start)
+          health = '''    private void updateCoreHealth() {
+              if (coreBridge == null || !coreBridge.available()) return;
+              try {
+                  applyCoreHealth(database == null ? 0 : database.pendingJournalCount(), null);
+              } catch (Exception error) {
+                  applyCoreHealth(-1, error);
+              }
+          }
+
+          private void updateCoreHealthAsync() {
+              if (coreBridge == null || !coreBridge.available() || !isEnabled()) return;
+              getServer().getScheduler().runTaskAsynchronously(this, () -> {
+                  int pending = -1;
+                  Exception failure = null;
+                  try {
+                      pending = database == null ? 0 : database.pendingJournalCount();
+                  } catch (Exception error) {
+                      failure = error;
+                  }
+                  int finalPending = pending;
+                  Exception finalFailure = failure;
+                  if (!isEnabled()) return;
+                  getServer().getScheduler().runTask(this, () -> {
+                      if (isEnabled()) applyCoreHealth(finalPending, finalFailure);
+                  });
+              });
+          }
+
+          private void applyCoreHealth(int pendingJournals, Exception failure) {
+              if (coreBridge == null || !coreBridge.available()) return;
+              if (failure != null) {
+                  coreBridge.markDegraded("Crate runtime is ready; health probe failed: "
+                          + failure.getClass().getSimpleName());
+              } else if (pendingJournals > 0) {
+                  coreBridge.markDegraded("Crate runtime is ready; " + pendingJournals
+                          + " opening journal entr" + (pendingJournals == 1 ? "y requires" : "ies require")
+                          + " manual review");
+              } else {
+                  coreBridge.markReady("Crate engine, API, key registry, runtime snapshot and writer are ready");
+              }
+          }
+
+          '''
+          text = text[:health_start] + health + text[health_end:]
+          main.write_text(text)
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/revamp-diagnostics-threading-patch.yml
+          git add src/main/java/com/antondev/crates/PlexonCrates.java
+          git config user.name "Tonim"
+          git config user.email "99552287+ZpkDxGames@users.noreply.github.com"
+          git commit -m "perf: move admin diagnostic database probes off main thread"
+          git push origin HEAD:revamp/5.1.0-full-source-hardening

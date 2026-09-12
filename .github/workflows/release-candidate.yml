@@ -5,6 +5,8 @@ on:
     branches: [revamp/6.0.0-gui-animation-overhaul]
     paths:
       - pom.xml
+      - .github/workflows/release-candidate.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -135,7 +137,7 @@ jobs:
             com/antondev/crates/PlexonCrates.class \
             com/antondev/crates/service/OpeningService.class \
             com/antondev/crates/gui/OpeningProfilePresentationService.class \
-            com/antondev/crates/animation/OpeningAnimationCoordinator.class \
+            com/antondev/crates/gui/OpeningAnimationCoordinator.class \
             com/antondev/crates/animation/CrateParticleCoordinator.class \
             com/antondev/crates/item/ExactItemInspector.class \
             com/antondev/crates/service/ClaimService.class \

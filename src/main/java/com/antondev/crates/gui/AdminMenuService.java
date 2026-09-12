@@ -54,6 +54,7 @@ import org.bukkit.persistence.PersistentDataType;
 public final class AdminMenuService {
     private final PlexonCrates plugin;
     private final NamespacedKey editorItem;
+    private final ExactItemDiagnosticPresentation exactDiagnostics = new ExactItemDiagnosticPresentation();
     private final Map<UUID, String> crateSearch = new ConcurrentHashMap<>();
 
     public AdminMenuService(PlexonCrates plugin) {
@@ -178,6 +179,12 @@ public final class AdminMenuService {
                     Text.parse("<gray>Used by crates</gray> <dark_gray>»</dark_gray> <white>" + plugin.crates().referencesToKey(entry.id()) + "</white>"),
                     entry.resolved() ? Text.parse("<green>Exact template resolved.</green>") : Text.parse("<red>Template unresolved.</red>"),
                     Text.parse("<dark_gray>Right-click test • Shift-left rotate • Shift-right delete</dark_gray>")));
+            if (entry.exactTemplate() != null) {
+                var diagnosticLore = new ArrayList<Component>();
+                diagnosticLore.add(Component.empty());
+                diagnosticLore.addAll(exactDiagnostics.single(entry.exactTemplate(), "Resolved exact key template"));
+                appendLore(icon, diagnosticLore);
+            }
             int slot = slots.get(index);
             inventory.setItem(slot, icon);
             holder.bind(slot, "key-entry", entry.id());
@@ -252,6 +259,11 @@ public final class AdminMenuService {
             holder.bind(itemSlots.get(index), "reward-input", draft.id());
         }
         for (int slot : itemSlots) holder.bind(slot, "reward-input", draft.id());
+        int exactDiagnosticsSlot = menus.slot("reward-builder.exact-diagnostics");
+        ItemStack exactDiagnosticsItem = menus.item("reward-builder.exact-diagnostics");
+        appendLore(exactDiagnosticsItem, exactDiagnostics.bundle(items));
+        inventory.setItem(exactDiagnosticsSlot, exactDiagnosticsItem);
+        holder.bind(exactDiagnosticsSlot, "noop", draft.id());
         put(inventory, holder, "reward-builder", "name", "name");
         put(inventory, holder, "reward-builder", "chance", "chance",
                 Text.value("chance", format(draft.baseChancePercent())));
@@ -507,6 +519,10 @@ public final class AdminMenuService {
                     Text.parse("<gray>Crate</gray> <dark_gray>»</dark_gray> <white>" + entry.crate().id() + "</white>"),
                     Text.parse("<gray>Base chance</gray> <dark_gray>»</dark_gray> <yellow>"
                             + format(entry.reward().baseChancePercent()) + "%</yellow>")));
+            var diagnosticLore = new ArrayList<Component>();
+            diagnosticLore.add(Component.empty());
+            diagnosticLore.addAll(exactDiagnostics.bundle(entry.reward().itemCopies()));
+            appendLore(icon, diagnosticLore);
             inventory.setItem(slots.get(index), icon);
         }
         addNavigation(inventory, holder, "global-rewards", page, rewards.size(), slots.size());
@@ -1990,12 +2006,14 @@ public final class AdminMenuService {
     private List<KeyEntry> keyEntries() {
         var result = new LinkedHashMap<String, KeyEntry>();
         for (KeyDefinition definition : plugin.keys().definitions()) {
+            ItemStack exactTemplate = plugin.keys().template(definition.id()).orElse(null);
             result.put(definition.id(), new KeyEntry(definition.id(), definition.source().name(), definition.icon(),
-                    plugin.keys().resolve(definition.id()).isPresent()));
+                    exactTemplate, exactTemplate != null));
         }
         for (Map.Entry<String, ExternalKeyDescriptor> external : plugin.keys().discovered().entrySet()) {
+            ItemStack exactTemplate = external.getValue().template();
             result.putIfAbsent(external.getKey(), new KeyEntry(external.getKey(), "PLEXONKEYS (UNBOUND)",
-                    external.getValue().template(), true));
+                    exactTemplate, exactTemplate, true));
         }
         return result.values().stream().sorted(Comparator.comparing(KeyEntry::id)).toList();
     }
@@ -2161,9 +2179,13 @@ public final class AdminMenuService {
         }
     }
 
-    private record KeyEntry(String id, String source, ItemStack icon, boolean resolved) {
-        private KeyEntry { icon = icon.clone(); }
+    private record KeyEntry(String id, String source, ItemStack icon, ItemStack exactTemplate, boolean resolved) {
+        private KeyEntry {
+            icon = icon.clone();
+            exactTemplate = exactTemplate == null ? null : exactTemplate.clone();
+        }
         @Override public ItemStack icon() { return icon.clone(); }
+        @Override public ItemStack exactTemplate() { return exactTemplate == null ? null : exactTemplate.clone(); }
     }
     private record GlobalReward(Crate crate, CrateReward reward) {}
 }

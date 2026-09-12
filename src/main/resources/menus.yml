@@ -453,6 +453,11 @@ reward-builder:
   chance: {slot: 21, material: LIME_DYE, name: <yellow>Base Chance</yellow>, lore: ['<gray>Current:</gray> <white><chance>%</white>', <dark_gray>Left +1% • Right -1% • Shift exact</dark_gray>, <gray>Other unlocked rewards rebalance automatically.</gray>]}
   command: {slot: 23, material: COMMAND_BLOCK, name: <gold>Console Commands</gold>, lore: ['<gray>Commands:</gray> <white><commands></white>', <dark_gray>Left add • Right remove • Shift-left edit</dark_gray>, <dark_gray>Shift-right reorder</dark_gray>]}
   experience: {slot: 25, material: EXPERIENCE_BOTTLE, name: <green>Experience</green>, lore: ['<gray>Left: points • Right: levels</gray>', '<gray>Points:</gray> <white><points></white> <gray>Levels:</gray> <white><levels></white>']}
+  exact-diagnostics:
+    slot: 27
+    material: SPYGLASS
+    name: <aqua>Exact Item Diagnostics</aqua>
+    lore: [<gray>Read-only native Paper byte diagnostics.</gray>, <dark_gray>Captured reward items are never rewritten here.</dark_gray>]
   money: {slot: 29, material: GOLD_INGOT, name: <gold>Vault Money</gold>, lore: ['<gray>Amount:</gray> <white><money></white>']}
   rarity: {slot: 31, material: AMETHYST_SHARD, name: <light_purple>Rarity</light_purple>, lore: ['<gray>Current:</gray> <white><rarity></white>']}
   clear: {slot: 33, material: CAULDRON, name: <red>Clear Captured Items</red>, lore: []}

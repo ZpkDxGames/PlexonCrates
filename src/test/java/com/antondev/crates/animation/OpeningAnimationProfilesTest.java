@@ -26,6 +26,31 @@ class OpeningAnimationProfilesTest {
     }
 
     @Test
+    void migrationSafeGlobalPreservesEachCratesLegacyPresentation() {
+        OpeningAnimationProfiles registry = new OpeningAnimationProfiles(
+                OpeningAnimationProfiles.migrationSafeDefaults(AnimationType.ROULETTE));
+        assertEquals(OpeningAnimationProfiles.LEGACY_INHERIT, registry.snapshot().globalProfileId());
+        assertEquals(OpeningAnimationStyle.INSTANT, registry.resolve("basic", AnimationType.INSTANT).style());
+        assertEquals(OpeningAnimationStyle.ROULETTE, registry.resolve("rare", AnimationType.ROULETTE).style());
+        assertEquals(OpeningAnimationStyle.CHARGE_REVEAL, registry.resolve("epic", AnimationType.REVEAL).style());
+        assertTrue(registry.resolve("legendary", AnimationType.SUMMARY).summaryOnFinish());
+    }
+
+    @Test
+    void namedGlobalCanBeEnabledWhileOneCrateExplicitlyKeepsLegacy() {
+        OpeningAnimationProfiles.Snapshot source = OpeningAnimationProfiles.migrationSafeDefaults(AnimationType.ROULETTE);
+        source = OpeningAnimationProfiles.withProfile(source, "spin",
+                OpeningAnimationProfile.defaults(OpeningAnimationStyle.SPIN));
+        source = OpeningAnimationProfiles.withGlobal(source, "spin");
+        source = OpeningAnimationProfiles.assign(source, "legacy_crate", OpeningAnimationProfiles.LEGACY_INHERIT);
+        OpeningAnimationProfiles registry = new OpeningAnimationProfiles(source);
+
+        assertEquals(OpeningAnimationStyle.SPIN, registry.resolve("modern", AnimationType.REVEAL).style());
+        assertEquals(OpeningAnimationStyle.CHARGE_REVEAL,
+                registry.resolve("legacy_crate", AnimationType.REVEAL).style());
+    }
+
+    @Test
     void serializeAndLoadRoundTripProfilesAndAssignments() throws Exception {
         OpeningAnimationProfiles.Snapshot source = OpeningAnimationProfiles.defaults(AnimationType.ROULETTE);
         source = OpeningAnimationProfiles.withProfile(source, "burst",
@@ -40,6 +65,20 @@ class OpeningAnimationProfilesTest {
         assertEquals(source.crateAssignments(), loaded.crateAssignments());
         assertEquals(OpeningAnimationStyle.SPIRAL_BURST, loaded.profiles().get("burst").style());
         assertEquals(source.profiles().get("burst").stageTicks(), loaded.profiles().get("burst").stageTicks());
+    }
+
+    @Test
+    void legacyGlobalRoundTripsWithoutBecomingANamedProfile() throws Exception {
+        OpeningAnimationProfiles.Snapshot source = OpeningAnimationProfiles.migrationSafeDefaults(AnimationType.ROULETTE);
+        String yaml = OpeningAnimationProfiles.serialize(source);
+        Path file = temporary.resolve("legacy.yml");
+        Files.writeString(file, yaml);
+
+        OpeningAnimationProfiles.Snapshot loaded = OpeningAnimationProfiles.load(file.toFile(), AnimationType.INSTANT);
+        assertEquals(OpeningAnimationProfiles.LEGACY_INHERIT, loaded.globalProfileId());
+        assertFalse(loaded.profiles().containsKey(OpeningAnimationProfiles.LEGACY_INHERIT));
+        assertEquals(OpeningAnimationStyle.CHARGE_REVEAL,
+                new OpeningAnimationProfiles(loaded).resolve("crate", AnimationType.REVEAL).style());
     }
 
     @Test
@@ -68,6 +107,16 @@ class OpeningAnimationProfilesTest {
                 () -> OpeningAnimationProfiles.removeProfile(assigned, "spin"));
         assertThrows(IllegalArgumentException.class,
                 () -> OpeningAnimationProfiles.removeProfile(removable, OpeningAnimationProfiles.BUILTIN_DEFAULT));
+        assertThrows(IllegalArgumentException.class,
+                () -> OpeningAnimationProfiles.removeProfile(removable, OpeningAnimationProfiles.LEGACY_INHERIT));
+    }
+
+    @Test
+    void legacyIsReservedAndCannotBeCreatedAsANamedProfile() {
+        OpeningAnimationProfiles.Snapshot source = OpeningAnimationProfiles.defaults(AnimationType.ROULETTE);
+        assertThrows(IllegalArgumentException.class, () -> OpeningAnimationProfiles.withProfile(
+                source, OpeningAnimationProfiles.LEGACY_INHERIT,
+                OpeningAnimationProfile.defaults(OpeningAnimationStyle.SPIN)));
     }
 
     @Test

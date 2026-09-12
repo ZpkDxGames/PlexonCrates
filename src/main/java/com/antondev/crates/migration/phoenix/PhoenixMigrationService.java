@@ -11,6 +11,7 @@ import com.antondev.crates.migration.phoenix.PhoenixFixtureAdapter.PhoenixLocati
 import com.antondev.crates.migration.phoenix.PhoenixFixtureAdapter.PhoenixPlayer;
 import com.antondev.crates.migration.phoenix.PhoenixFixtureAdapter.PhoenixReward;
 import com.antondev.crates.model.Crate;
+import com.antondev.crates.service.KeyService;
 import com.antondev.crates.service.LocationStore;
 import java.io.IOException;
 import java.io.InputStream;
@@ -288,8 +289,9 @@ public final class PhoenixMigrationService {
         Objects.requireNonNull(planningState, "planningState");
         String actor = actorName == null || actorName.isBlank() ? "CONSOLE" : actorName;
         return plugin.io().submit(() -> prepareAsyncImport(planningState))
-                .thenCompose(prepared -> primary(() -> new KeyedImport(prepared,
-                        ensureKeys(prepared.fixture(), actor))))
+                .thenCompose(prepared -> primary(() -> prepareKeys(prepared, actor)))
+                .thenCompose(preparedKeys -> plugin.io().submit(() -> writePreparedKeys(preparedKeys)))
+                .thenCompose(preparedKeys -> primary(() -> installPreparedKeys(preparedKeys)))
                 .thenCompose(keyed -> plugin.io().submit(() -> buildDraftPayloads(keyed)))
                 .thenCompose(payloads -> primary(() -> prepareDraftBatch(payloads, actor)))
                 .thenCompose(batch -> plugin.io().submit(() -> writeDraftBatch(batch)))
@@ -317,6 +319,56 @@ public final class PhoenixMigrationService {
         copyTree(fixture.root(), backup.resolve("PhoenixCratesLite"));
         plugin.database().createBackup(dataRoot, backup.resolve("PlexonCrates")).join();
         return new AsyncImportPreparation(currentScan, currentPlan, fixture, backup, importedAt);
+    }
+
+    private PreparedKeyImport prepareKeys(AsyncImportPreparation prepared, String actor) throws Exception {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Phoenix key preparation requires primary thread");
+        KeyService.PreparedMutation mutation = plugin.keys().beginPreparedMutation();
+        var mappings = new LinkedHashMap<String, KeyMapping>();
+        for (PhoenixKey source : prepared.fixture().keys().values().stream()
+                .sorted(Comparator.comparing(PhoenixKey::sourceId)).toList()) {
+            String preferred = source.targetId();
+            if (plugin.keys().definition(mutation, preferred).isEmpty()
+                    && plugin.keys().discovered().containsKey(preferred)) {
+                mutation = plugin.keys().prepareBindExternal(mutation, preferred, actor);
+            }
+            if (plugin.keys().definition(mutation, preferred).isEmpty()) {
+                mutation = plugin.keys().prepareCreateCaptured(
+                        mutation, preferred, keyDisplayName(source), source.template(), actor);
+            }
+            ItemStack current = plugin.keys().template(mutation, preferred).orElseThrow(() ->
+                    new IllegalStateException("Mapped Plexon key is unresolved: " + preferred));
+            if (ItemCodec.one(current).isSimilar(ItemCodec.one(source.template()))) {
+                mappings.put(source.sourceId().toLowerCase(Locale.ROOT),
+                        new KeyMapping(source.sourceId(), List.of(preferred), false));
+                continue;
+            }
+            String legacy = legacyKeyId(preferred);
+            if (plugin.keys().definition(mutation, legacy).isEmpty()) {
+                mutation = plugin.keys().prepareCreateCaptured(
+                        mutation, legacy, keyDisplayName(source), source.template(), actor);
+            } else {
+                ItemStack existingLegacy = plugin.keys().template(mutation, legacy).orElseThrow(() ->
+                        new IllegalStateException("Existing Phoenix legacy key is unresolved: " + legacy));
+                if (!ItemCodec.one(existingLegacy).isSimilar(ItemCodec.one(source.template()))) {
+                    throw new IllegalStateException("Legacy key ID conflicts with a different exact item: " + legacy);
+                }
+            }
+            mappings.put(source.sourceId().toLowerCase(Locale.ROOT),
+                    new KeyMapping(source.sourceId(), List.of(preferred, legacy), true));
+        }
+        return new PreparedKeyImport(prepared, mutation, Map.copyOf(mappings));
+    }
+
+    private PreparedKeyImport writePreparedKeys(PreparedKeyImport prepared) throws Exception {
+        plugin.keys().writePreparedMutation(prepared.mutation());
+        return prepared;
+    }
+
+    private KeyedImport installPreparedKeys(PreparedKeyImport prepared) {
+        if (!Bukkit.isPrimaryThread()) throw new IllegalStateException("Phoenix key activation requires primary thread");
+        plugin.keys().installPreparedMutation(prepared.mutation());
+        return new KeyedImport(prepared.prepared(), prepared.keyMappings());
     }
 
     private DraftPayloadBatch buildDraftPayloads(KeyedImport keyed) throws Exception {
@@ -971,6 +1023,10 @@ public final class PhoenixMigrationService {
                                long orphanRewardWins, Instant importedAt) {}
     private record AsyncImportPreparation(ScanResult scan, PlanResult plan, Fixture fixture,
                                           Path backup, Instant importedAt) {}
+    private record PreparedKeyImport(AsyncImportPreparation prepared, KeyService.PreparedMutation mutation,
+                                     Map<String, KeyMapping> keyMappings) {
+        private PreparedKeyImport { keyMappings = Map.copyOf(keyMappings); }
+    }
     private record KeyedImport(AsyncImportPreparation prepared, Map<String, KeyMapping> keyMappings) {
         private KeyedImport { keyMappings = Map.copyOf(keyMappings); }
     }

@@ -123,6 +123,7 @@ public final class SimulationAdminListener implements Listener {
             else if (slot == 14) runSimulation(player, holder, CrateSimulationService.MAX_SAMPLES);
             else if (slot == 16) openHub(player, holder.crateId,
                     holder.snapshot.mode() == Mode.CONFIGURED ? Mode.PLAYER_CONTEXT : Mode.CONFIGURED);
+            else if (slot == 19) previewAnimation(player, holder);
             else if (slot == 20) openExactItemAudit(player, holder);
             else if (slot == 22) backToEditor(player, holder.crateId);
             return;
@@ -189,12 +190,57 @@ public final class SimulationAdminListener implements Listener {
                 line("Active", simulations.activeRequests()),
                 line("Queued", simulations.queuedRequests()),
                 Component.text("One bounded worker • no per-player task", NamedTextColor.DARK_GRAY))));
+        inventory.setItem(19, item(Material.AMETHYST_SHARD, "<light_purple><bold>Animation Preview</bold></light_purple>", List.of(
+                line("Configured type", crate.animation()),
+                Component.text("Uses a deterministic non-granting dry selection.", NamedTextColor.GRAY),
+                Component.text("No OpeningService/payment/journal path is entered.", NamedTextColor.GREEN))));
         inventory.setItem(20, item(Material.KNOWLEDGE_BOOK, "<aqua><bold>Exact Item Audit</bold></aqua>", List.of(
                 Component.text("Inspect the exact item currently in your main hand.", NamedTextColor.GRAY),
                 Component.text("Shows native-byte fingerprint and safety diagnostics.", NamedTextColor.GRAY),
                 Component.text("The displayed item clone is never relored or rewritten.", NamedTextColor.GREEN))));
         inventory.setItem(22, item(Material.ARROW, "<gray>Back to Crate Editor</gray>", List.of()));
         player.openInventory(inventory);
+    }
+
+    private void previewAnimation(Player player, SimulationHolder source) {
+        if (!current(player, source.snapshot)) {
+            stale(player, source.snapshot);
+            return;
+        }
+        Crate crate = plugin.crates().find(source.crateId).orElse(null);
+        if (crate == null) {
+            player.closeInventory();
+            return;
+        }
+        final String selectedId;
+        try {
+            selectedId = simulations.dryRun(source.snapshot, stableSeed(source.snapshot, 17));
+        } catch (RuntimeException error) {
+            player.sendActionBar(Text.parse("<red>Animation preview unavailable:</red> <gray>"
+                    + safe(rootMessage(error)) + "</gray>"));
+            return;
+        }
+        CrateReward reward = crate.rewards().get(selectedId);
+        if (reward == null) {
+            player.sendActionBar(Text.parse("<red>The dry-selected reward is no longer available.</red>"));
+            return;
+        }
+        Runnable returnIfStillPreviewing = () -> {
+            if (!player.isOnline()) return;
+            Inventory top = player.getOpenInventory().getTopInventory();
+            if (top != null && top.getHolder() instanceof MenuHolder menu
+                    && menu.kind() == MenuHolder.Kind.OPENING) {
+                openHub(player, crate.id(), source.snapshot.mode());
+            }
+        };
+        player.sendActionBar(Text.parse("<aqua>Non-granting animation preview:</aqua> <white>"
+                + crate.animation() + "</white>"));
+        switch (crate.animation()) {
+            case ROULETTE -> plugin.menus().animate(player, crate, reward, returnIfStillPreviewing);
+            case REVEAL -> plugin.menus().reveal(player, crate, reward, returnIfStillPreviewing);
+            case SUMMARY -> plugin.menus().openSummary(player, crate, List.of(reward));
+            case INSTANT -> showDry(player, source.snapshot, reward.id(), stableSeed(source.snapshot, 17));
+        }
     }
 
     private void openExactItemAudit(Player player, SimulationHolder source) {
@@ -393,6 +439,7 @@ public final class SimulationAdminListener implements Listener {
         ItemStack item = item(Material.SPYGLASS, "<gradient:#72D9FF:#C8F3FF><bold>Test & Simulate</bold></gradient>", List.of(
                 Component.text("Dry-run reward selection without granting.", NamedTextColor.GRAY),
                 Component.text("Run bounded expected-vs-observed simulations.", NamedTextColor.GRAY),
+                Component.text("Preview opening presentation without entering the transaction path.", NamedTextColor.GRAY),
                 Component.text("Audit native exact-item payloads without mutation.", NamedTextColor.GRAY),
                 Component.text("No key, reward, journal or player state is mutated.", NamedTextColor.GREEN),
                 Component.text("Click to open the Test Lab.", NamedTextColor.DARK_GRAY)));

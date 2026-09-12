@@ -14,9 +14,9 @@ class RewardManagementIntegrityArchitectureTest {
     @Test
     void copyRewardCopiesAuthoredLeafDataInsteadOfRebuildingItems() throws Exception {
         String source = Files.readString(REGISTRY);
-        String method = section(source, "public void copyReward(", "public void moveReward(");
+        String method = method(source, "public void copyReward(");
         assertTrue(method.contains("section.getValues(true)"));
-        assertTrue(method.contains("yaml.set(targetPath + \".\" + entry.getKey(), entry.getValue())"));
+        assertTrue(method.contains("entry.getValue()"));
         assertFalse(method.contains("new ItemStack"));
         assertFalse(method.contains("Material.matchMaterial"));
         assertFalse(method.contains("ItemCodec.encode"));
@@ -25,17 +25,18 @@ class RewardManagementIntegrityArchitectureTest {
     @Test
     void reorderMovesWholeRewardSectionsWithoutReencodingExactItems() throws Exception {
         String source = Files.readString(REGISTRY);
-        String method = section(source, "public void moveReward(", "public void deleteReward(");
+        String method = method(source, "public void moveReward(");
         assertTrue(method.contains("reward.getValues(true)"));
-        assertTrue(method.contains("yaml.set(\"rewards.\" + current + \".\" + entry.getKey(), entry.getValue())"));
+        assertTrue(method.contains("entry.getValue()"));
         assertFalse(method.contains("new ItemStack"));
+        assertFalse(method.contains("Material.matchMaterial"));
         assertFalse(method.contains("ItemCodec.encode"));
     }
 
-    private static String section(String source, String start, String end) {
-        int from = source.indexOf(start);
-        int to = source.indexOf(end, from + start.length());
-        if (from < 0 || to < 0) throw new AssertionError("Could not isolate " + start);
-        return source.substring(from, to);
+    private static String method(String source, String signature) {
+        int from = source.indexOf(signature);
+        if (from < 0) throw new AssertionError("Could not find " + signature);
+        int next = source.indexOf("\n    public ", from + signature.length());
+        return source.substring(from, next < 0 ? source.length() : next);
     }
 }

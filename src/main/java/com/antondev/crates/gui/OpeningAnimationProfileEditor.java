@@ -112,12 +112,15 @@ public final class OpeningAnimationProfileEditor {
 
         String assigned = snapshot.crateAssignments().get(crateId);
         String effective = assigned == null ? snapshot.globalProfileId() : assigned;
+        String effectiveLabel = OpeningAnimationProfiles.LEGACY_INHERIT.equals(effective)
+                ? "legacy (crate.animation)" : effective;
         inventory.setItem(4, item(Material.AMETHYST_SHARD, "<white><bold>Assignment Status</bold></white>", List.of(
                 line("Crate", crateId),
-                line("Effective profile", effective),
+                line("Effective profile", effectiveLabel),
                 line("Assignment", assigned == null ? "inherits global" : "crate override"),
                 line("Global profile", snapshot.globalProfileId()),
                 Component.empty(),
+                Component.text("Legacy inheritance preserves the crate's existing 5.x animation type.", NamedTextColor.GRAY),
                 Component.text("Profiles are presentation-only; changing them does not alter reward odds or payment.", NamedTextColor.GREEN))));
 
         int start = page * PROFILE_SLOTS.size();
@@ -144,6 +147,10 @@ public final class OpeningAnimationProfileEditor {
                 "<green>Clone Effective Profile</green>");
         action(holder, inventory, 49, "back", "", Material.OAK_DOOR, "<gray>Back to Test Lab</gray>");
         action(holder, inventory, 50, "inherit", "", Material.COMPARATOR, "<yellow>Inherit Global</yellow>");
+        action(holder, inventory, 51, "legacy-global", "", Material.RECOVERY_COMPASS,
+                "<yellow>Preserve Legacy Globally</yellow>");
+        action(holder, inventory, 52, "legacy-crate", "", Material.CLOCK,
+                "<yellow>Use Legacy for This Crate</yellow>");
         if ((page + 1) * PROFILE_SLOTS.size() < ids.size()) {
             action(holder, inventory, 53, "next", "", Material.ARROW, "<gray>Next</gray>");
         }
@@ -225,6 +232,13 @@ public final class OpeningAnimationProfileEditor {
             case "next" -> openList(player, holder.crateId, holder.mode, holder.page + 1);
             case "back" -> returnHandler.open(player, holder.crateId, holder.mode);
             case "inherit" -> mutate(player, snapshot -> OpeningAnimationProfiles.inheritGlobal(snapshot, holder.crateId),
+                    () -> openList(player, holder.crateId, holder.mode, holder.page));
+            case "legacy-global" -> mutate(player,
+                    snapshot -> OpeningAnimationProfiles.withGlobal(snapshot, OpeningAnimationProfiles.LEGACY_INHERIT),
+                    () -> openList(player, holder.crateId, holder.mode, holder.page));
+            case "legacy-crate" -> mutate(player,
+                    snapshot -> OpeningAnimationProfiles.assign(snapshot, holder.crateId,
+                            OpeningAnimationProfiles.LEGACY_INHERIT),
                     () -> openList(player, holder.crateId, holder.mode, holder.page));
             case "clone-effective" -> requestClone(player, holder, action.value);
             default -> { }
@@ -319,7 +333,14 @@ public final class OpeningAnimationProfileEditor {
                         if (snapshot.profiles().containsKey(newId)) {
                             throw new IllegalArgumentException("That animation profile already exists");
                         }
-                        OpeningAnimationProfile source = snapshot.profiles().get(sourceId);
+                        OpeningAnimationProfile source;
+                        if (OpeningAnimationProfiles.LEGACY_INHERIT.equals(sourceId)) {
+                            var crate = plugin.crates().find(holder.crateId).orElseThrow(
+                                    () -> new IllegalStateException("Crate no longer exists"));
+                            source = OpeningAnimationProfile.fromLegacy(crate.animation());
+                        } else {
+                            source = snapshot.profiles().get(sourceId);
+                        }
                         if (source == null) throw new IllegalStateException("Source animation profile no longer exists");
                         return OpeningAnimationProfiles.withProfile(snapshot, newId, source);
                     });

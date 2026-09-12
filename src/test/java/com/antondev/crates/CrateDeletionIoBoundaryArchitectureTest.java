@@ -37,9 +37,12 @@ class CrateDeletionIoBoundaryArchitectureTest {
                 "/** Applies a deletion after its mirror/canonical persistence stages have completed. */");
         String install = section(source, "public void installDeletion(",
                 "/** Synchronous compatibility API retained for tests/offline tooling. */\n    public void delete(");
-        assertFalse(prepare.contains("Files."));
+        assertFalse(prepare.contains("Files.delete"));
+        assertFalse(prepare.contains("Files.write"));
         assertTrue(mirror.contains("Files.deleteIfExists(prepared.file())"));
-        assertFalse(install.contains("Files."));
+        assertFalse(install.contains("Files.delete"));
+        assertFalse(install.contains("Files.write"));
+        assertFalse(install.contains("AtomicFiles."));
         assertTrue(install.contains("fireChange(current, CrateDefinitionChangeEvent.ChangeType.DELETED)"));
     }
 

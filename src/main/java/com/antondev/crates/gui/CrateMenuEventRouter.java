@@ -17,23 +17,27 @@ import org.bukkit.event.player.PlayerTeleportEvent;
 /**
  * Single registered authority for PlexonCrates inventory lifecycle events.
  *
- * <p>The legacy/admin menu service and the player product surface remain
- * separate renderers, but no longer compete as independent Bukkit inventory
- * listeners. Routing is based exclusively on the custom MenuHolder kind.</p>
+ * <p>The legacy/admin, simulation and player product surfaces remain separate
+ * renderers, but no longer compete as independent Bukkit inventory listeners.
+ * Routing is based exclusively on custom inventory holders/markers.</p>
  */
 public final class CrateMenuEventRouter implements Listener {
     private final PlexonCrates plugin;
     private final MenuService menus;
     private final PlayerCrateCommandRouter player;
+    private final SimulationAdminListener simulation;
 
-    public CrateMenuEventRouter(PlexonCrates plugin, MenuService menus, PlayerCrateCommandRouter player) {
+    public CrateMenuEventRouter(PlexonCrates plugin, MenuService menus, PlayerCrateCommandRouter player,
+                                SimulationAdminListener simulation) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.menus = Objects.requireNonNull(menus, "menus");
         this.player = Objects.requireNonNull(player, "player");
+        this.simulation = Objects.requireNonNull(simulation, "simulation");
     }
 
     @EventHandler(priority = EventPriority.NORMAL)
     public void legacyClick(InventoryClickEvent event) {
+        if (simulation.routeClick(event)) return;
         MenuHolder holder = holder(event.getView().getTopInventory().getHolder());
         if (holder == null || playerKind(holder.kind())) return;
         if (routeLiveReload(event, holder)) return;
@@ -49,6 +53,7 @@ public final class CrateMenuEventRouter implements Listener {
 
     @EventHandler(priority = EventPriority.NORMAL)
     public void legacyDrag(InventoryDragEvent event) {
+        if (simulation.routeDrag(event)) return;
         MenuHolder holder = holder(event.getView().getTopInventory().getHolder());
         if (holder == null || playerKind(holder.kind())) return;
         menus.drag(event);
@@ -63,7 +68,7 @@ public final class CrateMenuEventRouter implements Listener {
 
     @EventHandler(priority = EventPriority.NORMAL)
     public void closeSession(InventoryCloseEvent event) {
-        // MenuService owns canonical GuiSessionService cleanup for every holder.
+        // MenuService owns canonical GuiSessionService cleanup for every MenuHolder.
         menus.close(event);
     }
 

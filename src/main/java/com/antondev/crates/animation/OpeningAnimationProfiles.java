@@ -3,6 +3,8 @@ package com.antondev.crates.animation;
 import com.antondev.crates.domain.crate.AnimationType;
 import com.antondev.crates.service.CrateRegistry;
 import java.io.File;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -190,13 +192,7 @@ public final class OpeningAnimationProfiles {
         } catch (IllegalArgumentException error) {
             throw new IllegalArgumentException(path + ".particle is invalid", error);
         }
-        Sound sound;
-        try {
-            sound = Sound.valueOf(yaml.getString(path + ".sound", defaults.sound().name())
-                    .trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException error) {
-            throw new IllegalArgumentException(path + ".sound is invalid", error);
-        }
+        Sound sound = soundConstant(yaml.getString(path + ".sound", soundConstantName(defaults.sound())), path + ".sound");
         return new OpeningAnimationProfile(style, ticks, particle, sound,
                 (float) yaml.getDouble(path + ".sound-volume", defaults.soundVolume()),
                 (float) yaml.getDouble(path + ".sound-pitch", defaults.soundPitch()),
@@ -211,12 +207,43 @@ public final class OpeningAnimationProfiles {
             yaml.set(path + ".stages." + stage.name().toLowerCase(Locale.ROOT) + "-ticks", profile.ticks(stage));
         }
         yaml.set(path + ".particle", profile.particle().name());
-        yaml.set(path + ".sound", profile.sound().name());
+        yaml.set(path + ".sound", soundConstantName(profile.sound()));
         yaml.set(path + ".sound-volume", profile.soundVolume());
         yaml.set(path + ".sound-pitch", profile.soundPitch());
         yaml.set(path + ".particle-budget-per-tick", profile.particleBudgetPerTick());
         yaml.set(path + ".receiver-range", profile.receiverRange());
         yaml.set(path + ".summary-on-finish", profile.summaryOnFinish());
+    }
+
+    /**
+     * Resolves built-in Sound constants without touching Bukkit's runtime registry.
+     * Paper's legacy Sound.valueOf/name bridge reaches Bukkit.getUnsafe(), which is
+     * intentionally unavailable during pure configuration validation/unit tests.
+     */
+    private static Sound soundConstant(String raw, String path) {
+        String name = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
+        try {
+            Field field = Sound.class.getField(name);
+            if (!Modifier.isStatic(field.getModifiers()) || !Sound.class.isAssignableFrom(field.getType())) {
+                throw new IllegalArgumentException(path + " is not a built-in sound constant: " + raw);
+            }
+            return (Sound) field.get(null);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException(path + " is invalid: " + raw, error);
+        }
+    }
+
+    private static String soundConstantName(Sound sound) {
+        Objects.requireNonNull(sound, "sound");
+        for (Field field : Sound.class.getFields()) {
+            if (!Modifier.isStatic(field.getModifiers()) || !Sound.class.isAssignableFrom(field.getType())) continue;
+            try {
+                if (field.get(null) == sound) return field.getName();
+            } catch (IllegalAccessException error) {
+                throw new IllegalStateException("Could not inspect Paper sound constants", error);
+            }
+        }
+        throw new IllegalArgumentException("Only built-in Paper sound constants can be persisted in animations.yml");
     }
 
     private static String id(String raw, String label) {

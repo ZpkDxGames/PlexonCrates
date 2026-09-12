@@ -31,6 +31,16 @@ class OpeningAnimationProfileEditorArchitectureTest {
     }
 
     @Test
+    void editorExposesMigrationSafeLegacyInheritanceAtBothScopes() throws Exception {
+        String source = Files.readString(EDITOR);
+        assertTrue(source.contains("OpeningAnimationProfiles.LEGACY_INHERIT"));
+        assertTrue(source.contains("\"legacy-global\""));
+        assertTrue(source.contains("\"legacy-crate\""));
+        assertTrue(source.contains("OpeningAnimationProfile.fromLegacy(crate.animation())"));
+        assertTrue(source.contains("legacy (crate.animation)"));
+    }
+
+    @Test
     void editorNeverOwnsRewardPaymentOrOpeningTransactions() throws Exception {
         String source = Files.readString(EDITOR);
         assertFalse(source.contains("OpeningService"));

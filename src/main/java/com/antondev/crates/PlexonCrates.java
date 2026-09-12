@@ -12,6 +12,8 @@ import com.antondev.crates.gui.GuiSessionService;
 import com.antondev.crates.gui.MenuService;
 import com.antondev.crates.gui.EditSessionService;
 import com.antondev.crates.gui.AdminMenuService;
+import com.antondev.crates.gui.SimulationAdminListener;
+import com.antondev.crates.gui.player.PlayerCrateCommandRouter;
 import com.antondev.crates.integration.core.CoreBridge;
 import com.antondev.crates.integration.core.CoreBridgeFactory;
 import com.antondev.crates.listener.CrateListener;
@@ -19,6 +21,7 @@ import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.database.DefinitionRepository;
 import com.antondev.crates.database.LegacyMigration;
 import com.antondev.crates.service.CrateRegistry;
+import com.antondev.crates.service.CrateSimulationService;
 import com.antondev.crates.service.ClaimService;
 import com.antondev.crates.service.PortableCrateService;
 import com.antondev.crates.service.DefinitionPublisher;
@@ -71,6 +74,7 @@ public class PlexonCrates extends JavaPlugin {
     private DefinitionPublisher definitionPublisher;
     private DisplayService displays;
     private GuiSessionService guiSessions;
+    private CrateSimulationService simulations;
     private MenuService menus;
     private EditSessionService editSessions;
     private AdminMenuService adminMenus;
@@ -136,6 +140,7 @@ public class PlexonCrates extends JavaPlugin {
             definitionPublisher = new DefinitionPublisher(this, definitionRepository, crates, keys, runtime,
                     draftSessions);
             guiSessions = new GuiSessionService();
+            simulations = new CrateSimulationService();
             editSessions = new EditSessionService(this);
             adminMenus = new AdminMenuService(this);
             menus = new MenuService(this);
@@ -145,6 +150,8 @@ public class PlexonCrates extends JavaPlugin {
                     ServicePriority.Normal);
 
             getServer().getPluginManager().registerEvents(menus, this);
+            getServer().getPluginManager().registerEvents(new SimulationAdminListener(this, simulations), this);
+            getServer().getPluginManager().registerEvents(new PlayerCrateCommandRouter(this), this);
             getServer().getPluginManager().registerEvents(editSessions, this);
             getServer().getPluginManager().registerEvents(new CrateListener(this), this);
             getServer().getPluginManager().registerEvents(wand, this);
@@ -185,6 +192,7 @@ public class PlexonCrates extends JavaPlugin {
             draftSessions.clear();
         }
         if (guiSessions != null) guiSessions.clear();
+        if (simulations != null) simulations.close();
         if (coreBridge != null) coreBridge.unregister();
         getServer().getServicesManager().unregisterAll(this);
         if (displays != null) displays.stop();

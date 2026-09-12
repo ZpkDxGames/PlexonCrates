@@ -13,6 +13,7 @@ class Phase3PlayerCrateUxArchitectureTest {
     private static final Path ROUTER = Path.of("src/main/java/com/antondev/crates/gui/player/PlayerCrateCommandRouter.java");
     private static final Path HOLDER = Path.of("src/main/java/com/antondev/crates/gui/MenuHolder.java");
     private static final Path SESSION = Path.of("src/main/java/com/antondev/crates/gui/GuiSessionService.java");
+    private static final Path MAIN = Path.of("src/main/java/com/antondev/crates/PlexonCrates.java");
     private static final Path CLAIMS = Path.of("src/main/java/com/antondev/crates/service/ClaimService.java");
     private static final Path PHYSICAL = Path.of("src/main/java/com/antondev/crates/listener/CrateListener.java");
     private static final Path LEGACY_MENU = Path.of("src/main/java/com/antondev/crates/gui/MenuService.java");
@@ -180,13 +181,18 @@ class Phase3PlayerCrateUxArchitectureTest {
     }
 
     @Test void playerUxReusesExistingGuiSessionAuthority() throws IOException {
-        String session = Files.readString(SESSION);
-        String holder = Files.readString(HOLDER);
-        assertTrue(session.contains("new PlayerCrateCommandRouter(plugin)"));
-        assertTrue(holder.contains("PLAYER_HALL"));
-        assertTrue(session.contains("ConcurrentHashMap<UUID, Active> active"));
-        assertFalse(Files.readString(UX).contains("new GuiSessionService"));
-    }
+    String session = Files.readString(SESSION);
+    String holder = Files.readString(HOLDER);
+    String main = Files.readString(MAIN);
+    assertTrue(holder.contains("PLAYER_HALL"));
+    assertTrue(session.contains("ConcurrentHashMap<UUID, Active> active"));
+    assertFalse(session.contains("registerEvents"));
+    assertFalse(session.contains("PlayerCrateCommandRouter"));
+    assertTrue(main.contains("registerEvents(new PlayerCrateCommandRouter(this), this)"));
+    assertTrue(main.contains("registerEvents(new SimulationAdminListener(this, simulations), this)"));
+    assertTrue(main.contains("if (simulations != null) simulations.close()"));
+    assertFalse(Files.readString(UX).contains("new GuiSessionService"));
+}
 
     @Test void physicalBlockOpeningAuthorityRemainsSeparateAndUntouchedByPlayerHall() throws IOException {
         String source = Files.readString(PHYSICAL);

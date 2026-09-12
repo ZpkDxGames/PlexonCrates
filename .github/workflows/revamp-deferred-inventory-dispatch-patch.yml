@@ -1,0 +1,89 @@
+name: Revamp deferred legacy inventory dispatch
+on:
+  push:
+    branches: [revamp/5.1.0-full-source-hardening]
+    paths: ['.github/workflows/revamp-deferred-inventory-dispatch-patch.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: revamp/5.1.0-full-source-hardening
+          fetch-depth: 0
+      - name: Defer legacy and admin inventory dispatch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          menu = Path('src/main/java/com/antondev/crates/gui/MenuService.java')
+          source = menu.read_text()
+          start = source.index('    @EventHandler\n    public void click(InventoryClickEvent event) {')
+          end = source.index('    private void massOpenClick(', start)
+          replacement = '''    public void click(InventoryClickEvent event) {\n        if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;\n        event.setCancelled(true);\n        if (!(event.getWhoClicked() instanceof Player player)) return;\n        MenuInteraction.Click click = MenuInteraction.Click.capture(event);\n        UUID playerId = player.getUniqueId();\n        Bukkit.getScheduler().runTask(plugin, () -> dispatchClick(playerId, holder, click));\n    }\n\n    private void dispatchClick(UUID playerId, MenuHolder holder, MenuInteraction.Click event) {\n        Player player = Bukkit.getPlayer(playerId);\n        if (player == null || !player.isOnline() || !currentHolder(player, holder) || !accept(player, holder)) return;\n        if (holder.kind() == MenuHolder.Kind.REWARDS) {\n            rewardPoolClick(player, event, holder);\n            return;\n        }\n        if (isAdministrative(holder.kind())) {\n            plugin.adminMenus().handleClick(player, holder, event);\n            return;\n        }\n        if (!event.clickedTop()) return;\n        int slot = event.getRawSlot();\n        MenuConfig menus = plugin.menusConfig();\n        switch (holder.kind()) {\n            case BROWSER -> browserClick(player, holder, slot, event.isRightClick());\n            case CLAIMS -> claimsClick(player, holder, slot);\n            case PREVIEW -> {\n                Crate crate = (holder.adminOrigin() ? plugin.crates().find(holder.crateId())\n                        : plugin.runtime().find(holder.crateId())).orElse(null);\n                if (crate == null) return;\n                if (!holder.adminOrigin() && holder.revision() != plugin.runtime().crateRevision(crate.id())) {\n                    plugin.messages().send(player, "opening-state-changed");\n                    openPreview(player, crate, 0, false);\n                    return;\n                }\n                MenuHolder.Action choice = holder.action(slot);\n                if (choice != null && choice.id().equals("select-reward")) {\n                    CrateReward reward = crate.rewards().get(choice.value());\n                    if (reward != null) openSelectiveConfirmation(player, crate, reward, holder.page(), null);\n                    return;\n                }\n                if (slot == menus.slot("preview.open")) {\n                    if (crate.openingMode() == OpeningMode.SELECTIVE) return;\n                    if (!holder.adminOrigin() && event.isShiftClick()\n                            && plugin.settings().massOpeningEnabled() && crate.bulkEnabled()) {\n                        openMassOpening(player, crate, OpenSource.GUI, null, holder.page());\n                        return;\n                    }\n                    KeyPaymentPlanner.Preference preference = event.isRightClick()\n                            ? KeyPaymentPlanner.Preference.VIRTUAL : KeyPaymentPlanner.Preference.PHYSICAL;\n                    plugin.openings().open(player, crate, 1,\n                            OpenSource.GUI, null, preference);\n                }\n                else if (slot == menus.slot("preview.back")) {\n                    if (holder.adminOrigin()) openEditor(player, crate); else openBrowser(player);\n                } else if (slot == menus.slot("preview.previous")) openPreview(player, crate, holder.page() - 1, holder.adminOrigin());\n                else if (slot == menus.slot("preview.next")) openPreview(player, crate, holder.page() + 1, holder.adminOrigin());\n            }\n            case MASS_OPEN -> massOpenClick(player, holder, slot, event.isRightClick());\n            case PORTABLE_PREVIEW -> portablePreviewClick(player, holder, slot);\n            case SELECTIVE_CONFIRM -> selectiveConfirmClick(player, holder, slot, event.isRightClick());\n            case ADMIN -> adminClick(player, slot);\n            case EDITOR -> editorClick(player, holder.crateId(), slot);\n            case CONFIRM_DELETE -> confirmClick(player, holder, slot);\n            case OPENING -> { }\n            case REROLL -> {\n                MenuHolder.Action action = holder.action(slot);\n                if (action == null) return;\n                if (action.id().equals("accept-reroll")) plugin.openings().acceptReroll(player, "ACCEPT");\n                else if (action.id().equals("request-reroll")) plugin.openings().requestReroll(player);\n            }\n            case SUMMARY -> {\n                if (slot == menus.slot("summary.close")) player.closeInventory();\n            }\n            default -> { }\n        }\n    }\n\n    private static boolean currentHolder(Player player, MenuHolder expected) {\n        Inventory top = player.getOpenInventory().getTopInventory();\n        return top != null && top.getHolder() == expected;\n    }\n\n'''
+          source = source[:start] + replacement + source[end:]
+
+          old_drag = '''    @EventHandler\n    public void drag(InventoryDragEvent event) {\n        if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;\n        event.setCancelled(true);\n        if (!(event.getWhoClicked() instanceof Player player) || !accept(player, holder)) return;\n        if (holder.kind() == MenuHolder.Kind.REWARDS) rewardPoolDrag(event, holder);\n        else if (isAdministrative(holder.kind())) plugin.adminMenus().handleDrag(event, holder);\n    }\n'''
+          new_drag = '''    public void drag(InventoryDragEvent event) {\n        if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder holder)) return;\n        event.setCancelled(true);\n        if (!(event.getWhoClicked() instanceof Player player)) return;\n        MenuInteraction.Drag drag = MenuInteraction.Drag.capture(event);\n        UUID playerId = player.getUniqueId();\n        Bukkit.getScheduler().runTask(plugin, () -> dispatchDrag(playerId, holder, drag));\n    }\n\n    private void dispatchDrag(UUID playerId, MenuHolder holder, MenuInteraction.Drag event) {\n        Player player = Bukkit.getPlayer(playerId);\n        if (player == null || !player.isOnline() || !currentHolder(player, holder) || !accept(player, holder)) return;\n        if (holder.kind() == MenuHolder.Kind.REWARDS) rewardPoolDrag(player, event, holder);\n        else if (isAdministrative(holder.kind())) plugin.adminMenus().handleDrag(player, holder, event);\n    }\n'''
+          if old_drag not in source:
+              raise SystemExit('MenuService drag anchor not found')
+          source = source.replace(old_drag, new_drag, 1)
+          source = source.replace('    private void rewardPoolClick(InventoryClickEvent event, MenuHolder holder) {\n        event.setCancelled(true);\n        if (!(event.getWhoClicked() instanceof Player player)) return;\n',
+                                  '    private void rewardPoolClick(Player player, MenuInteraction.Click event, MenuHolder holder) {\n', 1)
+          source = source.replace('        int topSize = event.getView().getTopInventory().getSize();\n        if (event.isShiftClick() && event.getRawSlot() >= topSize\n                && event.getRawSlot() < event.getView().countSlots()) {\n',
+                                  '        if (event.isShiftClick() && event.clickedBottom()) {\n', 1)
+          source = source.replace('        if (event.getClickedInventory() != event.getView().getTopInventory()) return;\n',
+                                  '        if (!event.clickedTop()) return;\n', 1)
+          source = source.replace('    private void rewardPoolDrag(InventoryDragEvent event, MenuHolder holder) {\n        event.setCancelled(true);\n        if (!(event.getWhoClicked() instanceof Player player)\n                || !player.hasPermission("plexoncrates.admin.rewards")) return;\n',
+                                  '    private void rewardPoolDrag(Player player, MenuInteraction.Drag event, MenuHolder holder) {\n        if (!player.hasPermission("plexoncrates.admin.rewards")) return;\n', 1)
+          source = source.replace('    private void balanceRewardPool(Player player, Crate crate, InventoryClickEvent event) throws Exception {',
+                                  '    private void balanceRewardPool(Player player, Crate crate, MenuInteraction.Click event) throws Exception {', 1)
+          menu.write_text(source)
+
+          admin = Path('src/main/java/com/antondev/crates/gui/AdminMenuService.java')
+          source = admin.read_text()
+          start = source.index('    public void handleClick(InventoryClickEvent event, MenuHolder holder) {')
+          end = source.index('    private void route(', start)
+          replacement = '''    /** Compatibility entrypoint: cancel/capture now, dispatch only after the event returns. */\n    public void handleClick(InventoryClickEvent event, MenuHolder holder) {\n        event.setCancelled(true);\n        if (!(event.getWhoClicked() instanceof Player player)) return;\n        MenuInteraction.Click click = MenuInteraction.Click.capture(event);\n        deferInteraction(player.getUniqueId(), holder, target -> handleClick(target, holder, click));\n    }\n\n    void handleClick(Player player, MenuHolder holder, MenuInteraction.Click event) {\n        if (!accept(player, holder)) return;\n        if (holder.kind() == MenuHolder.Kind.KEY_TEMPLATE && allowed(player, "plexoncrates.admin.keys")\n                && captureKeyClick(event, player)) return;\n        if (holder.kind() == MenuHolder.Kind.REWARD_BUILDER && allowed(player, "plexoncrates.admin.rewards")\n                && captureRewardClick(event, player)) return;\n        if (holder.kind() == MenuHolder.Kind.MILESTONE_DETAIL\n                && allowed(player, "plexoncrates.admin.milestones")\n                && captureMilestoneDisplayClick(event, player, holder)) return;\n        if (holder.kind() == MenuHolder.Kind.EDITOR && allowed(player, "plexoncrates.admin.crates")\n                && captureIconClick(event, player, holder)) return;\n        if (!event.clickedTop()) return;\n        MenuHolder.Action action = holder.action(event.getRawSlot());\n        if (action == null) return;\n        if (!allowed(player, permission(holder.kind(), action.id()))) {\n            plugin.messages().send(player, "no-permission");\n            return;\n        }\n        try {\n            route(player, holder, action, event);\n        } catch (Exception error) {\n            plugin.configError(player, error);\n        }\n    }\n\n    /** Compatibility entrypoint: cancel/capture now, dispatch only after the event returns. */\n    public void handleDrag(InventoryDragEvent event, MenuHolder holder) {\n        event.setCancelled(true);\n        if (!(event.getWhoClicked() instanceof Player player)) return;\n        MenuInteraction.Drag drag = MenuInteraction.Drag.capture(event);\n        deferInteraction(player.getUniqueId(), holder, target -> handleDrag(target, holder, drag));\n    }\n\n    void handleDrag(Player player, MenuHolder holder, MenuInteraction.Drag event) {\n        if (!accept(player, holder)) return;\n        if (!allowed(player, permission(holder.kind(), "capture"))) return;\n        ItemStack item = event.getOldCursor();\n        if (item == null || item.getType().isAir()) return;\n        if (holder.kind() == MenuHolder.Kind.KEY_TEMPLATE\n                && event.getRawSlots().size() == 1\n                && event.getRawSlots().contains(plugin.menusConfig().slot("key-template.input-placeholder"))) {\n            captureKey(player, item);\n        } else if (holder.kind() == MenuHolder.Kind.REWARD_BUILDER\n                && event.getRawSlots().size() == 1\n                && event.getRawSlots().stream().anyMatch(plugin.menusConfig().slots("reward-builder.item-slots")::contains)) {\n            captureReward(player, item);\n        } else if (holder.kind() == MenuHolder.Kind.MILESTONE_DETAIL\n                && event.getRawSlots().size() == 1\n                && event.getRawSlots().contains(plugin.menusConfig().slot("milestone-detail.display"))) {\n            captureMilestoneDisplay(player, holder.crateId(), holder.rewardId(), item);\n        } else if (holder.kind() == MenuHolder.Kind.EDITOR && event.getRawSlots().size() == 1\n                && event.getRawSlots().contains(4)) {\n            captureIcon(player, holder.crateId(), item);\n        }\n    }\n\n'''
+          source = source[:start] + replacement + source[end:]
+          source = source.replace('private void route(Player player, MenuHolder holder, MenuHolder.Action action, InventoryClickEvent event)',
+                                  'private void route(Player player, MenuHolder holder, MenuHolder.Action action, MenuInteraction.Click event)')
+          source = source.replace('private void editOpening(Player player, String crateId, InventoryClickEvent event)',
+                                  'private void editOpening(Player player, String crateId, MenuInteraction.Click event)')
+          source = source.replace('private void editRerolls(Player player, String crateId, InventoryClickEvent event)',
+                                  'private void editRerolls(Player player, String crateId, MenuInteraction.Click event)')
+          source = source.replace('private void keyEntry(Player player, String keyId, InventoryClickEvent event)',
+                                  'private void keyEntry(Player player, String keyId, MenuInteraction.Click event)')
+          source = source.replace('private void editChance(Player player, InventoryClickEvent event)',
+                                  'private void editChance(Player player, MenuInteraction.Click event)')
+          source = source.replace('private void editCommand(Player player, InventoryClickEvent event)',
+                                  'private void editCommand(Player player, MenuInteraction.Click event)')
+          source = source.replace('private boolean captureKeyClick(InventoryClickEvent event, Player player)',
+                                  'private boolean captureKeyClick(MenuInteraction.Click event, Player player)')
+          source = source.replace('private boolean captureRewardClick(InventoryClickEvent event, Player player)',
+                                  'private boolean captureRewardClick(MenuInteraction.Click event, Player player)')
+          source = source.replace('private boolean captureIconClick(InventoryClickEvent event, Player player, MenuHolder holder)',
+                                  'private boolean captureIconClick(MenuInteraction.Click event, Player player, MenuHolder holder)')
+          source = source.replace('private boolean captureMilestoneDisplayClick(InventoryClickEvent event, Player player,\n                                                 MenuHolder holder)',
+                                  'private boolean captureMilestoneDisplayClick(MenuInteraction.Click event, Player player,\n                                                 MenuHolder holder)')
+          source = source.replace('event.getClickedInventory() == event.getView().getTopInventory()', 'event.clickedTop()')
+          source = source.replace('event.getClickedInventory() == event.getView().getBottomInventory()', 'event.clickedBottom()')
+          runfor = '''    private void runFor(UUID playerId, java.util.function.Consumer<Player> action) {\n'''
+          defer = '''    private void deferInteraction(UUID playerId, MenuHolder holder, java.util.function.Consumer<Player> action) {\n        if (!plugin.isEnabled()) return;\n        Bukkit.getScheduler().runTask(plugin, () -> {\n            Player target = Bukkit.getPlayer(playerId);\n            if (target == null || !target.isOnline()) return;\n            Inventory top = target.getOpenInventory().getTopInventory();\n            if (top == null || top.getHolder() != holder || !accept(target, holder)) return;\n            action.accept(target);\n        });\n    }\n\n'''
+          if runfor not in source:
+              raise SystemExit('AdminMenuService runFor anchor not found')
+          source = source.replace(runfor, defer + runfor, 1)
+          admin.write_text(source)
+          PY
+      - name: Commit source patch and remove temporary helper
+        run: |
+          git config user.name 'Tonim'
+          git config user.email '99552287+ZpkDxGames@users.noreply.github.com'
+          git rm .github/workflows/revamp-deferred-inventory-dispatch-patch.yml
+          git add src/main/java/com/antondev/crates/gui/MenuService.java \
+                  src/main/java/com/antondev/crates/gui/AdminMenuService.java \
+                  src/main/java/com/antondev/crates/gui/MenuInteraction.java
+          git commit -m 'fix: defer legacy inventory transitions outside Bukkit events'
+          git push origin HEAD:revamp/5.1.0-full-source-hardening

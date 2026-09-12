@@ -7,10 +7,13 @@ import com.antondev.crates.api.event.CrateOpenEvent;
 import com.antondev.crates.api.event.CratePreOpenEvent;
 import com.antondev.crates.api.event.CrateRewardSelectEvent;
 import com.antondev.crates.api.event.PortableCrateUseEvent;
+import com.antondev.crates.animation.OpeningAnimationProfile;
+import com.antondev.crates.animation.OpeningAnimationProfileStore;
 import com.antondev.crates.config.OverflowPolicy;
+import com.antondev.crates.gui.MenuHolder;
+import com.antondev.crates.gui.OpeningProfilePresentationService;
 import com.antondev.crates.config.Text;
 import com.antondev.crates.database.DatabaseService;
-import com.antondev.crates.domain.crate.AnimationType;
 import com.antondev.crates.domain.crate.CrateState;
 import com.antondev.crates.domain.key.KeyPaymentPolicy;
 import com.antondev.crates.domain.opening.OpenSource;
@@ -55,6 +58,8 @@ public final class OpeningService {
     private final OpeningLog log;
     private final VaultEconomyBridge economy;
     private final PlaceholderBridge placeholders;
+    private final OpeningAnimationProfileStore animationProfiles;
+    private final OpeningProfilePresentationService profilePresentation;
     private final ItemSnapshotCodec itemSnapshots = new ItemSnapshotCodec();
     private final Set<UUID> locks = new HashSet<>();
     private final Map<UUID, PendingOpening> pending = new HashMap<>();
@@ -73,6 +78,8 @@ public final class OpeningService {
         this.log = log;
         this.economy = new VaultEconomyBridge(plugin);
         this.placeholders = new PlaceholderBridge(plugin);
+        this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);
+        this.profilePresentation = OpeningProfilePresentationService.shared(plugin);
     }
 
     public record RerollView(UUID transactionId, Crate crate, CrateReward candidate,
@@ -942,6 +949,7 @@ public final class OpeningService {
     }
 
     public void clear() {
+        profilePresentation.stop();
         String reason = "Plugin disabled before inventory mutation";
         for (UUID playerId : List.copyOf(rerollDecisions.keySet())) {
             Player player = Bukkit.getPlayer(playerId);
@@ -1571,31 +1579,45 @@ public final class OpeningService {
     }
 
     private void showResult(Player player, Crate crate, List<CrateReward> selected, OpeningPlan plan) {
+        OpeningAnimationProfile profile = animationProfiles.resolve(crate.id(), crate.animation());
         if (plan.openingCount() == 1) {
             CrateReward reward = selected.getFirst();
-            if (!plugin.settings().animationEnabled() || crate.animation() == AnimationType.INSTANT) {
+            if (!plugin.settings().animationEnabled()) {
                 announceSingle(player, crate, reward);
                 return;
             }
-            try {
-                switch (crate.animation()) {
-                    case ROULETTE -> plugin.menus().animate(player, crate, reward, () -> announceSingle(player, crate, reward));
-                    case REVEAL -> plugin.menus().reveal(player, crate, reward, () -> announceSingle(player, crate, reward));
-                    case SUMMARY -> { announceSingle(player, crate, reward); plugin.menus().openSummary(player, crate, selected); }
-                    case INSTANT -> announceSingle(player, crate, reward);
-                }
-            } catch (RuntimeException error) {
-                plugin.getLogger().log(Level.WARNING, "Could not show the crate animation; delivery is already complete.", error);
+            if (!profile.animated()) {
                 announceSingle(player, crate, reward);
+                if (profile.summaryOnFinish()) plugin.menus().openSummary(player, crate, selected);
+                return;
+            }
+            try {
+                profilePresentation.present(player, crate, reward, profile,
+                        () -> finishSinglePresentation(player, crate, reward, selected, profile));
+            } catch (RuntimeException error) {
+                plugin.getLogger().log(Level.WARNING,
+                        "Could not show the crate animation profile; delivery is already complete.", error);
+                announceSingle(player, crate, reward);
+                if (profile.summaryOnFinish()) plugin.menus().openSummary(player, crate, selected);
             }
         } else {
             plugin.messages().send(player, "bulk-opened", Text.value("amount", plan.openingCount()),
                     Text.component("crate", crate.displayName()), Text.value("rewards", selected.size()));
             announceBroadcasts(player, crate, selected);
-            if (crate.animation() == AnimationType.SUMMARY
+            if (profile.summaryOnFinish()
                     || plan.openingCount() > plugin.settings().bulkSummaryThreshold()) {
                 plugin.menus().openSummary(player, crate, selected);
             }
+        }
+    }
+
+    private void finishSinglePresentation(Player player, Crate crate, CrateReward reward,
+                                          List<CrateReward> selected, OpeningAnimationProfile profile) {
+        announceSingle(player, crate, reward);
+        if (!profile.summaryOnFinish() || !player.isOnline()) return;
+        if (player.getOpenInventory().getTopInventory().getHolder() instanceof MenuHolder holder
+                && holder.kind() == MenuHolder.Kind.OPENING) {
+            plugin.menus().openSummary(player, crate, selected);
         }
     }
 

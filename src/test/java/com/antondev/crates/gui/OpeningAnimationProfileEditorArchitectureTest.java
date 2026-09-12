@@ -51,4 +51,11 @@ class OpeningAnimationProfileEditorArchitectureTest {
         assertTrue(source.contains("animationProfiles.resolve(crate.id(), crate.animation())"));
         assertFalse(source.contains("plugin.openings().open("));
     }
+
+    @Test
+    void testLabCancelsOwnedInventoryClicksWithValidSyntax() throws Exception {
+        String source = Files.readString(LAB);
+        assertTrue(source.contains("event.setCancelled(true);"));
+        assertFalse(source.contains("event.setCancelled(true;"));
+    }
 }

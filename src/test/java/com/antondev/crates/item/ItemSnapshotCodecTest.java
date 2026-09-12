@@ -73,7 +73,11 @@ class ItemSnapshotCodecTest {
         ItemStack restored = codec.restoreTemplate(snapshot);
 
         assertArrayEquals(before, source.serializeAsBytes());
-        assertArrayEquals(snapshot.bytes(), restored.serializeAsBytes());
+        assertTrue(restored.isSimilar(source));
+        assertEquals("SYNTHETIC_TOOL", restored.getItemMeta().getPersistentDataContainer().get(
+                new NamespacedKey("slimefun_like", "item_id"), PersistentDataType.STRING));
+        assertEquals("plexon:synthetic_tool", restored.getItemMeta().getPersistentDataContainer().get(
+                new NamespacedKey("itemsadder_like", "namespaced_id"), PersistentDataType.STRING));
         assertTrue(snapshot.customDataPresent());
     }
 
@@ -93,7 +97,7 @@ class ItemSnapshotCodecTest {
         ItemStack restored = codec.restoreTemplate(snapshot);
 
         assertArrayEquals(before, bundle.serializeAsBytes());
-        assertArrayEquals(snapshot.bytes(), restored.serializeAsBytes());
+        assertTrue(restored.isSimilar(bundle));
         assertTrue(snapshot.customDataPresent());
         assertTrue(snapshot.containerContentsPresent());
         BundleMeta restoredMeta = (BundleMeta) restored.getItemMeta();

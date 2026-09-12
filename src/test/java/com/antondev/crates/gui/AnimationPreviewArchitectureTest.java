@@ -12,17 +12,17 @@ class AnimationPreviewArchitectureTest {
             "src/main/java/com/antondev/crates/gui/SimulationAdminListener.java");
 
     @Test
-    void animationPreviewUsesDrySelectionAndProfileDrivenPresentationOnly() throws Exception {
+    void animationPreviewUsesDrySelectionAndSharedProfileRendererOnly() throws Exception {
         String source = Files.readString(SOURCE);
         String method = section(source, "private void previewAnimation", "private void openExactItemAudit");
         assertTrue(method.contains("simulations.dryRun"));
         assertTrue(method.contains("animationProfiles.resolve(crate.id(), crate.animation())"));
-        assertTrue(method.contains("switch (profile.style())"));
-        assertTrue(method.contains("case ROULETTE, SPIN, CASCADE"));
-        assertTrue(method.contains("case CHARGE_REVEAL, SPIRAL_BURST, ORB_REVEAL, FIREWORK_STYLE"));
-        assertTrue(method.contains("plugin.menus().animate"));
-        assertTrue(method.contains("plugin.menus().reveal"));
-        assertTrue(method.contains("case INSTANT -> showDry"));
+        assertTrue(method.contains("if (!profile.animated())"));
+        assertTrue(method.contains("showDry(player, source.snapshot, reward.id(), stableSeed(source.snapshot, 17))"));
+        assertTrue(method.contains("profilePresentation.present(player, crate, reward, profile, returnIfStillPreviewing)"));
+        assertFalse(method.contains("switch (profile.style())"));
+        assertFalse(method.contains("plugin.menus().animate"));
+        assertFalse(method.contains("plugin.menus().reveal"));
         assertFalse(method.contains("plugin.openings()"));
         assertFalse(method.contains("plugin.database()"));
         assertFalse(method.contains("plugin.rewardStates()"));

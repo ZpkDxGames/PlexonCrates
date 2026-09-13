@@ -6,8 +6,12 @@ import java.util.List;
 public final class PlayerCrateLayout {
     public static final int SIZE = 54;
     public static final int PREVIOUS = 45;
-    public static final int CONTEXT = 46;
-    public static final int PAYMENT = 47;
+    public static final int SEARCH = 46;
+    /** Compatibility alias: existing player code uses CONTEXT for refresh/search. */
+    public static final int CONTEXT = SEARCH;
+    public static final int UTILITY = 47;
+    /** Compatibility alias: My Keys/payment context occupies the utility slot. */
+    public static final int PAYMENT = UTILITY;
     public static final int BACK = 48;
     public static final int PRIMARY = 49;
     public static final int SECONDARY = 50;

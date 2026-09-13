@@ -1365,8 +1365,7 @@ public final class MenuService implements Listener {
     }
 
     private void fill(Inventory inventory) {
-        ItemStack filler = plugin.menusConfig().item("filler");
-        for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
+        GuiChromeRenderer.render(inventory, plugin.menusConfig());
     }
 
     private ItemStack control(String path,

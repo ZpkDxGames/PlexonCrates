@@ -57,7 +57,7 @@ public final class PlayerHistoryMenuService {
         long revision = plugin.runtime().snapshot().revision();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.PLAYER_HISTORY, "", "history", page, false, revision);
         Inventory inventory = inventory(holder,
-                Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Opening History</bold></gradient>"));
+                Text.parse("<gradient:#DDE5F0:#A3BEDF><bold>PLEXON CRATES</bold></gradient> <dark_gray>•</dark_gray> <gray>Opening History</gray>"));
         inventory.setItem(22, item(Material.CLOCK, "<aqua>Loading history…</aqua>",
                 "<gray>Reading finalized openings off the server thread.</gray>"));
         navigation(holder, inventory, page, false);
@@ -170,10 +170,8 @@ public final class PlayerHistoryMenuService {
     private Inventory inventory(MenuHolder holder, Component title) {
         Inventory inventory = Bukkit.createInventory(holder, PlayerCrateLayout.SIZE, title);
         holder.attach(inventory);
-        ItemStack filler = item(Material.GRAY_STAINED_GLASS_PANE, Component.empty(), List.of());
-        for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
+        com.antondev.crates.gui.GuiChromeRenderer.render(inventory, plugin.menusConfig());
         clearContent(inventory);
-        for (int slot = PlayerCrateLayout.PREVIOUS; slot <= PlayerCrateLayout.NEXT; slot++) inventory.setItem(slot, null);
         return inventory;
     }
 

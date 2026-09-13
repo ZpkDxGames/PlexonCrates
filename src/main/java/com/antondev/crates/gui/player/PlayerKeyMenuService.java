@@ -56,7 +56,7 @@ public final class PlayerKeyMenuService {
         int page = PlayerCrateLayout.clampPage(requestedPage, definitions.size());
         long revision = plugin.runtime().snapshot().revision();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.PLAYER_KEYS, "", "keys", page, false, revision);
-        Inventory inventory = inventory(holder, Text.parse("<gradient:#FFD98A:#FFFFFF><bold>My Keys</bold></gradient>"));
+        Inventory inventory = inventory(holder, Text.parse("<gradient:#DDE5F0:#A3BEDF><bold>PLEXON CRATES</bold></gradient> <dark_gray>•</dark_gray> <gray>My Keys</gray>"));
 
         int start = page * PlayerCrateLayout.contentSlots().size();
         for (int i = 0; i < PlayerCrateLayout.contentSlots().size() && start + i < definitions.size(); i++) {
@@ -248,10 +248,7 @@ public final class PlayerKeyMenuService {
     private Inventory inventory(MenuHolder holder, Component title) {
         Inventory inventory = Bukkit.createInventory(holder, PlayerCrateLayout.SIZE, title);
         holder.attach(inventory);
-        ItemStack filler = item(Material.GRAY_STAINED_GLASS_PANE, Component.empty(), List.of());
-        for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
-        for (int slot : PlayerCrateLayout.contentSlots()) inventory.setItem(slot, null);
-        for (int slot = PlayerCrateLayout.PREVIOUS; slot <= PlayerCrateLayout.NEXT; slot++) inventory.setItem(slot, null);
+        com.antondev.crates.gui.GuiChromeRenderer.render(inventory, plugin.menusConfig());
         return inventory;
     }
 

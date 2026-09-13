@@ -66,7 +66,7 @@ public final class MenuConfig {
     }
 
     public static MenuConfig load(File file) {
-        return new MenuConfig(YamlConfiguration.loadConfiguration(file));
+        return new MenuConfig(GuiConfigMigrator.loadAndMigrate(file));
     }
 
     public boolean contains(String path) {

@@ -419,9 +419,8 @@ public final class OpeningAnimationProfileEditor {
         return item;
     }
 
-    private static void fill(Inventory inventory) {
-        ItemStack filler = item(Material.BLACK_STAINED_GLASS_PANE, " ", List.of());
-        for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
+    private void fill(Inventory inventory) {
+        GuiChromeRenderer.render(inventory, plugin.menusConfig());
     }
 
     private static Component line(String label, Object value) {

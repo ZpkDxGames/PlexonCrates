@@ -1,5 +1,12 @@
 # Changelog
 
+## 6.5.0
+
+- Unified all inventory presentation behind the 6.5 GUI design system.
+- Added versioned menus.yml schema migration with pre-6.5 backup.
+- Standardized list/footer/dialog geometry and removed duplicated hard-coded player/Test Lab filler rendering.
+- Preserved transaction, exact-item, persistence, claim and central-router boundaries.
+
 All notable PlexonCrates changes are documented here.
 
 ## 6.0.0-rc.1 — Runtime certification candidate

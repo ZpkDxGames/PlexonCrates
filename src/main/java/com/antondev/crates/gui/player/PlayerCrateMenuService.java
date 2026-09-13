@@ -106,7 +106,7 @@ public final class PlayerCrateMenuService implements Listener {
         int page = PlayerCrateLayout.clampPage(requestedPage, crates.size());
         long revision = plugin.runtime().snapshot().revision();
         MenuHolder holder = new MenuHolder(MenuHolder.Kind.PLAYER_HALL, "", "", page, false, revision);
-        Inventory inventory = inventory(holder, Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>Crate Hall</bold></gradient>"));
+        Inventory inventory = inventory(holder, Text.parse("<gradient:#DDE5F0:#A3BEDF><bold>PLEXON CRATES</bold></gradient> <dark_gray>•</dark_gray> <gray>Crate Hall</gray>"));
         PlayerMenuContext context = PlayerMenuContext.hall(page);
         remember(holder, new ViewState(context, revision, List.of(), false, -1));
 
@@ -724,10 +724,7 @@ public final class PlayerCrateMenuService implements Listener {
     private Inventory inventory(MenuHolder holder, Component title) {
         Inventory inventory = Bukkit.createInventory(holder, PlayerCrateLayout.SIZE, title);
         holder.attach(inventory);
-        ItemStack filler = item(Material.GRAY_STAINED_GLASS_PANE, Component.empty(), List.of());
-        for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
-        for (int slot : PlayerCrateLayout.contentSlots()) inventory.setItem(slot, null);
-        for (int slot = PlayerCrateLayout.PREVIOUS; slot <= PlayerCrateLayout.NEXT; slot++) inventory.setItem(slot, null);
+        com.antondev.crates.gui.GuiChromeRenderer.render(inventory, plugin.menusConfig());
         return inventory;
     }
 

@@ -26,7 +26,29 @@ public final class GuiChromeRenderer {
         for (int slot : layout.contentSlots()) inventory.setItem(slot, null);
         if (inventory.getHolder() instanceof MenuHolder holder) {
             for (int slot : protectedInputSlots(holder.kind(), menus)) inventory.setItem(slot, null);
+            renderOptionalPanelPlaceholders(inventory, holder.kind(), menus, theme);
         }
+    }
+
+    /**
+     * Optional feature controls are not rendered by their owning service while a module is disabled.
+     * Keep those declared panel cells visibly inert instead of leaving unexplained holes. An enabled
+     * control overwrites this decoration immediately after chrome rendering.
+     */
+    private static void renderOptionalPanelPlaceholders(Inventory inventory, MenuHolder.Kind kind,
+                                                        MenuConfig menus, GuiTheme theme) {
+        if (kind == MenuHolder.Kind.EDITOR) {
+            placeholder(inventory, menus, theme, "editor.rerolls");
+            placeholder(inventory, menus, theme, "editor.milestones");
+        } else if (kind == MenuHolder.Kind.REWARD_BUILDER) {
+            placeholder(inventory, menus, theme, "reward-builder.alternative");
+        }
+    }
+
+    private static void placeholder(Inventory inventory, MenuConfig menus, GuiTheme theme, String path) {
+        if (!menus.contains(path + ".slot")) return;
+        int slot = menus.slot(path);
+        if (slot >= 0 && slot < inventory.getSize()) inventory.setItem(slot, theme.frameCopy());
     }
 
     static Set<Integer> protectedInputSlots(MenuHolder.Kind kind, MenuConfig menus) {

@@ -1,10 +1,13 @@
 package com.antondev.crates.gui;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
 class AdminExactItemDiagnosticsArchitectureTest {
@@ -44,10 +47,14 @@ class AdminExactItemDiagnosticsArchitectureTest {
     }
 
     @Test
-    void companionSlotIsConfiguredSeparatelyFromRewardInputSlots() throws Exception {
-        String yaml = Files.readString(MENUS);
-        assertTrue(yaml.contains("item-slots: [10, 11, 12, 13, 14, 15, 16]"));
-        assertTrue(yaml.contains("exact-diagnostics:\n    slot: 27\n    material: SPYGLASS"));
+    void companionSlotIsConfiguredSeparatelyFromRewardInputSlots() {
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(MENUS.toFile());
+        List<Integer> inputSlots = yaml.getIntegerList("reward-builder.item-slots");
+        int diagnosticSlot = yaml.getInt("reward-builder.exact-diagnostics.slot", -1);
+        assertEquals(List.of(10, 11, 12, 13, 14, 15, 16), inputSlots);
+        assertEquals(27, diagnosticSlot);
+        assertEquals("SPYGLASS", yaml.getString("reward-builder.exact-diagnostics.material"));
+        assertFalse(inputSlots.contains(diagnosticSlot));
     }
 
     private static String section(String source, String start, String end) {

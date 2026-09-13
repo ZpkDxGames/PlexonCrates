@@ -1,9 +1,29 @@
 # PlexonCrates
 
+> [!WARNING]
+> **ABANDONED / NO LONGER MAINTAINED**
+>
+> PlexonCrates has been discontinued and is no longer used or maintained for PlexonCraft. The project has been retired in favor of **PhoenixCrates**. No further feature development, compatibility work, releases, or support are planned.
+>
+> The repository is retained only as a historical source/archive of the implementation that existed before retirement.
+
+[![Status](https://img.shields.io/badge/status-abandoned-red?style=for-the-badge)](#)
 [![Paper](https://img.shields.io/badge/Paper-26.2-2f3136?style=for-the-badge)](https://papermc.io/)
 [![Java](https://img.shields.io/badge/Java-25-f89820?style=for-the-badge)](https://adoptium.net/)
 [![Build](https://img.shields.io/github/actions/workflow/status/ZpkDxGames/PlexonCrates/build.yml?branch=main&style=for-the-badge&label=Build)](https://github.com/ZpkDxGames/PlexonCrates/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/ZpkDxGames/PlexonCrates?style=for-the-badge)](https://github.com/ZpkDxGames/PlexonCrates/releases/latest)
+
+## Retirement status
+
+- **Project status:** Abandoned
+- **Maintenance:** Ended
+- **New releases:** None planned
+- **Production replacement:** PhoenixCrates
+- **Repository purpose:** Historical/reference archive only
+
+The remaining documentation below describes the final PlexonCrates implementation and is preserved for historical reference. It should not be interpreted as an actively supported product.
+
+---
 
 PlexonCrates is the exact-item, percentage-first crate system for Paper 26.2 and the Plexon plugin family. Version **6.5.0** carries forward the accepted 6.0 transaction/exact-item product boundary and adds a product-wide inventory GUI design system without moving opening, payment, reward-selection, claim, persistence, or exact-item authority into presentation code.
 

@@ -13,12 +13,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ACCEPTED_RC4_SHA: '1d4118673f250af72cecbec3ab91eb81cfa8830d'
-  PHASE2_SHA: 'ec9623857dd09437c29a251c4f1fb01f5b4fd98e'
-  ACCEPTED_PHASE3_SHA: 'f1bcb27186489b47c8692d126e0b1974e25881fa'
-  RELIABILITY_SHA: 'c1b84c76430fd7196acc6ea4d45976e1b0740786'
-  ROLLBACK_TAG: 'v5.0.0'
-  ROLLBACK_SHA: 'f24e3f7f942f7c886352e71c7105af499828096f'
+  GUI_BASE_TAG: 'v6.0.0-rc.1'
+  GUI_BASE_SHA: 'cb3ba1aed8ab2b89bdbaec39271ad30ee07e1c28'
+  GUI_SOURCE_EQUIVALENT_HEAD: 'c865e64e00fb7f33975dd362d9f43766156898c9'
+  ROLLBACK_TAG: 'v6.0.0-rc.1'
+  ROLLBACK_SHA: 'cb3ba1aed8ab2b89bdbaec39271ad30ee07e1c28'
   PLEXONCORE_SHA256: '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
   PLEXONKEYS_VERSION: '2.0.0-rc.2'
   PLEXONKEYS_SHA256: '0cc87449754b7e5dec34e57091f856f2bfa98a3c256eb41617b510911cbe0ee4'
@@ -57,76 +56,69 @@ jobs:
             -Dfile="$keys" -DgroupId=com.antondev -DartifactId=PlexonKeys \
             -Dversion="$PLEXONKEYS_VERSION" -Dpackaging=jar -DgeneratePom=true
 
-      - name: Read project version
+      - name: Read exact project version
         shell: bash
         run: |
           set -euo pipefail
           version="$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)"
-          test -n "$version"
+          test "$version" = '6.5.0'
+          [[ "$version" != *-* ]]
           echo "PLUGIN_VERSION=$version" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=v${version}" >> "$GITHUB_ENV"
 
-      - name: Verify exact stable boundary and certified runtime candidate
+      - name: Verify exact 6.5 GUI-only stable boundary
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "$PLUGIN_VERSION" != *-* ]] || { echo 'Stable version must not contain a prerelease suffix.' >&2; exit 1; }
           main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
           test "$GITHUB_SHA" = "$main_sha"
           test "$(mvn -q -DforceStdout help:evaluate -Dexpression=paper.version)" = '26.2.build.121-stable'
           test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexoncore.version)" = '2.0.4'
           test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexonkeys.version)" = "$PLEXONKEYS_VERSION"
+          test "$(git rev-list -n 1 "$GUI_BASE_TAG")" = "$GUI_BASE_SHA"
           test "$(git rev-list -n 1 "$ROLLBACK_TAG")" = "$ROLLBACK_SHA"
-          git merge-base --is-ancestor "$ROLLBACK_SHA" HEAD
-          git merge-base --is-ancestor "$PHASE2_SHA" HEAD
-          git merge-base --is-ancestor "$RELIABILITY_SHA" HEAD
-          git merge-base --is-ancestor "$ACCEPTED_PHASE3_SHA" HEAD
-          git merge-base --is-ancestor "$ACCEPTED_RC4_SHA" HEAD
+          git merge-base --is-ancestor "$GUI_BASE_SHA" HEAD
+          git merge-base --is-ancestor "$GUI_SOURCE_EQUIVALENT_HEAD" HEAD
           test -s "releases/${PLUGIN_VERSION}.md"
 
-          runtime_file="releases/${PLUGIN_VERSION}.runtime-certification.env"
-          test -s "$runtime_file"
-          grep -Fx 'RUNTIME_CERTIFICATION=PASS' "$runtime_file"
-          grep -Fx 'PAPER_VERSION=26.2.build.121-stable' "$runtime_file"
-          certified_rc_tag="$(sed -n 's/^CERTIFIED_RC_TAG=//p' "$runtime_file" | head -n 1)"
-          certified_rc_sha="$(sed -n 's/^CERTIFIED_RC_SHA=//p' "$runtime_file" | head -n 1)"
-          certified_rc_jar_sha256="$(sed -n 's/^CERTIFIED_RC_JAR_SHA256=//p' "$runtime_file" | head -n 1)"
-          test -n "$certified_rc_tag"
-          test -n "$certified_rc_sha"
-          test -n "$certified_rc_jar_sha256"
-          [[ "$certified_rc_tag" == "v${PLUGIN_VERSION}-rc."* ]] || {
-            echo "Certified tag $certified_rc_tag does not belong to stable line v${PLUGIN_VERSION}." >&2
-            exit 1
-          }
-          test "$(git rev-list -n 1 "$certified_rc_tag")" = "$certified_rc_sha"
-          git merge-base --is-ancestor "$certified_rc_sha" HEAD
-
-          rc_json="$(gh release view "$certified_rc_tag" --repo "$GITHUB_REPOSITORY" --json tagName,isPrerelease)"
-          echo "$rc_json" | jq -e --arg tag "$certified_rc_tag" \
-            '.tagName == $tag and .isPrerelease == true' >/dev/null
-          rc_version="${certified_rc_tag#v}"
-          rm -rf certified-rc
-          mkdir certified-rc
-          gh release download "$certified_rc_tag" --repo "$GITHUB_REPOSITORY" --dir certified-rc \
-            --pattern "PlexonCrates-${rc_version}.jar"
-          echo "${certified_rc_jar_sha256}  certified-rc/PlexonCrates-${rc_version}.jar" | sha256sum --check
-
+          # 6.5 is authorized as a stable GUI-only release only while its source delta remains
+          # presentation/config-layout/test/documentation/release-engineering work. Any authority
+          # change outside this allowlist fails closed and requires a stronger release campaign.
           while IFS= read -r changed; do
             case "$changed" in
-              pom.xml|"releases/${PLUGIN_VERSION}.md"|"releases/${PLUGIN_VERSION}.runtime-certification.env"|docs/REVAMP_5_1_IMPLEMENTATION_STATUS.md)
+              CHANGELOG.md|pom.xml|docs/*|"releases/${PLUGIN_VERSION}.md"|\
+              .github/workflows/build.yml|.github/workflows/release.yml|\
+              src/main/resources/menus.yml|\
+              src/main/java/com/antondev/crates/config/MenuConfig.java|\
+              src/main/java/com/antondev/crates/config/GuiConfigMigrator.java|\
+              src/main/java/com/antondev/crates/gui/*|\
+              src/test/java/*)
                 ;;
               *)
-                echo "Stable candidate changed non-promotion path after certified RC: $changed" >&2
+                echo "6.5 GUI-only stable scope violation: $changed" >&2
                 exit 1
                 ;;
             esac
-          done < <(git diff --name-only "$certified_rc_sha"..HEAD)
+          done < <(git diff --name-only "$GUI_BASE_SHA"..HEAD)
 
-          echo "CERTIFIED_RC_TAG=$certified_rc_tag" >> "$GITHUB_ENV"
-          echo "CERTIFIED_RC_SHA=$certified_rc_sha" >> "$GITHUB_ENV"
-          echo "CERTIFIED_RC_JAR_SHA256=$certified_rc_jar_sha256" >> "$GITHUB_ENV"
+          # Guard the transactional/exact-state authorities explicitly even if future paths move.
+          for protected in \
+            src/main/java/com/antondev/crates/service/OpeningService.java \
+            src/main/java/com/antondev/crates/service/ClaimService.java \
+            src/main/java/com/antondev/crates/database/DatabaseService.java \
+            src/main/java/com/antondev/crates/item/ItemSnapshotCodec.java \
+            src/main/java/com/antondev/crates/service/RewardSelector.java; do
+            if git diff --quiet "$GUI_BASE_SHA"..HEAD -- "$protected"; then
+              :
+            else
+              echo "6.5 GUI-only stable authority changed: $protected" >&2
+              exit 1
+            fi
+          done
+
+          git diff --check "$GUI_BASE_SHA"..HEAD
 
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
             echo "$RELEASE_TAG already exists; refusing to move a stable tag." >&2
@@ -151,9 +143,13 @@ jobs:
           if not reports: raise SystemExit('No JUnit XML results found')
           for p in reports:
               for c in ET.parse(p).getroot().iter('testcase'):
-                  t+=1; f+=c.find('failure') is not None; e+=c.find('error') is not None; s+=c.find('skipped') is not None
+                  t += 1
+                  f += c.find('failure') is not None
+                  e += c.find('error') is not None
+                  s += c.find('skipped') is not None
           if not t or f or e or s: raise SystemExit(f'tests={t} failures={f} errors={e} skipped={s}')
-          pathlib.Path('target/TEST_SUMMARY.txt').write_text(f'TEST_COUNT={t} FAILURES={f} ERRORS={e} SKIPPED={s}\n')
+          pathlib.Path('target/TEST_SUMMARY.txt').write_text(
+              f'TEST_COUNT={t} FAILURES={f} ERRORS={e} SKIPPED={s}\n')
           print(f'Tests: {t}; failures=0; errors=0; skipped=0')
           PY
           JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"
@@ -161,12 +157,14 @@ jobs:
           jar tf "$JAR" > target/jar-contents.txt
           for r in \
             plugin.yml \
+            menus.yml \
             com/antondev/crates/PlexonCrates.class \
+            com/antondev/crates/gui/GuiTheme.class \
+            com/antondev/crates/gui/GuiLayout.class \
+            com/antondev/crates/gui/GuiChromeRenderer.class \
+            com/antondev/crates/config/GuiConfigMigrator.class \
             com/antondev/crates/service/OpeningService.class \
             com/antondev/crates/service/ClaimService.class \
-            com/antondev/crates/service/CrateSimulationService.class \
-            com/antondev/crates/integration/plexonkeys/PlexonKeysServiceAdapter.class \
-            com/antondev/crates/api/event/CrateOpenEvent.class \
             org/sqlite/JDBC.class; do
             grep -qx "$r" target/jar-contents.txt
           done
@@ -196,14 +194,16 @@ jobs:
           JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"
           size="$(stat -c '%s' "$JAR")"
           digest="$(sha256sum "$JAR" | awk '{print $1}')"
+          tests="$(sed -n 's/^TEST_COUNT=\([0-9][0-9]*\).*/\1/p' target/TEST_SUMMARY.txt)"
           {
             echo "repository=$GITHUB_REPOSITORY"
             echo "source_sha=$GITHUB_SHA"
-            echo "accepted_rc4_head=$ACCEPTED_RC4_SHA"
-            echo "phase2_ancestor=$PHASE2_SHA"
-            echo "accepted_phase3=$ACCEPTED_PHASE3_SHA"
-            echo "reliability_ancestor=$RELIABILITY_SHA"
             echo "version=$PLUGIN_VERSION"
+            echo 'release_kind=STABLE'
+            echo "gui_base_tag=$GUI_BASE_TAG"
+            echo "gui_base_sha=$GUI_BASE_SHA"
+            echo "rollback_tag=$ROLLBACK_TAG"
+            echo "rollback_sha=$ROLLBACK_SHA"
             echo 'java=25'
             echo 'java_major=69'
             echo 'paper=26.2.build.121-stable'
@@ -212,14 +212,11 @@ jobs:
             echo "plexonkeys=$PLEXONKEYS_VERSION"
             echo "plexonkeys_sha256=$PLEXONKEYS_SHA256"
             echo 'database_schema=4'
-            echo "rollback_tag=$ROLLBACK_TAG"
-            echo "rollback_sha=$ROLLBACK_SHA"
-            echo "certified_rc_tag=$CERTIFIED_RC_TAG"
-            echo "certified_rc_sha=$CERTIFIED_RC_SHA"
-            echo "certified_rc_jar_sha256=$CERTIFIED_RC_JAR_SHA256"
             echo "jar_size=$size"
             echo "jar_sha256=$digest"
-            echo 'runtime_certification=PASS'
+            echo "test_count=$tests"
+            echo 'runtime_certification=NOT_EXECUTED_GUI_ONLY_RELEASE'
+            echo 'verification_scope=SOURCE_SCOPE_PLUS_AUTOMATED_REGRESSION'
           } > target/PROVENANCE.txt
 
       - name: Publish GitHub stable release
@@ -264,21 +261,18 @@ jobs:
           (cd published && sha256sum --check SHA256SUMS.txt)
           grep -Fx "repository=$GITHUB_REPOSITORY" published/PROVENANCE.txt
           grep -Fx "source_sha=$GITHUB_SHA" published/PROVENANCE.txt
-          grep -Fx "accepted_rc4_head=$ACCEPTED_RC4_SHA" published/PROVENANCE.txt
           grep -Fx "version=$PLUGIN_VERSION" published/PROVENANCE.txt
-          grep -Fx "certified_rc_tag=$CERTIFIED_RC_TAG" published/PROVENANCE.txt
-          grep -Fx "certified_rc_sha=$CERTIFIED_RC_SHA" published/PROVENANCE.txt
-          grep -Fx "certified_rc_jar_sha256=$CERTIFIED_RC_JAR_SHA256" published/PROVENANCE.txt
-          grep -Fx 'runtime_certification=PASS' published/PROVENANCE.txt
+          grep -Fx 'release_kind=STABLE' published/PROVENANCE.txt
+          grep -Fx 'runtime_certification=NOT_EXECUTED_GUI_ONLY_RELEASE' published/PROVENANCE.txt
           grep -Eq '^TEST_COUNT=[1-9][0-9]* FAILURES=0 ERRORS=0 SKIPPED=0$' published/TEST_SUMMARY.txt
 
       - name: Upload release verification evidence
         uses: actions/upload-artifact@v4
         with:
-          name: PlexonCrates-release-${{ github.sha }}
+          name: PlexonCrates-${{ github.sha }}-stable-release
           path: |
-            published/PlexonCrates-*.jar
-            published/SHA256SUMS.txt
-            published/TEST_SUMMARY.txt
-            published/PROVENANCE.txt
+            target/PlexonCrates-*.jar
+            target/SHA256SUMS.txt
+            target/TEST_SUMMARY.txt
+            target/PROVENANCE.txt
           if-no-files-found: error

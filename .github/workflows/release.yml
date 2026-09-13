@@ -56,7 +56,7 @@ jobs:
             -Dfile="$keys" -DgroupId=com.antondev -DartifactId=PlexonKeys \
             -Dversion="$PLEXONKEYS_VERSION" -Dpackaging=jar -DgeneratePom=true
 
-      - name: Read exact project version
+      - name: Resolve exact release version
         shell: bash
         run: |
           set -euo pipefail
@@ -83,12 +83,9 @@ jobs:
           git merge-base --is-ancestor "$GUI_SOURCE_EQUIVALENT_HEAD" HEAD
           test -s "releases/${PLUGIN_VERSION}.md"
 
-          # 6.5 is authorized as a stable GUI-only release only while its source delta remains
-          # presentation/config-layout/test/documentation/release-engineering work. Any authority
-          # change outside this allowlist fails closed and requires a stronger release campaign.
           while IFS= read -r changed; do
             case "$changed" in
-              CHANGELOG.md|pom.xml|docs/*|"releases/${PLUGIN_VERSION}.md"|\
+              CHANGELOG.md|README.md|pom.xml|docs/*|"releases/${PLUGIN_VERSION}.md"|\
               .github/workflows/build.yml|.github/workflows/release.yml|\
               src/main/resources/menus.yml|\
               src/main/java/com/antondev/crates/config/MenuConfig.java|\
@@ -103,21 +100,17 @@ jobs:
             esac
           done < <(git diff --name-only "$GUI_BASE_SHA"..HEAD)
 
-          # Guard the transactional/exact-state authorities explicitly even if future paths move.
           for protected in \
             src/main/java/com/antondev/crates/service/OpeningService.java \
             src/main/java/com/antondev/crates/service/ClaimService.java \
             src/main/java/com/antondev/crates/database/DatabaseService.java \
             src/main/java/com/antondev/crates/item/ItemSnapshotCodec.java \
             src/main/java/com/antondev/crates/service/RewardSelector.java; do
-            if git diff --quiet "$GUI_BASE_SHA"..HEAD -- "$protected"; then
-              :
-            else
+            if ! git diff --quiet "$GUI_BASE_SHA"..HEAD -- "$protected"; then
               echo "6.5 GUI-only stable authority changed: $protected" >&2
               exit 1
             fi
           done
-
           git diff --check "$GUI_BASE_SHA"..HEAD
 
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
@@ -140,24 +133,24 @@ jobs:
           import glob, pathlib, xml.etree.ElementTree as ET
           t=f=e=s=0
           reports=glob.glob('target/surefire-reports/TEST-*.xml')
-          if not reports: raise SystemExit('No JUnit XML results found')
-          for p in reports:
-              for c in ET.parse(p).getroot().iter('testcase'):
+          if not reports:
+              raise SystemExit('No JUnit XML results found')
+          for path in reports:
+              for case in ET.parse(path).getroot().iter('testcase'):
                   t += 1
-                  f += c.find('failure') is not None
-                  e += c.find('error') is not None
-                  s += c.find('skipped') is not None
-          if not t or f or e or s: raise SystemExit(f'tests={t} failures={f} errors={e} skipped={s}')
+                  f += case.find('failure') is not None
+                  e += case.find('error') is not None
+                  s += case.find('skipped') is not None
+          if not t or f or e or s:
+              raise SystemExit(f'tests={t} failures={f} errors={e} skipped={s}')
           pathlib.Path('target/TEST_SUMMARY.txt').write_text(
               f'TEST_COUNT={t} FAILURES={f} ERRORS={e} SKIPPED={s}\n')
-          print(f'Tests: {t}; failures=0; errors=0; skipped=0')
           PY
           JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"
           test -s "$JAR"
           jar tf "$JAR" > target/jar-contents.txt
-          for r in \
-            plugin.yml \
-            menus.yml \
+          for required in \
+            plugin.yml menus.yml \
             com/antondev/crates/PlexonCrates.class \
             com/antondev/crates/gui/GuiTheme.class \
             com/antondev/crates/gui/GuiLayout.class \
@@ -166,20 +159,15 @@ jobs:
             com/antondev/crates/service/OpeningService.class \
             com/antondev/crates/service/ClaimService.class \
             org/sqlite/JDBC.class; do
-            grep -qx "$r" target/jar-contents.txt
+            grep -qx "$required" target/jar-contents.txt
           done
           unzip -p "$JAR" plugin.yml | grep -F "version: '${PLUGIN_VERSION}'"
           unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
           unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -F "Implementation-Version: ${PLUGIN_VERSION}"
           javap -verbose -classpath "$JAR" com.antondev.crates.PlexonCrates | grep -F 'major version: 69'
           for prefix in \
-            'com/zpkdxgames/plexoncore/' \
-            'com/antondev/keys/' \
-            'net/milkbowl/vault/' \
-            'me/clip/placeholderapi/' \
-            'net/luckperms/api/' \
-            'org/bukkit/' \
-            'net/kyori/adventure/'; do
+            'com/zpkdxgames/plexoncore/' 'com/antondev/keys/' 'net/milkbowl/vault/' \
+            'me/clip/placeholderapi/' 'net/luckperms/api/' 'org/bukkit/' 'net/kyori/adventure/'; do
             if grep -q "^${prefix}" target/jar-contents.txt; then
               echo "Forbidden dependency shading: ${prefix}" >&2
               exit 1
@@ -227,14 +215,10 @@ jobs:
           set -euo pipefail
           gh release create "$RELEASE_TAG" \
             "target/PlexonCrates-${PLUGIN_VERSION}.jar" \
-            target/SHA256SUMS.txt \
-            target/TEST_SUMMARY.txt \
-            target/PROVENANCE.txt \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            target/SHA256SUMS.txt target/TEST_SUMMARY.txt target/PROVENANCE.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "PlexonCrates ${PLUGIN_VERSION}" \
-            --notes-file "releases/${PLUGIN_VERSION}.md" \
-            --latest
+            --notes-file "releases/${PLUGIN_VERSION}.md" --latest
 
       - name: Verify published stable release
         shell: bash
@@ -250,13 +234,10 @@ jobs:
           actual_assets="$(echo "$release_json" | jq -r '.assets[].name' | sort)"
           expected_assets="$(printf '%s\n' "PlexonCrates-${PLUGIN_VERSION}.jar" PROVENANCE.txt SHA256SUMS.txt TEST_SUMMARY.txt | sort)"
           diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets")
-          rm -rf published
-          mkdir published
+          rm -rf published && mkdir published
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir published \
             --pattern "PlexonCrates-${PLUGIN_VERSION}.jar" \
-            --pattern 'SHA256SUMS.txt' \
-            --pattern 'TEST_SUMMARY.txt' \
-            --pattern 'PROVENANCE.txt'
+            --pattern 'SHA256SUMS.txt' --pattern 'TEST_SUMMARY.txt' --pattern 'PROVENANCE.txt'
           test "$(find published -maxdepth 1 -type f | wc -l)" -eq 4
           (cd published && sha256sum --check SHA256SUMS.txt)
           grep -Fx "repository=$GITHUB_REPOSITORY" published/PROVENANCE.txt

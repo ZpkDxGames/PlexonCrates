@@ -1,4 +1,4 @@
-# PlexonCrates 3.0.0 | Created by Tonim (ZpkDxGames)
+# PlexonCrates 6.0.0 | Created by Tonim (ZpkDxGames)
 # Paper 26.2 / Java 25. All text uses MiniMessage, never legacy & colors.
 config-version: 3
 
@@ -76,10 +76,19 @@ holograms:
 particles:
   enabled: true
   type: END_ROD
-  interval-ticks: 20
-  count: 3
-  horizontal-spread: 0.32
-  vertical-spread: 0.18
+  # NONE, SPARKLE, RING, DOUBLE_RING, ORBIT, HELIX, PULSE, RISING, AURA
+  style: AURA
+  interval-ticks: 4
+  # Number emitted at each generated point. Geometry points are bounded separately.
+  count: 1
+  points: 12
+  radius: 0.65
+  height: 1.25
+  rotation-speed: 0.22
+  vertical-speed: 0.08
+  # Legacy spread values remain accepted for compatible configuration surfaces.
+  horizontal-spread: 0.0
+  vertical-spread: 0.0
   view-range: 32.0
 
 # Cosmetic work is intentionally bounded. Exceeding these limits staggers/defer
@@ -87,7 +96,9 @@ particles:
 performance:
   particles:
     max-locations-per-tick: 64
-    max-particles-per-tick: 256
+    max-particles-per-tick: 1000
+    max-per-crate-per-tick: 80
+    max-per-viewer-per-tick: 200
     stagger: true
 
 editing:

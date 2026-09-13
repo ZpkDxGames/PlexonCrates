@@ -90,9 +90,10 @@ public final class DefinitionPublisher {
                 new IllegalArgumentException("Actor name cannot be blank"));
 
         CompletableFuture<Publication> result = drafts.freezeCrate(actor, crateId)
-                .thenCompose(frozen -> primary(() -> prepare(frozen, name)))
-                .thenCompose(prepared -> repository.publish(request(prepared))
-                        .thenCompose(saved -> primary(() -> activate(prepared, saved))));
+        .thenCompose(frozen -> primary(() -> prepare(frozen, name)))
+        .thenCompose(prepared -> repository.publish(request(prepared))
+                .thenCompose(saved -> primary(() -> activate(prepared, saved))
+                        .thenCompose(publication -> mirror(prepared.publication(), publication))));
         result.whenComplete((ignored, error) -> {
             if (error != null) drafts.releasePublication(actor, crateId);
         });
@@ -121,33 +122,46 @@ public final class DefinitionPublisher {
     }
 
     private Publication activate(Prepared prepared, DatabaseService.PublishResult saved) {
-        requirePrimaryThread();
-        Crate published = prepared.publication().crate();
-        if (published.state() == CrateState.PUBLISHED) {
-            runtime.install(saved.runtimeRevision(), saved.definition().publishedRevision(), published,
-                    prepared.publication().payload());
-        } else {
-            runtime.remove(saved.runtimeRevision(), saved.definition().publishedRevision(), published.id());
-        }
-        plugin.recordDefinitionRevision(published.id(), saved.definition().publishedRevision());
-        drafts.published(published.id());
-        boolean yamlMirrorUpdated = true;
+    requirePrimaryThread();
+    Crate published = prepared.publication().crate();
+    if (published.state() == CrateState.PUBLISHED) {
+        runtime.install(saved.runtimeRevision(), saved.definition().publishedRevision(), published,
+                prepared.publication().payload());
+    } else {
+        runtime.remove(saved.runtimeRevision(), saved.definition().publishedRevision(), published.id());
+    }
+    plugin.recordDefinitionRevision(published.id(), saved.definition().publishedRevision());
+    drafts.published(published.id());
+    crates.installPublishedInMemory(prepared.publication());
+    try {
+        plugin.displays().refresh();
+    } catch (RuntimeException error) {
+        plugin.getLogger().log(Level.WARNING, "Published " + published.id()
+                + ", but display reconciliation needs attention", error);
+    }
+    return new Publication(published, saved.definition().publishedRevision(), saved.runtimeRevision(), false);
+}
+
+private CompletableFuture<Publication> mirror(
+        CrateRegistry.PreparedPublication prepared, Publication publication) {
+    return plugin.io().submit(() -> {
+        boolean updated = true;
         try {
-            crates.installPublished(prepared.publication());
+            crates.writePublishedMirror(prepared);
         } catch (Exception error) {
-            yamlMirrorUpdated = false;
-            plugin.getLogger().log(Level.WARNING, "Published " + published.id()
+            updated = false;
+            plugin.getLogger().log(Level.WARNING, "Published " + publication.crate().id()
                     + " from SQLite, but its optional YAML mirror could not be updated", error);
         }
-        try {
-            plugin.displays().refresh();
-        } catch (RuntimeException error) {
-            plugin.getLogger().log(Level.WARNING, "Published " + published.id()
-                    + ", but display reconciliation needs attention", error);
-        }
-        return new Publication(published, saved.definition().publishedRevision(), saved.runtimeRevision(),
-                yamlMirrorUpdated);
-    }
+        return new Publication(publication.crate(), publication.crateRevision(),
+                publication.runtimeRevision(), updated);
+    }).exceptionally(error -> {
+        plugin.getLogger().log(Level.WARNING, "Published " + publication.crate().id()
+                + " from SQLite, but its optional YAML mirror task could not be scheduled", error);
+        return new Publication(publication.crate(), publication.crateRevision(),
+                publication.runtimeRevision(), false);
+    });
+}
 
     private static DatabaseService.DefinitionBundle bundle(
             Crate crate, byte[] payload, KeyService keys) {

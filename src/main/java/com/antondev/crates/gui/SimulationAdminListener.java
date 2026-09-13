@@ -1,7 +1,12 @@
 package com.antondev.crates.gui;
 
 import com.antondev.crates.PlexonCrates;
+import com.antondev.crates.animation.IdleAnimationProfile;
+import com.antondev.crates.animation.IdleAnimationProfileStore;
+import com.antondev.crates.animation.OpeningAnimationProfile;
+import com.antondev.crates.animation.OpeningAnimationProfileStore;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.item.ExactItemInspector;
 import com.antondev.crates.model.Crate;
 import com.antondev.crates.model.CrateReward;
 import com.antondev.crates.service.CrateSimulationService;
@@ -26,6 +31,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -34,7 +40,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.jetbrains.annotations.NotNull;
 
-/** Additive, non-granting Phase 2 admin Test Lab. */
+/** Additive, non-granting Phase 2/6.0 admin Test Lab. */
 public final class SimulationAdminListener implements Listener {
     private static final int[] EDITOR_SLOTS = {43, 44};
     private static final int[] REPORT_SLOTS = {
@@ -46,11 +52,22 @@ public final class SimulationAdminListener implements Listener {
 
     private final PlexonCrates plugin;
     private final CrateSimulationService simulations;
+    private final ExactItemInspector exactItems = new ExactItemInspector();
+    private final OpeningAnimationProfileStore animationProfiles;
+    private final OpeningAnimationProfileEditor animationEditor;
+    private final OpeningProfilePresentationService profilePresentation;
+    private final IdleAnimationProfileStore idleProfiles;
+    private final IdleAnimationProfileEditor idleEditor;
     private final NamespacedKey marker;
 
     public SimulationAdminListener(PlexonCrates plugin, CrateSimulationService simulations) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.simulations = Objects.requireNonNull(simulations, "simulations");
+        this.animationProfiles = OpeningAnimationProfileStore.shared(plugin);
+        this.animationEditor = new OpeningAnimationProfileEditor(plugin, animationProfiles, this::openHub);
+        this.profilePresentation = OpeningProfilePresentationService.shared(plugin);
+        this.idleProfiles = IdleAnimationProfileStore.shared(plugin);
+        this.idleEditor = new IdleAnimationProfileEditor(plugin, idleProfiles, this::openHub);
         this.marker = new NamespacedKey(plugin, "phase2_simulation");
     }
 
@@ -68,38 +85,74 @@ public final class SimulationAdminListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
-    public void click(InventoryClickEvent event) {
+    /**
+     * Called only by {@link CrateMenuEventRouter}. The Bukkit event is cancelled and reduced
+     * to immutable identifiers immediately; every inventory transition runs on the next tick
+     * after the original event has returned.
+     */
+    public boolean routeClick(InventoryClickEvent event) {
+        if (idleEditor.routeClick(event)) return true;
+        if (animationEditor.routeClick(event)) return true;
         Inventory top = event.getView().getTopInventory();
         if (top.getHolder() instanceof MenuHolder holder && holder.kind() == MenuHolder.Kind.EDITOR) {
-            if (event.getClickedInventory() != top || !marked(event.getCurrentItem())) return;
+            if (event.getClickedInventory() != top || !marked(event.getCurrentItem())) return false;
             event.setCancelled(true);
-            if (event.getWhoClicked() instanceof Player player
-                    && player.hasPermission("plexoncrates.admin.simulate")) {
-                openHub(player, holder.crateId(), Mode.CONFIGURED);
-            }
-            return;
+            if (!(event.getWhoClicked() instanceof Player player)
+                    || !player.hasPermission("plexoncrates.admin.simulate")) return true;
+            UUID playerId = player.getUniqueId();
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player target = Bukkit.getPlayer(playerId);
+                if (target == null || !target.isOnline() || !currentHolder(target, holder)) return;
+                if (plugin.guiSessions().validate(target, holder, plugin.draftSessions())
+                        != GuiSessionService.Validation.CURRENT) return;
+                openHub(target, holder.crateId(), Mode.CONFIGURED);
+            });
+            return true;
         }
-        if (!(top.getHolder() instanceof SimulationHolder holder)) return;
+        if (!(top.getHolder() instanceof SimulationHolder holder)) return false;
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)
                 || !holder.playerId.equals(player.getUniqueId())
-                || event.getClickedInventory() != top) return;
-        route(player, holder, event.getRawSlot());
+                || event.getClickedInventory() != top) return true;
+        UUID playerId = player.getUniqueId();
+        int slot = event.getRawSlot();
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player target = Bukkit.getPlayer(playerId);
+            if (target == null || !target.isOnline() || !currentHolder(target, holder)) return;
+            route(target, holder, slot);
+        });
+        return true;
+    }
+
+    /** Test Lab/profile inventories never accept dragged items. */
+    public boolean routeDrag(InventoryDragEvent event) {
+        if (idleEditor.routeDrag(event)) return true;
+        if (animationEditor.routeDrag(event)) return true;
+        if (!(event.getView().getTopInventory().getHolder() instanceof SimulationHolder)) return false;
+        event.setCancelled(true);
+        return true;
     }
 
     private void route(Player player, SimulationHolder holder, int slot) {
         if (holder.view == View.HUB) {
             if (slot == 10) runDry(player, holder.snapshot);
-            else if (slot == 12) runSimulation(player, holder.snapshot, 1_000);
-            else if (slot == 13) runSimulation(player, holder.snapshot, CrateSimulationService.DEFAULT_SAMPLES);
-            else if (slot == 14) runSimulation(player, holder.snapshot, CrateSimulationService.MAX_SAMPLES);
+            else if (slot == 12) runSimulation(player, holder, 1_000);
+            else if (slot == 13) runSimulation(player, holder, CrateSimulationService.DEFAULT_SAMPLES);
+            else if (slot == 14) runSimulation(player, holder, CrateSimulationService.MAX_SAMPLES);
             else if (slot == 16) openHub(player, holder.crateId,
                     holder.snapshot.mode() == Mode.CONFIGURED ? Mode.PLAYER_CONTEXT : Mode.CONFIGURED);
+            else if (slot == 19) previewAnimation(player, holder);
+            else if (slot == 20) openExactItemAudit(player, holder);
+            else if (slot == 21) animationEditor.open(player, holder.crateId, holder.snapshot.mode());
             else if (slot == 22) backToEditor(player, holder.crateId);
+            else if (slot == 23) idleEditor.open(player, holder.crateId, holder.snapshot.mode());
             return;
         }
         if (holder.view == View.DRY) {
+            if (slot == 22) openHub(player, holder.crateId, holder.snapshot.mode());
+            return;
+        }
+        if (holder.view == View.EXACT_ITEM) {
             if (slot == 22) openHub(player, holder.crateId, holder.snapshot.mode());
             return;
         }
@@ -120,6 +173,8 @@ public final class SimulationAdminListener implements Listener {
             return;
         }
         Snapshot snapshot = snapshot(player, crate, mode);
+        OpeningAnimationProfile openingProfile = animationProfiles.resolve(crate.id(), crate.animation());
+        IdleAnimationProfile idleProfile = idleProfiles.resolve(crate.id(), plugin.settings().idleParticleProfile());
         SimulationHolder holder = new SimulationHolder(player.getUniqueId(), crate.id(), View.HUB, snapshot, null, 0);
         Inventory inventory = Bukkit.createInventory(holder, 27,
                 Text.parse("<gradient:#8CDFFF:#D8F6FF><bold>CRATE TEST LAB</bold></gradient> <dark_gray>•</dark_gray> <white>"
@@ -157,7 +212,116 @@ public final class SimulationAdminListener implements Listener {
                 line("Active", simulations.activeRequests()),
                 line("Queued", simulations.queuedRequests()),
                 Component.text("One bounded worker • no per-player task", NamedTextColor.DARK_GRAY))));
+        inventory.setItem(19, item(Material.AMETHYST_SHARD, "<light_purple><bold>Animation Preview</bold></light_purple>", List.of(
+                line("Effective style", openingProfile.style()),
+                line("Legacy crate type", crate.animation()),
+                line("Duration budget", openingProfile.totalTicks() + " ticks"),
+                Component.text("Uses a deterministic non-granting dry selection.", NamedTextColor.GRAY),
+                Component.text("No OpeningService/payment/journal path is entered.", NamedTextColor.GREEN))));
+        inventory.setItem(20, item(Material.KNOWLEDGE_BOOK, "<aqua><bold>Exact Item Audit</bold></aqua>", List.of(
+                Component.text("Inspect the exact item currently in your main hand.", NamedTextColor.GRAY),
+                Component.text("Shows native-byte fingerprint and safety diagnostics.", NamedTextColor.GRAY),
+                Component.text("The displayed item clone is never relored or rewritten.", NamedTextColor.GREEN))));
+        inventory.setItem(21, item(Material.REPEATER, "<gradient:#BCA7FF:#E8E0FF><bold>Opening Profiles</bold></gradient>", List.of(
+                line("Effective style", openingProfile.style()),
+                line("Particle budget", openingProfile.particleBudgetPerTick() + "/tick"),
+                Component.text("Edit style, stages, sound, particles and safe numeric budgets.", NamedTextColor.GRAY),
+                Component.text("Assign globally/per crate, clone profiles or reset defaults.", NamedTextColor.GRAY),
+                Component.text("Profile edits never touch rewards, keys, pity, limits or statistics.", NamedTextColor.GREEN))));
         inventory.setItem(22, item(Material.ARROW, "<gray>Back to Crate Editor</gray>", List.of()));
+        inventory.setItem(23, item(Material.END_ROD, "<gradient:#8CDFFF:#D8F6FF><bold>Idle Profiles</bold></gradient>", List.of(
+                line("Effective style", idleProfile.style()),
+                line("Particle", idleProfile.particle()),
+                line("Receiver range", idleProfile.receiverRange() + " blocks"),
+                Component.text("Edit geometry, particle and bounded per-crate/viewer budgets.", NamedTextColor.GRAY),
+                Component.text("Assign globally/per crate, clone, reset or render a one-frame preview.", NamedTextColor.GRAY),
+                Component.text("Idle presentation never enters the opening transaction path.", NamedTextColor.GREEN))));
+        player.openInventory(inventory);
+    }
+
+    private void previewAnimation(Player player, SimulationHolder source) {
+        if (!current(player, source.snapshot)) {
+            stale(player, source.snapshot);
+            return;
+        }
+        Crate crate = plugin.crates().find(source.crateId).orElse(null);
+        if (crate == null) {
+            player.closeInventory();
+            return;
+        }
+        final String selectedId;
+        try {
+            selectedId = simulations.dryRun(source.snapshot, stableSeed(source.snapshot, 17));
+        } catch (RuntimeException error) {
+            player.sendActionBar(Text.parse("<red>Animation preview unavailable:</red> <gray>"
+                    + safe(rootMessage(error)) + "</gray>"));
+            return;
+        }
+        CrateReward reward = crate.rewards().get(selectedId);
+        if (reward == null) {
+            player.sendActionBar(Text.parse("<red>The dry-selected reward is no longer available.</red>"));
+            return;
+        }
+        OpeningAnimationProfile profile = animationProfiles.resolve(crate.id(), crate.animation());
+        Runnable returnIfStillPreviewing = () -> {
+            if (!player.isOnline()) return;
+            Inventory top = player.getOpenInventory().getTopInventory();
+            if (top != null && top.getHolder() instanceof MenuHolder menu
+                    && menu.kind() == MenuHolder.Kind.OPENING) {
+                openHub(player, crate.id(), source.snapshot.mode());
+            }
+        };
+        player.sendActionBar(Text.parse("<aqua>Non-granting animation preview:</aqua> <white>"
+                + profile.style() + "</white>"));
+        if (!profile.animated()) {
+            showDry(player, source.snapshot, reward.id(), stableSeed(source.snapshot, 17));
+            return;
+        }
+        profilePresentation.present(player, crate, reward, profile, returnIfStillPreviewing);
+    }
+
+    private void openExactItemAudit(Player player, SimulationHolder source) {
+        if (!current(player, source.snapshot)) {
+            stale(player, source.snapshot);
+            return;
+        }
+        ItemStack held = player.getInventory().getItemInMainHand();
+        if (held == null || held.getType().isAir()) {
+            player.sendActionBar(Text.parse("<yellow>Hold the item you want to audit in your main hand.</yellow>"));
+            return;
+        }
+        ItemStack exactDisplay = held.clone();
+        ExactItemInspector.Diagnostics diagnostics;
+        try {
+            diagnostics = exactItems.inspect(held);
+        } catch (RuntimeException error) {
+            player.sendActionBar(Text.parse("<red>Exact item audit failed:</red> <gray>"
+                    + safe(rootMessage(error)) + "</gray>"));
+            return;
+        }
+        SimulationHolder holder = new SimulationHolder(player.getUniqueId(), source.crateId,
+                View.EXACT_ITEM, source.snapshot, null, 0);
+        Inventory inventory = Bukkit.createInventory(holder, 27,
+                Text.parse("<gradient:#8CDFFF:#D8F6FF><bold>EXACT ITEM AUDIT</bold></gradient>"));
+        holder.attach(inventory);
+        fill(inventory);
+
+        inventory.setItem(4, item(Material.WRITABLE_BOOK, "<white><bold>Native Snapshot</bold></white>", List.of(
+                line("Material", diagnostics.material()),
+                line("Captured quantity", diagnostics.capturedAmount()),
+                line("Serialized bytes", diagnostics.serializedBytes()),
+                line("SHA-256", diagnostics.shortFingerprint() + "…"),
+                line("Custom data", diagnostics.customDataPresent() ? "present" : "not detected"),
+                line("Container contents", diagnostics.containerContentsPresent() ? "present" : "not detected"),
+                line("Maximum stack", diagnostics.maximumStackSize()),
+                Component.empty(),
+                Component.text("Fingerprint is calculated from native Paper bytes.", NamedTextColor.GREEN))));
+        inventory.setItem(13, exactDisplay);
+        inventory.setItem(15, item(Material.SHIELD, "<green><bold>Integrity Contract</bold></green>", List.of(
+                Component.text("Slot 13 is an untouched clone of your held item.", NamedTextColor.GRAY),
+                Component.text("No PlexonCrates lore/name is appended to that clone.", NamedTextColor.GRAY),
+                Component.text("The audit consumes and grants nothing.", NamedTextColor.GREEN))));
+        inventory.setItem(22, item(Material.ARROW, "<gray>Back to Test Lab</gray>", List.of()));
         player.openInventory(inventory);
     }
 
@@ -201,24 +365,27 @@ public final class SimulationAdminListener implements Listener {
         player.openInventory(inventory);
     }
 
-    private void runSimulation(Player player, Snapshot snapshot, int samples) {
+    private void runSimulation(Player player, SimulationHolder holder, int samples) {
+        Snapshot snapshot = holder.snapshot;
         if (!current(player, snapshot)) {
             stale(player, snapshot);
             return;
         }
         long seed = stableSeed(snapshot, samples);
+        UUID playerId = player.getUniqueId();
         player.sendActionBar(Text.parse("<aqua>Running " + samples + " analytical rolls off-thread…</aqua>"));
         simulations.simulateAsync(snapshot, samples, seed).whenComplete((report, error) -> {
             if (!plugin.isEnabled()) return;
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!player.isOnline()) return;
+                Player target = Bukkit.getPlayer(playerId);
+                if (target == null || !target.isOnline() || !currentHolder(target, holder)) return;
                 if (error != null) {
-                    player.sendActionBar(Text.parse("<red>Simulation failed:</red> <gray>" + safe(rootMessage(error)) + "</gray>"));
-                    openHub(player, snapshot.crateId(), snapshot.mode());
-                } else if (!current(player, report.snapshot())) {
-                    stale(player, report.snapshot());
+                    target.sendActionBar(Text.parse("<red>Simulation failed:</red> <gray>" + safe(rootMessage(error)) + "</gray>"));
+                    openHub(target, snapshot.crateId(), snapshot.mode());
+                } else if (!current(target, report.snapshot())) {
+                    stale(target, report.snapshot());
                 } else {
-                    openReport(player, report, 0);
+                    openReport(target, report, 0);
                 }
             });
         });
@@ -290,6 +457,11 @@ public final class SimulationAdminListener implements Listener {
         return CrateSimulationService.isCurrent(snapshot, currentRevision(player, snapshot.crateId()));
     }
 
+    private static boolean currentHolder(Player player, InventoryHolder expected) {
+        Inventory top = player.getOpenInventory().getTopInventory();
+        return top != null && top.getHolder() == expected && top == expected.getInventory();
+    }
+
     private void stale(Player player, Snapshot snapshot) {
         player.sendActionBar(Text.parse("<yellow>Simulation result discarded: the crate revision changed.</yellow>"));
         openHub(player, snapshot.crateId(), snapshot.mode());
@@ -304,6 +476,9 @@ public final class SimulationAdminListener implements Listener {
         ItemStack item = item(Material.SPYGLASS, "<gradient:#72D9FF:#C8F3FF><bold>Test & Simulate</bold></gradient>", List.of(
                 Component.text("Dry-run reward selection without granting.", NamedTextColor.GRAY),
                 Component.text("Run bounded expected-vs-observed simulations.", NamedTextColor.GRAY),
+                Component.text("Preview opening presentation without entering the transaction path.", NamedTextColor.GRAY),
+                Component.text("Edit opening animation profiles with bounded safe parameters.", NamedTextColor.GRAY),
+                Component.text("Audit native exact-item payloads without mutation.", NamedTextColor.GRAY),
                 Component.text("No key, reward, journal or player state is mutated.", NamedTextColor.GREEN),
                 Component.text("Click to open the Test Lab.", NamedTextColor.DARK_GRAY)));
         ItemMeta meta = item.getItemMeta();
@@ -379,12 +554,11 @@ public final class SimulationAdminListener implements Listener {
         return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
     }
 
-    private static void fill(Inventory inventory) {
-        ItemStack filler = item(Material.BLACK_STAINED_GLASS_PANE, " ", List.of());
-        for (int slot = 0; slot < inventory.getSize(); slot++) inventory.setItem(slot, filler);
+    private void fill(Inventory inventory) {
+        GuiChromeRenderer.render(inventory, plugin.menusConfig());
     }
 
-    private enum View { HUB, DRY, REPORT }
+    private enum View { HUB, DRY, EXACT_ITEM, REPORT }
 
     private static final class SimulationHolder implements InventoryHolder {
         private final UUID playerId;

@@ -8,10 +8,13 @@ import com.antondev.crates.config.MenuConfig;
 import com.antondev.crates.config.Messages;
 import com.antondev.crates.config.PluginSettings;
 import com.antondev.crates.config.Text;
+import com.antondev.crates.gui.CrateMenuEventRouter;
 import com.antondev.crates.gui.GuiSessionService;
 import com.antondev.crates.gui.MenuService;
 import com.antondev.crates.gui.EditSessionService;
 import com.antondev.crates.gui.AdminMenuService;
+import com.antondev.crates.gui.SimulationAdminListener;
+import com.antondev.crates.gui.player.PlayerCrateCommandRouter;
 import com.antondev.crates.integration.core.CoreBridge;
 import com.antondev.crates.integration.core.CoreBridgeFactory;
 import com.antondev.crates.listener.CrateListener;
@@ -19,12 +22,18 @@ import com.antondev.crates.database.DatabaseService;
 import com.antondev.crates.database.DefinitionRepository;
 import com.antondev.crates.database.LegacyMigration;
 import com.antondev.crates.service.CrateRegistry;
+import com.antondev.crates.service.CrateDraftCreationService;
+import com.antondev.crates.service.CrateDeletionService;
+import com.antondev.crates.service.CrateTransferService;
+import com.antondev.crates.service.AsyncIoService;
+import com.antondev.crates.service.CrateSimulationService;
 import com.antondev.crates.service.ClaimService;
 import com.antondev.crates.service.PortableCrateService;
 import com.antondev.crates.service.DefinitionPublisher;
 import com.antondev.crates.service.DisplayService;
 import com.antondev.crates.service.DraftSessionService;
 import com.antondev.crates.service.KeyService;
+import com.antondev.crates.service.KeyMutationService;
 import com.antondev.crates.service.LocationStore;
 import com.antondev.crates.service.MilestoneProgressService;
 import com.antondev.crates.service.OpeningLog;
@@ -41,6 +50,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.time.Instant;
@@ -61,16 +71,22 @@ public class PlexonCrates extends JavaPlugin {
     private Messages messages;
     private MenuConfig menusConfig;
     private CrateRegistry crates;
+    private AsyncIoService io;
     private RuntimeRegistry runtime;
     private LocationStore locations;
     private KeyService keys;
+    private KeyMutationService keyMutations;
     private StatsStore statistics;
     private RewardStateService rewardStates;
     private MilestoneProgressService milestoneProgress;
     private DraftSessionService draftSessions;
+    private CrateDraftCreationService draftCreation;
+    private CrateDeletionService crateDeletions;
+    private CrateTransferService crateTransfers;
     private DefinitionPublisher definitionPublisher;
     private DisplayService displays;
     private GuiSessionService guiSessions;
+    private CrateSimulationService simulations;
     private MenuService menus;
     private EditSessionService editSessions;
     private AdminMenuService adminMenus;
@@ -92,6 +108,7 @@ public class PlexonCrates extends JavaPlugin {
             String databaseFile = bootstrap.getString("database.file", "data/plexoncrates.db");
             int maximumQueuedWrites = bootstrap.getInt("database.maximum-queued-writes", 4096);
             database = new DatabaseService(getLogger(), safeDataPath(databaseFile), maximumQueuedWrites);
+            io = new AsyncIoService();
             claims = new ClaimService(this);
             claims.recover();
             portables = new PortableCrateService(this);
@@ -127,15 +144,21 @@ public class PlexonCrates extends JavaPlugin {
                 crates.apply(CrateRegistry.withDurableDrafts(getDataFolder().toPath().resolve("crates"),
                         crates.snapshot(), durableDrafts));
             }
+            crates.configureMirrorWriter(io, getLogger());
             statistics = new StatsStore(database.loadStatistics());
             rewardStates = new RewardStateService(database.loadRewardStates());
             milestoneProgress = new MilestoneProgressService(database.loadMilestoneStates());
             openingLog = new OpeningLog(this);
             displays = new DisplayService(this);
             draftSessions = new DraftSessionService(database, this::draftStateChanged);
+            draftCreation = new CrateDraftCreationService(this);
+            crateDeletions = new CrateDeletionService(this);
+            crateTransfers = new CrateTransferService(this);
+            keyMutations = new KeyMutationService(this);
             definitionPublisher = new DefinitionPublisher(this, definitionRepository, crates, keys, runtime,
                     draftSessions);
             guiSessions = new GuiSessionService();
+            simulations = new CrateSimulationService();
             editSessions = new EditSessionService(this);
             adminMenus = new AdminMenuService(this);
             menus = new MenuService(this);
@@ -144,7 +167,12 @@ public class PlexonCrates extends JavaPlugin {
             getServer().getServicesManager().register(PlexonCratesApi.class, new PlexonCratesApiImpl(this), this,
                     ServicePriority.Normal);
 
-            getServer().getPluginManager().registerEvents(menus, this);
+            PlayerCrateCommandRouter playerRouter = new PlayerCrateCommandRouter(this);
+            SimulationAdminListener simulationMenus = new SimulationAdminListener(this, simulations);
+            getServer().getPluginManager().registerEvents(
+                    new CrateMenuEventRouter(this, menus, playerRouter, simulationMenus), this);
+            getServer().getPluginManager().registerEvents(simulationMenus, this);
+            getServer().getPluginManager().registerEvents(playerRouter, this);
             getServer().getPluginManager().registerEvents(editSessions, this);
             getServer().getPluginManager().registerEvents(new CrateListener(this), this);
             getServer().getPluginManager().registerEvents(wand, this);
@@ -174,7 +202,10 @@ public class PlexonCrates extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        if (menus != null) menus.closeAll();
+        if (menus != null) {
+            menus.closeAll();
+            menus.stop();
+        }
         if (editSessions != null) editSessions.stop();
         if (draftSessions != null) {
             try {
@@ -185,89 +216,195 @@ public class PlexonCrates extends JavaPlugin {
             draftSessions.clear();
         }
         if (guiSessions != null) guiSessions.clear();
+        if (simulations != null) simulations.close();
         if (coreBridge != null) coreBridge.unregister();
         getServer().getServicesManager().unregisterAll(this);
         if (displays != null) displays.stop();
         if (openings != null) openings.clear();
         if (openingLog != null) openingLog.close();
+        if (crates != null) {
+            try {
+                crates.awaitMirrorWrites().get(3, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception error) {
+                getLogger().log(Level.WARNING, "Not every queued crate YAML mirror write finished before shutdown", error);
+            }
+        }
+        if (io != null) io.close();
         if (database != null) database.close();
     }
 
+    /** Synchronous compatibility path used by startup/integration callers. Live admin surfaces use requestReload(). */
     public boolean reloadFor(CommandSender sender) {
         try {
-            PluginSettings nextSettings = PluginSettings.load(file("config.yml"));
-            Messages nextMessages = Messages.load(file("messages.yml"));
-            MenuConfig nextMenus = MenuConfig.load(file("menus.yml"));
             DatabaseService.PublishedSnapshot canonical = definitionRepository.loadPublished().join();
             List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts = definitionRepository.loadDrafts().join();
-            CrateRegistry validationRegistry;
-            if (canonical.definitions().isEmpty()) {
-                Path crateDirectory = getDataFolder().toPath().resolve("crates");
-                validationRegistry = new CrateRegistry(crateDirectory,
-                        CrateRegistry.withDurableDrafts(crateDirectory,
-                                CrateRegistry.load(crateDirectory), durableDrafts));
-            } else {
-                validationRegistry = CrateRegistry.fromPublished(getDataFolder().toPath().resolve("crates"),
-                        canonical.definitions(), durableDrafts);
-            }
-            CrateRegistry.Snapshot nextCrates = validationRegistry.snapshot();
-            for (LocationStore.Link link : locations.all()) {
-                if (validationRegistry.find(link.crateId()).isEmpty()) {
-                    throw new IllegalArgumentException("Linked location references a crate missing from the reload: " + link.crateId());
-                }
-            }
-            KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(
-                    definitionRepository.loadKeys().join(), getLogger());
-            KeyService.Snapshot nextKeys = loadKeySnapshot(nextSettings.fallbackFile(), canonicalKeys);
-            if (!nextSettings.databaseFile().equals(settings.databaseFile())) {
-                throw new IllegalArgumentException("database.file cannot be changed by reload; restart the server after moving data safely");
-            }
-
-            PluginSettings previousSettings = settings;
-            Messages previousMessages = messages;
-            MenuConfig previousMenus = menusConfig;
-            CrateRegistry.Snapshot previousCrates = crates.snapshot();
-            KeyService.Snapshot previousKeys = keys.snapshot();
-            Map<String, ItemStack> previousKeyCache = keys.lastKnownGoodSnapshot();
-            try {
-                settings = nextSettings;
-                messages = nextMessages;
-                menusConfig = nextMenus;
-                crates.apply(nextCrates);
-                keys.apply(nextKeys, mergeKeyCaches(canonicalKeys));
-                for (var crate : crates.ordered()) {
-                    List<String> issues = crates.publishingIssues(crate.id(), keys);
-                    if (!issues.isEmpty()) throw new IllegalArgumentException("crates/" + crate.id()
-                            + ".yml cannot remain published: " + String.join(" ", issues));
-                }
-                menus.closeAll();
-                displays.refresh();
-                if (!canonical.definitions().isEmpty()) {
-                    definitionRevisions.clear();
-                    canonical.definitions().forEach(definition ->
-                            definitionRevisions.put(definition.crateId().toLowerCase(Locale.ROOT),
-                                    definition.publishedRevision()));
-                }
-            } catch (Exception error) {
-                settings = previousSettings;
-                messages = previousMessages;
-                menusConfig = previousMenus;
-                crates.apply(previousCrates);
-                keys.apply(previousKeys, previousKeyCache);
-                try { displays.refresh(); }
-                catch (RuntimeException refreshError) { error.addSuppressed(refreshError); }
-                throw error;
-            }
-            if (coreBridge != null) {
-                coreBridge.registerStarting();
-                updateCoreHealth();
-            }
-            messages.send(sender, "reloaded");
-            return true;
+            List<DatabaseService.StoredKeyDefinition> keyRows = definitionRepository.loadKeys().join();
+            ReloadPreparation prepared = prepareReload(canonical, durableDrafts, keyRows,
+                    List.copyOf(locations.all()));
+            return applyReload(sender, prepared);
         } catch (Exception error) {
             configError(sender, error);
             return false;
         }
+    }
+
+    /** Starts a live reload and returns to the caller immediately. */
+    public void requestReload(CommandSender sender) {
+        requestReload(sender, null);
+    }
+
+    /**
+     * Live reload entry point. Every database/file read and YAML parse is completed away from
+     * the server thread. Only the validated immutable state swap and Bukkit-facing reconciliation
+     * return to the primary thread. The optional callback runs only after a successful reload.
+     */
+    public void requestReload(CommandSender sender, Runnable onSuccess) {
+        if (!isEnabled()) return;
+        List<LocationStore.Link> locationSnapshot = List.copyOf(locations.all());
+        sender.sendMessage(Text.parse("<gray>Reloading PlexonCrates configuration…</gray>"));
+        var publishedFuture = definitionRepository.loadPublished();
+        var draftsFuture = definitionRepository.loadDrafts();
+        var keyRowsFuture = definitionRepository.loadKeys();
+        CompletableFuture.allOf(publishedFuture, draftsFuture, keyRowsFuture).whenComplete((ignored, databaseFailure) -> {
+            if (!isEnabled()) return;
+            if (databaseFailure != null) {
+                getServer().getScheduler().runTask(this, () -> {
+                    if (isEnabled()) configError(sender, completionException(databaseFailure));
+                });
+                return;
+            }
+            DatabaseService.PublishedSnapshot canonical = publishedFuture.getNow(null);
+            List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts = draftsFuture.getNow(List.of());
+            List<DatabaseService.StoredKeyDefinition> keyRows = keyRowsFuture.getNow(List.of());
+            io.submit(() -> prepareReload(canonical, durableDrafts, keyRows, locationSnapshot))
+                    .whenComplete((prepared, preparationFailure) -> {
+                        if (!isEnabled()) return;
+                        getServer().getScheduler().runTask(this, () -> {
+                            if (!isEnabled()) return;
+                            if (preparationFailure != null) {
+                                configError(sender, completionException(preparationFailure));
+                                return;
+                            }
+                            try {
+                                if (applyReload(sender, prepared) && onSuccess != null && isEnabled()) onSuccess.run();
+                            } catch (Exception error) {
+                                configError(sender, error);
+                            }
+                        });
+                    });
+        });
+    }
+
+    private ReloadPreparation prepareReload(
+            DatabaseService.PublishedSnapshot canonical,
+            List<com.antondev.crates.domain.draft.DefinitionDraft> durableDrafts,
+            List<DatabaseService.StoredKeyDefinition> keyRows,
+            List<LocationStore.Link> locationSnapshot) throws Exception {
+        if (canonical == null) throw new IllegalStateException("Published definition snapshot was unavailable");
+        PluginSettings nextSettings = PluginSettings.load(file("config.yml"));
+        Messages nextMessages = Messages.load(file("messages.yml"));
+        MenuConfig nextMenus = MenuConfig.load(file("menus.yml"));
+        Path crateDirectory = getDataFolder().toPath().resolve("crates");
+        CrateRegistry validationRegistry;
+        if (canonical.definitions().isEmpty()) {
+            validationRegistry = new CrateRegistry(crateDirectory,
+                    CrateRegistry.withDurableDrafts(crateDirectory,
+                            CrateRegistry.load(crateDirectory), durableDrafts));
+        } else {
+            validationRegistry = CrateRegistry.fromPublished(crateDirectory, canonical.definitions(), durableDrafts);
+        }
+        CrateRegistry.Snapshot nextCrates = validationRegistry.snapshot();
+        for (LocationStore.Link link : locationSnapshot) {
+            if (validationRegistry.find(link.crateId()).isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Linked location references a crate missing from the reload: " + link.crateId());
+            }
+        }
+        KeyService.CanonicalSnapshot canonicalKeys = KeyService.fromDatabase(keyRows, getLogger());
+        KeyService.Snapshot nextKeys = loadKeySnapshot(nextSettings.fallbackFile(), canonicalKeys);
+        Map<String, ItemStack> nextKeyCache = mergeKeyCaches(canonicalKeys);
+        return new ReloadPreparation(nextSettings, nextMessages, nextMenus, canonical,
+                validationRegistry, nextCrates, nextKeys, nextKeyCache);
+    }
+
+    private boolean applyReload(CommandSender sender, ReloadPreparation prepared) throws Exception {
+        PluginSettings nextSettings = prepared.settings();
+        Messages nextMessages = prepared.messages();
+        MenuConfig nextMenus = prepared.menus();
+        DatabaseService.PublishedSnapshot canonical = prepared.canonical();
+        CrateRegistry validationRegistry = prepared.validationRegistry();
+        CrateRegistry.Snapshot nextCrates = prepared.crates();
+        KeyService.Snapshot nextKeys = prepared.keys();
+        Map<String, ItemStack> nextKeyCache = prepared.keyCache();
+        if (!nextSettings.databaseFile().equals(settings.databaseFile())) {
+            throw new IllegalArgumentException(
+                    "database.file cannot be changed by reload; restart the server after moving data safely");
+        }
+
+        PluginSettings previousSettings = settings;
+        Messages previousMessages = messages;
+        MenuConfig previousMenus = menusConfig;
+        CrateRegistry.Snapshot previousCrates = crates.snapshot();
+        KeyService.Snapshot previousKeys = keys.snapshot();
+        Map<String, ItemStack> previousKeyCache = keys.lastKnownGoodSnapshot();
+        try {
+            settings = nextSettings;
+            messages = nextMessages;
+            menusConfig = nextMenus;
+            crates.apply(nextCrates);
+            keys.apply(nextKeys, nextKeyCache);
+            for (var crate : validationRegistry.ordered()) {
+                List<String> issues = validationRegistry.publishingIssues(crate.id(), keys);
+                if (!issues.isEmpty()) throw new IllegalArgumentException("crates/" + crate.id()
+                        + ".yml cannot remain published: " + String.join(" ", issues));
+            }
+            menus.closeAll();
+            displays.refresh();
+            if (!canonical.definitions().isEmpty()) {
+                definitionRevisions.clear();
+                canonical.definitions().forEach(definition ->
+                        definitionRevisions.put(definition.crateId().toLowerCase(Locale.ROOT),
+                                definition.publishedRevision()));
+            }
+        } catch (Exception error) {
+            settings = previousSettings;
+            messages = previousMessages;
+            menusConfig = previousMenus;
+            crates.apply(previousCrates);
+            keys.apply(previousKeys, previousKeyCache);
+            try { displays.refresh(); }
+            catch (RuntimeException refreshError) { error.addSuppressed(refreshError); }
+            throw error;
+        }
+        if (coreBridge != null) {
+            coreBridge.registerStarting();
+            updateCoreHealthAsync();
+        }
+        messages.send(sender, "reloaded");
+        return true;
+    }
+
+    private record ReloadPreparation(
+            PluginSettings settings,
+            Messages messages,
+            MenuConfig menus,
+            DatabaseService.PublishedSnapshot canonical,
+            CrateRegistry validationRegistry,
+            CrateRegistry.Snapshot crates,
+            KeyService.Snapshot keys,
+            Map<String, ItemStack> keyCache) {
+        private ReloadPreparation {
+            keyCache = Map.copyOf(keyCache);
+        }
+    }
+
+    private static Exception completionException(Throwable error) {
+        Throwable current = error;
+        while ((current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException) && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current instanceof Exception exception ? exception : new IllegalStateException(current);
     }
 
     public void configError(CommandSender sender, Exception error) {
@@ -276,36 +413,67 @@ public class PlexonCrates extends JavaPlugin {
         getLogger().log(Level.WARNING, "Configuration change rejected: " + reason, error);
     }
 
+    /** Synchronous compatibility path retained for integration callers. Live admin surfaces use requestValidation(). */
     public boolean validateFor(CommandSender sender) {
         try {
-            PluginSettings.load(file("config.yml"));
-            Messages.load(file("messages.yml"));
-            MenuConfig.load(file("menus.yml"));
-            CrateRegistry.Snapshot nextCrates = CrateRegistry.load(getDataFolder().toPath().resolve("crates"));
-            KeyService.Snapshot nextKeys = KeyService.load(file(settings.fallbackFile()));
-            for (var crate : nextCrates.crates().values()) {
-                for (String keyId : crate.acceptedKeyIds()) {
-                    if (!nextKeys.definitions().containsKey(keyId)) {
-                        throw new IllegalArgumentException("crates/" + crate.id() + ".yml references missing key " + keyId);
-                    }
-                }
-            }
-            for (LocationStore.Link link : locations.all()) {
-                if (!nextCrates.crates().containsKey(link.crateId())) {
-                    throw new IllegalArgumentException("Database location references missing crate " + link.crateId());
-                }
-            }
-            messages.send(sender, "validation-passed", Text.value("crates", nextCrates.crates().size()),
-                    Text.value("keys", nextKeys.definitions().size()),
-                    Text.value("rewards", nextCrates.crates().values().stream().mapToInt(crate -> crate.rewards().size()).sum()));
+            ValidationSnapshot result = validateConfiguration(List.copyOf(locations.all()));
+            renderValidationSuccess(sender, result);
             return true;
         } catch (Exception error) {
-            String reason = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-            messages.send(sender, "validation-failed", Text.value("error", reason));
-            getLogger().log(Level.WARNING, "Validation failed: " + reason, error);
+            renderValidationFailure(sender, error);
             return false;
         }
     }
+
+    /** Runs configuration/crate/key validation on the bounded plugin I/O pool. */
+    public void requestValidation(CommandSender sender) {
+        if (!isEnabled()) return;
+        List<LocationStore.Link> locationSnapshot = List.copyOf(locations.all());
+        sender.sendMessage(Text.parse("<gray>Validating PlexonCrates configuration…</gray>"));
+        io.submit(() -> validateConfiguration(locationSnapshot)).whenComplete((result, failure) -> {
+            if (!isEnabled()) return;
+            getServer().getScheduler().runTask(this, () -> {
+                if (!isEnabled()) return;
+                if (failure == null) renderValidationSuccess(sender, result);
+                else renderValidationFailure(sender, completionException(failure));
+            });
+        });
+    }
+
+    private ValidationSnapshot validateConfiguration(List<LocationStore.Link> locationSnapshot) throws Exception {
+        PluginSettings candidateSettings = PluginSettings.load(file("config.yml"));
+        Messages.load(file("messages.yml"));
+        MenuConfig.load(file("menus.yml"));
+        CrateRegistry.Snapshot candidateCrates = CrateRegistry.load(getDataFolder().toPath().resolve("crates"));
+        KeyService.Snapshot candidateKeys = KeyService.load(file(candidateSettings.fallbackFile()));
+        for (var crate : candidateCrates.crates().values()) {
+            for (String keyId : crate.acceptedKeyIds()) {
+                if (!candidateKeys.definitions().containsKey(keyId)) {
+                    throw new IllegalArgumentException("crates/" + crate.id() + ".yml references missing key " + keyId);
+                }
+            }
+        }
+        for (LocationStore.Link link : locationSnapshot) {
+            if (!candidateCrates.crates().containsKey(link.crateId())) {
+                throw new IllegalArgumentException("Database location references missing crate " + link.crateId());
+            }
+        }
+        int rewards = candidateCrates.crates().values().stream().mapToInt(crate -> crate.rewards().size()).sum();
+        return new ValidationSnapshot(candidateCrates.crates().size(), candidateKeys.definitions().size(), rewards);
+    }
+
+    private void renderValidationSuccess(CommandSender sender, ValidationSnapshot result) {
+        messages.send(sender, "validation-passed", Text.value("crates", result.crates()),
+                Text.value("keys", result.keys()), Text.value("rewards", result.rewards()));
+    }
+
+    private void renderValidationFailure(CommandSender sender, Exception error) {
+        String reason = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        messages.send(sender, "validation-failed", Text.value("error", reason));
+        getLogger().log(Level.WARNING, "Validation failed: " + reason, error);
+    }
+
+    private record ValidationSnapshot(int crates, int keys, int rewards) {}
 
     public void backupFor(CommandSender sender) {
         if (!sender.hasPermission("plexoncrates.admin.backup")) {
@@ -337,28 +505,58 @@ public class PlexonCrates extends JavaPlugin {
             messages.send(sender, "no-permission");
             return;
         }
-        long onlineLocations = locations.all().stream().filter(link -> link.position().loadedWorld() != null).count();
-        long drafts = crates.all().stream().filter(crate -> crate.state() == com.antondev.crates.domain.crate.CrateState.DRAFT).count();
-        int pendingJournals;
+        long onlineLocations = locations.all().stream()
+                .filter(link -> link.position().loadedWorld() != null).count();
+        long drafts = crates.all().stream()
+                .filter(crate -> crate.state() == com.antondev.crates.domain.crate.CrateState.DRAFT).count();
+        boolean signerServiceReady = portables != null && portables.ready();
+        sender.sendMessage(Text.parse("<gray>Collecting PlexonCrates diagnostics…</gray>"));
+        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+            DiagnosticDatabaseSnapshot diagnostic = collectDiagnosticDatabaseSnapshot();
+            if (!isEnabled()) return;
+            getServer().getScheduler().runTask(this, () -> {
+                if (!isEnabled()) return;
+                renderDiagnostics(sender, onlineLocations, drafts, signerServiceReady, diagnostic);
+            });
+        });
+    }
+
+    private DiagnosticDatabaseSnapshot collectDiagnosticDatabaseSnapshot() {
+        int pendingJournals = -1;
         DatabaseService.JournalHealth journalHealth = null;
         List<DatabaseService.JournalDiagnostic> journalEntries = List.of();
         try {
             pendingJournals = database.pendingJournalCount();
             journalHealth = database.journalHealth();
             journalEntries = database.journalDiagnostics(5);
-        } catch (Exception error) { pendingJournals = -1; }
+        } catch (Exception error) {
+            getLogger().log(Level.WARNING, "Could not read opening-journal diagnostics", error);
+        }
         DatabaseService.ClaimCounts claimCounts = null;
-        try { claimCounts = database.claimCounts().join(); }
-        catch (Exception error) { getLogger().log(Level.WARNING, "Could not read Claim Inbox diagnostics", error); }
+        try {
+            claimCounts = database.claimCounts().join();
+        } catch (Exception error) {
+            getLogger().log(Level.WARNING, "Could not read Claim Inbox diagnostics", error);
+        }
         DatabaseService.PortableIssueCounts portableCounts = null;
-        boolean portableSignerHealthy = portables != null && portables.ready();
+        boolean portableSecretPresent = false;
         try {
             portableCounts = database.portableIssueCounts().join();
-            portableSignerHealthy = portableSignerHealthy && database.portableSecretPresent().join();
+            portableSecretPresent = database.portableSecretPresent().join();
         } catch (Exception error) {
             getLogger().log(Level.WARNING, "Could not read portable-crate diagnostics", error);
-            portableSignerHealthy = false;
         }
+        return new DiagnosticDatabaseSnapshot(pendingJournals, journalHealth, journalEntries,
+                claimCounts, portableCounts, portableSecretPresent);
+    }
+
+    private void renderDiagnostics(CommandSender sender, long onlineLocations, long drafts,
+                                   boolean signerServiceReady, DiagnosticDatabaseSnapshot diagnostic) {
+        DatabaseService.JournalHealth journalHealth = diagnostic.journalHealth();
+        List<DatabaseService.JournalDiagnostic> journalEntries = diagnostic.journalEntries();
+        DatabaseService.ClaimCounts claimCounts = diagnostic.claimCounts();
+        DatabaseService.PortableIssueCounts portableCounts = diagnostic.portableCounts();
+        boolean portableSignerHealthy = signerServiceReady && diagnostic.portableSecretPresent();
         sender.sendMessage(Text.parse("<gradient:#CAD5E5:#FFFFFF><bold>PlexonCrates Diagnostics</bold></gradient>"));
         sender.sendMessage(Text.parse("<gray>Plugin:</gray> <white>" + getPluginMeta().getVersion() + "</white> <dark_gray>•</dark_gray> <gray>Paper API:</gray> <white>26.2</white> <dark_gray>•</dark_gray> <gray>Java:</gray> <white>" + Runtime.version().feature() + "</white>"));
         if (coreBridge != null) {
@@ -380,7 +578,7 @@ public class PlexonCrates extends JavaPlugin {
         sender.sendMessage(Text.parse("<gray>Key detail:</gray> <white>" + keys.providerDiagnostic() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Unresolved:</gray> <white>" + keys.unresolved().size() + "</white> <dark_gray>•</dark_gray> <gray>Collisions:</gray> <white>" + keys.collisions().size() + "</white>"));
         sender.sendMessage(Text.parse("<gray>Locations:</gray> <white>" + locations.all().size() + "</white> <dark_gray>(" + onlineLocations + " online)</dark_gray>"));
-        sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + pendingJournals + "</white>"));
+        sender.sendMessage(Text.parse("<gray>Database schema:</gray> <white>" + DatabaseService.SCHEMA_VERSION + "</white> <dark_gray>•</dark_gray> <gray>Queue:</gray> <white>" + database.queuedWrites() + "</white> <dark_gray>•</dark_gray> <gray>Pending journals:</gray> <white>" + diagnostic.pendingJournals() + "</white>"));
         if (journalHealth != null) {
             sender.sendMessage(Text.parse("<gray>Journal recovery:</gray> <white>manual=" + journalHealth.manualReview()
                     + ", pre-payment=" + journalHealth.paymentNotConsumed() + ", payment-committed="
@@ -422,20 +620,57 @@ public class PlexonCrates extends JavaPlugin {
                 + (openings.pendingCount() + draftSessions.activeSessions()) + "</white>"));
     }
 
+    private record DiagnosticDatabaseSnapshot(
+            int pendingJournals,
+            DatabaseService.JournalHealth journalHealth,
+            List<DatabaseService.JournalDiagnostic> journalEntries,
+            DatabaseService.ClaimCounts claimCounts,
+            DatabaseService.PortableIssueCounts portableCounts,
+            boolean portableSecretPresent) {
+        private DiagnosticDatabaseSnapshot {
+            journalEntries = List.copyOf(journalEntries);
+        }
+    }
+
     private void updateCoreHealth() {
         if (coreBridge == null || !coreBridge.available()) return;
         try {
-            int pendingJournals = database == null ? 0 : database.pendingJournalCount();
-            if (pendingJournals > 0) {
-                coreBridge.markDegraded("Crate runtime is ready; " + pendingJournals
-                        + " opening journal entr" + (pendingJournals == 1 ? "y requires" : "ies require")
-                        + " manual review");
-                return;
-            }
-            coreBridge.markReady("Crate engine, API, key registry, runtime snapshot and writer are ready");
+            applyCoreHealth(database == null ? 0 : database.pendingJournalCount(), null);
         } catch (Exception error) {
+            applyCoreHealth(-1, error);
+        }
+    }
+
+    private void updateCoreHealthAsync() {
+        if (coreBridge == null || !coreBridge.available() || !isEnabled()) return;
+        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+            int pending = -1;
+            Exception failure = null;
+            try {
+                pending = database == null ? 0 : database.pendingJournalCount();
+            } catch (Exception error) {
+                failure = error;
+            }
+            int finalPending = pending;
+            Exception finalFailure = failure;
+            if (!isEnabled()) return;
+            getServer().getScheduler().runTask(this, () -> {
+                if (isEnabled()) applyCoreHealth(finalPending, finalFailure);
+            });
+        });
+    }
+
+    private void applyCoreHealth(int pendingJournals, Exception failure) {
+        if (coreBridge == null || !coreBridge.available()) return;
+        if (failure != null) {
             coreBridge.markDegraded("Crate runtime is ready; health probe failed: "
-                    + error.getClass().getSimpleName());
+                    + failure.getClass().getSimpleName());
+        } else if (pendingJournals > 0) {
+            coreBridge.markDegraded("Crate runtime is ready; " + pendingJournals
+                    + " opening journal entr" + (pendingJournals == 1 ? "y requires" : "ies require")
+                    + " manual review");
+        } else {
+            coreBridge.markReady("Crate engine, API, key registry, runtime snapshot and writer are ready");
         }
     }
 
@@ -499,13 +734,18 @@ public class PlexonCrates extends JavaPlugin {
     public Messages messages() { return messages; }
     public MenuConfig menusConfig() { return menusConfig; }
     public CrateRegistry crates() { return crates; }
+    public AsyncIoService io() { return io; }
     public RuntimeRegistry runtime() { return runtime; }
     public LocationStore locations() { return locations; }
     public KeyService keys() { return keys; }
+    public KeyMutationService keyMutations() { return keyMutations; }
     public StatsStore statistics() { return statistics; }
     public RewardStateService rewardStates() { return rewardStates; }
     public MilestoneProgressService milestoneProgress() { return milestoneProgress; }
     public DraftSessionService draftSessions() { return draftSessions; }
+    public CrateDraftCreationService draftCreation() { return draftCreation; }
+    public CrateDeletionService crateDeletions() { return crateDeletions; }
+    public CrateTransferService crateTransfers() { return crateTransfers; }
     public DefinitionPublisher definitionPublisher() { return definitionPublisher; }
     public DisplayService displays() { return displays; }
     public GuiSessionService guiSessions() { return guiSessions; }

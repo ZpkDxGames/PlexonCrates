@@ -5,6 +5,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
+import com.antondev.crates.animation.IdleAnimationProfile;
+import com.antondev.crates.animation.IdleAnimationStyle;
 import com.antondev.crates.domain.crate.AnimationType;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -50,13 +52,21 @@ public record PluginSettings(
         boolean hologramSeeThrough,
         boolean particlesEnabled,
         Particle particle,
+        IdleAnimationStyle particleStyle,
         int particleInterval,
         int particleCount,
         double particleHorizontalSpread,
         double particleVerticalSpread,
         double particleViewRange,
+        double particleRadius,
+        double particleHeight,
+        int particlePoints,
+        double particleRotationSpeed,
+        double particleVerticalSpeed,
         int particleMaxLocationsPerTick,
         int particleMaxParticlesPerTick,
+        int particleMaxPerCratePerTick,
+        int particleMaxPerViewerPerTick,
         boolean particleStagger,
         int inputTimeoutSeconds,
         int sessionTimeoutMinutes,
@@ -94,8 +104,11 @@ public record PluginSettings(
         int period = integer(c, "opening.animation-period-ticks", 1, 20);
         int particleInterval = integer(c, "particles.interval-ticks", 1, 1_200);
         int particleCount = integer(c, "particles.count", 0, 1_000);
+        int particlePoints = integer(c, "particles.points", 12, 1, 128);
         int particleMaxLocations = integer(c, "performance.particles.max-locations-per-tick", 64, 1, 100_000);
         int particleMaxParticles = integer(c, "performance.particles.max-particles-per-tick", 256, 1, 100_000);
+        int particleMaxPerCrate = integer(c, "performance.particles.max-per-crate-per-tick", 80, 1, 10_000);
+        int particleMaxPerViewer = integer(c, "performance.particles.max-per-viewer-per-tick", 200, 1, 10_000);
         int lineWidth = integer(c, "holograms.line-width", 20, 2_000);
         float volume = (float) number(c, "opening.sound-volume", 0, 10);
         float pitch = (float) number(c, "opening.sound-pitch", 0, 2);
@@ -109,6 +122,7 @@ public record PluginSettings(
         } catch (IllegalArgumentException error) {
             throw new IllegalArgumentException("Unknown particles.type", error);
         }
+        IdleAnimationStyle particleStyle = IdleAnimationStyle.parse(c.getString("particles.style", "AURA"));
         String fallback = required(c, "plexonkeys.fallback-file");
         if (!fallback.matches("[A-Za-z0-9._-]+\\.yml")) {
             throw new IllegalArgumentException("plexonkeys.fallback-file must be a simple .yml filename");
@@ -144,10 +158,14 @@ public record PluginSettings(
                 duration, period, openingSound, finishSound, volume, pitch,
                 c.getBoolean("holograms.enabled"), number(c, "holograms.vertical-offset", -10, 10),
                 number(c, "holograms.view-range", 1, 256), lineWidth, c.getBoolean("holograms.shadowed"),
-                c.getBoolean("holograms.see-through"), c.getBoolean("particles.enabled"), particle, particleInterval,
-                particleCount, number(c, "particles.horizontal-spread", 0, 10),
+                c.getBoolean("holograms.see-through"), c.getBoolean("particles.enabled"), particle, particleStyle,
+                particleInterval, particleCount, number(c, "particles.horizontal-spread", 0, 10),
                 number(c, "particles.vertical-spread", 0, 10), number(c, "particles.view-range", 1, 256),
-                particleMaxLocations, particleMaxParticles, c.getBoolean("performance.particles.stagger", true),
+                number(c, "particles.radius", 0.65, 0, 8), number(c, "particles.height", 1.25, 0, 8),
+                particlePoints, number(c, "particles.rotation-speed", 0.22, -4, 4),
+                number(c, "particles.vertical-speed", 0.08, -4, 4),
+                particleMaxLocations, particleMaxParticles, particleMaxPerCrate, particleMaxPerViewer,
+                c.getBoolean("performance.particles.stagger", true),
                 integer(c, "editing.input-timeout-seconds", 10, 300),
                 integer(c, "editing.session-timeout-minutes", 1, 240), deniedMaterials,
                 lower(c.getStringList("locations.allowed-worlds")), c.getBoolean("integrations.placeholderapi"),
@@ -159,6 +177,12 @@ public record PluginSettings(
                 c.getBoolean("features.selective-opening", true),
                 c.getBoolean("features.alternative-rewards", true),
                 c.getBoolean("features.portable-crates", true));
+    }
+
+    public IdleAnimationProfile idleParticleProfile() {
+        return new IdleAnimationProfile(particleStyle, particle, particleRadius, particleHeight, particlePoints,
+                particleRotationSpeed, particleVerticalSpeed, Math.max(1, particleCount), particleViewRange,
+                particleMaxPerCratePerTick, particleMaxPerViewerPerTick);
     }
 
     public boolean allows(World world) {
@@ -197,6 +221,11 @@ public record PluginSettings(
             throw new IllegalArgumentException(path + " must be between " + min + " and " + max);
         }
         return value;
+    }
+
+    private static double number(YamlConfiguration c, String path, double defaultValue, double min, double max) {
+        if (!c.contains(path)) return defaultValue;
+        return number(c, path, min, max);
     }
 
     private static Set<String> lower(java.util.List<String> values) {

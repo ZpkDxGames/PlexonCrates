@@ -1,0 +1,21 @@
+config-version: 1
+
+# Migration-safe default: existing particles.* settings remain authoritative
+# until an administrator explicitly assigns a named idle profile.
+global-profile: legacy
+
+profiles:
+  default:
+    style: AURA
+    particle: END_ROD
+    radius: 0.65
+    height: 1.25
+    points: 12
+    rotation-speed: 0.22
+    vertical-speed: 0.08
+    particles-per-point: 1
+    receiver-range: 32.0
+    max-per-crate-per-tick: 80
+    max-per-viewer-per-tick: 200
+
+crate-profiles: {}

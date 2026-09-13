@@ -1,0 +1,231 @@
+name: Prerelease
+
+on:
+  push:
+    branches:
+      - 'release/*-rc.*'
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: plexoncrates-prerelease-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ACCEPTED_RC4_SHA: '1d4118673f250af72cecbec3ab91eb81cfa8830d'
+  PHASE2_SHA: 'ec9623857dd09437c29a251c4f1fb01f5b4fd98e'
+  ACCEPTED_PHASE3_SHA: 'f1bcb27186489b47c8692d126e0b1974e25881fa'
+  RELIABILITY_SHA: 'c1b84c76430fd7196acc6ea4d45976e1b0740786'
+  ROLLBACK_TAG: 'v5.0.0'
+  ROLLBACK_SHA: 'f24e3f7f942f7c886352e71c7105af499828096f'
+  PLEXONCORE_SHA256: '61d625a717da9f46ee9231e1970d84b4c317ae12cf4090cdf7c9d39b6a1a9baf'
+  PLEXONKEYS_VERSION: '2.0.0-rc.2'
+  PLEXONKEYS_SHA256: '0cc87449754b7e5dec34e57091f856f2bfa98a3c256eb41617b510911cbe0ee4'
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact prerelease source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Provision immutable Plexon API dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          core="${RUNNER_TEMP}/PlexonCore-2.0.4.jar"
+          keys="${RUNNER_TEMP}/PlexonKeys-${PLEXONKEYS_VERSION}.jar"
+          curl --fail --location --silent --show-error --retry 3 -o "$core" \
+            https://github.com/ZpkDxGames/PlexonCore/releases/download/v2.0.4/PlexonCore-2.0.4.jar
+          echo "${PLEXONCORE_SHA256}  $core" | sha256sum --check
+          curl --fail --location --silent --show-error --retry 3 -o "$keys" \
+            "https://github.com/ZpkDxGames/PlexonKeys/releases/download/v${PLEXONKEYS_VERSION}/PlexonKeys-${PLEXONKEYS_VERSION}.jar"
+          echo "${PLEXONKEYS_SHA256}  $keys" | sha256sum --check
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile="$core" -DgroupId=com.zpkdxgames -DartifactId=PlexonCore -Dversion=2.0.4 -Dpackaging=jar -DgeneratePom=true
+          mvn -B -ntp org.apache.maven.plugins:maven-install-plugin:3.1.4:install-file \
+            -Dfile="$keys" -DgroupId=com.antondev -DartifactId=PlexonKeys \
+            -Dversion="$PLEXONKEYS_VERSION" -Dpackaging=jar -DgeneratePom=true
+
+      - name: Resolve version and prove prerelease boundary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)"
+          test -n "$version"
+          [[ "$version" == *-rc.* ]] || { echo 'Prerelease version must contain an -rc.* suffix.' >&2; exit 1; }
+          test "$GITHUB_REF_NAME" = "release/$version"
+          echo "PLUGIN_VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v${version}" >> "$GITHUB_ENV"
+          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=paper.version)" = '26.2.build.121-stable'
+          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexoncore.version)" = '2.0.4'
+          test "$(mvn -q -DforceStdout help:evaluate -Dexpression=plexonkeys.version)" = "$PLEXONKEYS_VERSION"
+          test "$(git rev-list -n 1 "$ROLLBACK_TAG")" = "$ROLLBACK_SHA"
+          git merge-base --is-ancestor "$ROLLBACK_SHA" HEAD
+          git merge-base --is-ancestor "$PHASE2_SHA" HEAD
+          git merge-base --is-ancestor "$RELIABILITY_SHA" HEAD
+          git merge-base --is-ancestor "$ACCEPTED_PHASE3_SHA" HEAD
+          git merge-base --is-ancestor "$ACCEPTED_RC4_SHA" HEAD
+          test -s "releases/${version}.md"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v${version}" >/dev/null 2>&1; then
+            echo "v${version} already exists; refusing to move a prerelease tag." >&2
+            exit 1
+          fi
+          if gh release view "v${version}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v${version} release already exists; refusing replacement." >&2
+            exit 1
+          fi
+
+      - name: Test and package exact prerelease source
+        run: mvn -B -ntp clean verify
+
+      - name: Verify exact distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, pathlib, xml.etree.ElementTree as ET
+          t=f=e=s=0
+          reports=glob.glob('target/surefire-reports/TEST-*.xml')
+          if not reports: raise SystemExit('No JUnit XML results found')
+          for p in reports:
+              for c in ET.parse(p).getroot().iter('testcase'):
+                  t+=1; f+=c.find('failure') is not None; e+=c.find('error') is not None; s+=c.find('skipped') is not None
+          if not t or f or e or s: raise SystemExit(f'tests={t} failures={f} errors={e} skipped={s}')
+          pathlib.Path('target/TEST_SUMMARY.txt').write_text(f'TEST_COUNT={t} FAILURES={f} ERRORS={e} SKIPPED={s}\n')
+          print(f'Tests: {t}; failures=0; errors=0; skipped=0')
+          PY
+          JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"
+          test -s "$JAR"
+          jar tf "$JAR" > target/jar-contents.txt
+          for r in \
+            plugin.yml \
+            com/antondev/crates/PlexonCrates.class \
+            com/antondev/crates/service/OpeningService.class \
+            com/antondev/crates/service/ClaimService.class \
+            com/antondev/crates/service/CrateSimulationService.class \
+            com/antondev/crates/integration/plexonkeys/PlexonKeysServiceAdapter.class \
+            com/antondev/crates/api/event/CrateOpenEvent.class \
+            org/sqlite/JDBC.class; do
+            grep -qx "$r" target/jar-contents.txt
+          done
+          unzip -p "$JAR" plugin.yml | grep -F "version: '${PLUGIN_VERSION}'"
+          unzip -p "$JAR" plugin.yml | grep -F "api-version: '26.2'"
+          unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' | grep -F "Implementation-Version: ${PLUGIN_VERSION}"
+          javap -verbose -classpath "$JAR" com.antondev.crates.PlexonCrates | grep -F 'major version: 69'
+          for prefix in \
+            'com/zpkdxgames/plexoncore/' \
+            'com/antondev/keys/' \
+            'net/milkbowl/vault/' \
+            'me/clip/placeholderapi/' \
+            'net/luckperms/api/' \
+            'org/bukkit/' \
+            'net/kyori/adventure/'; do
+            if grep -q "^${prefix}" target/jar-contents.txt; then
+              echo "Forbidden dependency shading: ${prefix}" >&2
+              exit 1
+            fi
+          done
+          (cd target && sha256sum "PlexonCrates-${PLUGIN_VERSION}.jar" > SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
+
+      - name: Build prerelease evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR="target/PlexonCrates-${PLUGIN_VERSION}.jar"
+          size="$(stat -c '%s' "$JAR")"
+          digest="$(sha256sum "$JAR" | awk '{print $1}')"
+          {
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "source_sha=$GITHUB_SHA"
+            echo "accepted_rc4_head=$ACCEPTED_RC4_SHA"
+            echo "phase2_ancestor=$PHASE2_SHA"
+            echo "accepted_phase3=$ACCEPTED_PHASE3_SHA"
+            echo "reliability_ancestor=$RELIABILITY_SHA"
+            echo "version=$PLUGIN_VERSION"
+            echo 'java=25'
+            echo 'java_major=69'
+            echo 'paper=26.2.build.121-stable'
+            echo 'plexoncore=2.0.4'
+            echo "plexoncore_sha256=$PLEXONCORE_SHA256"
+            echo "plexonkeys=$PLEXONKEYS_VERSION"
+            echo "plexonkeys_sha256=$PLEXONKEYS_SHA256"
+            echo 'database_schema=4'
+            echo "rollback_tag=$ROLLBACK_TAG"
+            echo "rollback_sha=$ROLLBACK_SHA"
+            echo "jar_size=$size"
+            echo "jar_sha256=$digest"
+            echo 'runtime_certification=PENDING'
+          } > target/PROVENANCE.txt
+
+      - name: Publish GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" \
+            "target/PlexonCrates-${PLUGIN_VERSION}.jar" \
+            target/SHA256SUMS.txt \
+            target/TEST_SUMMARY.txt \
+            target/PROVENANCE.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "PlexonCrates ${PLUGIN_VERSION}" \
+            --notes-file "releases/${PLUGIN_VERSION}.md" \
+            --prerelease
+
+      - name: Verify published prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')"
+          test "$tag_sha" = "$GITHUB_SHA"
+          release_json="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isPrerelease,targetCommitish,assets)"
+          echo "$release_json" | jq -e --arg tag "$RELEASE_TAG" --arg sha "$GITHUB_SHA" \
+            '.tagName == $tag and .isPrerelease == true and .targetCommitish == $sha' >/dev/null
+          actual_assets="$(echo "$release_json" | jq -r '.assets[].name' | sort)"
+          expected_assets="$(printf '%s\n' "PlexonCrates-${PLUGIN_VERSION}.jar" PROVENANCE.txt SHA256SUMS.txt TEST_SUMMARY.txt | sort)"
+          diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets")
+          rm -rf published
+          mkdir published
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir published \
+            --pattern "PlexonCrates-${PLUGIN_VERSION}.jar" \
+            --pattern 'SHA256SUMS.txt' \
+            --pattern 'TEST_SUMMARY.txt' \
+            --pattern 'PROVENANCE.txt'
+          test "$(find published -maxdepth 1 -type f | wc -l)" -eq 4
+          (cd published && sha256sum --check SHA256SUMS.txt)
+          grep -Fx "repository=$GITHUB_REPOSITORY" published/PROVENANCE.txt
+          grep -Fx "source_sha=$GITHUB_SHA" published/PROVENANCE.txt
+          grep -Fx "version=$PLUGIN_VERSION" published/PROVENANCE.txt
+          grep -Fx "rollback_tag=$ROLLBACK_TAG" published/PROVENANCE.txt
+          grep -Fx "rollback_sha=$ROLLBACK_SHA" published/PROVENANCE.txt
+          grep -Fx 'runtime_certification=PENDING' published/PROVENANCE.txt
+          grep -Eq '^TEST_COUNT=[1-9][0-9]* FAILURES=0 ERRORS=0 SKIPPED=0$' published/TEST_SUMMARY.txt
+
+      - name: Upload prerelease verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlexonCrates-prerelease-${{ github.sha }}
+          path: |
+            published/PlexonCrates-*.jar
+            published/SHA256SUMS.txt
+            published/TEST_SUMMARY.txt
+            published/PROVENANCE.txt
+          if-no-files-found: error

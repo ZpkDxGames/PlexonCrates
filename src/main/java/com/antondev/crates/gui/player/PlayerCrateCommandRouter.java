@@ -1,6 +1,8 @@
 package com.antondev.crates.gui.player;
 
 import com.antondev.crates.PlexonCrates;
+import com.antondev.crates.gui.GuiSessionService;
+import com.antondev.crates.gui.MenuHolder;
 import com.antondev.crates.service.KeyPaymentPlanner;
 import java.util.Locale;
 import java.util.Set;
@@ -14,21 +16,22 @@ import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 /**
- * Routes the ordinary player command surface into the Phase 3 product UI.
- *
- * <p>It intentionally does not delegate InventoryOpenEvent. Direct MenuService
- * calls, physical crate interactions, portable previews and admin compatibility
- * surfaces therefore retain their accepted Pipeline 4 behavior.</p>
+ * Owns only the ordinary player command surface for the Phase 3/6.0 product UI.
+ * Inventory lifecycle is centralized by CrateMenuEventRouter.
  */
 public final class PlayerCrateCommandRouter implements Listener {
     private static final Set<String> ROOTS = Set.of("crates", "crate", "plexoncrates");
 
     private final PlexonCrates plugin;
     private final PlayerCrateMenuService menus;
+    private final PlayerKeyMenuService keyMenus;
+    private final PlayerHistoryMenuService historyMenus;
 
     public PlayerCrateCommandRouter(PlexonCrates plugin) {
         this.plugin = plugin;
         this.menus = new PlayerCrateMenuService(plugin);
+        this.keyMenus = new PlayerKeyMenuService(plugin, menus);
+        this.historyMenus = new PlayerHistoryMenuService(plugin, menus);
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -42,11 +45,29 @@ public final class PlayerCrateCommandRouter implements Listener {
         if (parts.length == 1) {
             if (!canPreview(player)) return;
             event.setCancelled(true);
-            menus.openHall(player, 0);
+            openHall(player);
             return;
         }
 
         String action = parts[1].toLowerCase(Locale.ROOT);
+        if (action.equals("keys")) {
+            if (!canPreview(player) || parts.length > 3) return;
+            int page = parsePositivePage(parts);
+            if (page < 1) return;
+            event.setCancelled(true);
+            keyMenus.openKeys(player, page - 1);
+            return;
+        }
+
+        if (action.equals("history")) {
+            if (!player.hasPermission("plexoncrates.history") || parts.length > 3) return;
+            int page = parsePositivePage(parts);
+            if (page < 1) return;
+            event.setCancelled(true);
+            historyMenus.openHistory(player, page - 1);
+            return;
+        }
+
         if (action.equals("claim")) {
             if (!player.hasPermission("plexoncrates.claim") && !player.hasPermission("plexoncrates.use")) return;
             if (!plugin.settings().claimInboxEnabled()) return;
@@ -71,7 +92,7 @@ public final class PlayerCrateCommandRouter implements Listener {
             if (!canPreview(player)) return;
             if (parts.length == 2) {
                 event.setCancelled(true);
-                menus.openHall(player, 0);
+                openHall(player);
                 return;
             }
             if (parts.length == 3) {
@@ -84,7 +105,7 @@ public final class PlayerCrateCommandRouter implements Listener {
         }
 
         // /crates <crate> remains a convenient direct preview route. Explicit
-        // opening/admin/history/key commands continue through CratesCommand.
+        // opening/admin commands continue through CratesCommand.
         if (parts.length == 2 && canPreview(player)) {
             plugin.runtime().find(parts[1]).ifPresent(crate -> {
                 event.setCancelled(true);
@@ -93,19 +114,57 @@ public final class PlayerCrateCommandRouter implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    /** Routed by the single registered crate inventory listener. */
     public void click(InventoryClickEvent event) {
+        if (keyMenus.routeClick(event)) return;
+        if (historyMenus.routeClick(event)) return;
+        if (event.getView().getTopInventory().getHolder() instanceof MenuHolder holder
+                && holder.kind() == MenuHolder.Kind.PLAYER_HALL) {
+            MenuHolder.Action action = holder.action(event.getRawSlot());
+            if (action != null && (action.id().equals("keys") || action.id().equals("history"))) {
+                event.setCancelled(true);
+                if (event.getWhoClicked() instanceof Player player
+                        && event.getClickedInventory() == event.getView().getTopInventory()
+                        && plugin.guiSessions().validate(player, holder, plugin.draftSessions())
+                                == GuiSessionService.Validation.CURRENT) {
+                    if (action.id().equals("keys")) keyMenus.openKeys(player, 0);
+                    else if (player.hasPermission("plexoncrates.history")) historyMenus.openHistory(player, 0);
+                }
+                return;
+            }
+        }
         menus.click(event);
+        if (event.getWhoClicked() instanceof Player player) decorateHall(player);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    /** Routed by the single registered crate inventory listener. */
     public void close(InventoryCloseEvent event) {
         menus.close(event);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    /** Routed by the single registered crate inventory listener. */
     public void quit(PlayerQuitEvent event) {
         menus.quit(event);
+    }
+
+    private void openHall(Player player) {
+        menus.openHall(player, 0);
+        decorateHall(player);
+    }
+
+    private void decorateHall(Player player) {
+        keyMenus.decorateHall(player);
+        if (player.hasPermission("plexoncrates.history")) historyMenus.decorateHall(player);
+    }
+
+    private static int parsePositivePage(String[] parts) {
+        if (parts.length < 3) return 1;
+        try {
+            int page = Integer.parseInt(parts[2]);
+            return page < 1 ? -1 : page;
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
     }
 
     private static boolean canPreview(Player player) {

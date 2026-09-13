@@ -49,45 +49,50 @@ class ReleasePromotionGateArchitectureTest {
     }
 
     @Test
-    void stablePublisherCannotRunForPrereleaseVersionOrWithoutRuntimePassEvidence() throws Exception {
+    void stablePublisherRequiresExactFinalVersionMainBoundaryAndAcceptedGuiBase() throws Exception {
         String source = Files.readString(RELEASE);
-        assertTrue(source.contains("Stable version must not contain a prerelease suffix."));
-        assertTrue(source.contains("releases/${PLUGIN_VERSION}.runtime-certification.env"));
-        assertTrue(source.contains("grep -Fx 'RUNTIME_CERTIFICATION=PASS' \"$runtime_file\""));
-        assertTrue(source.contains("grep -Fx 'PAPER_VERSION=26.2.build.121-stable' \"$runtime_file\""));
-        assertTrue(source.contains("CERTIFIED_RC_TAG="));
-        assertTrue(source.contains("CERTIFIED_RC_SHA="));
-        assertTrue(source.contains("CERTIFIED_RC_JAR_SHA256="));
+        assertTrue(source.contains("test \"$version\" = '6.5.0'"));
+        assertTrue(source.contains("test \"$GITHUB_SHA\" = \"$main_sha\""));
+        assertTrue(source.contains("GUI_BASE_TAG: 'v6.0.0-rc.1'"));
+        assertTrue(source.contains("GUI_BASE_SHA: 'cb3ba1aed8ab2b89bdbaec39271ad30ee07e1c28'"));
+        assertTrue(source.contains("git merge-base --is-ancestor \"$GUI_BASE_SHA\" HEAD"));
+        assertTrue(source.contains("git merge-base --is-ancestor \"$GUI_SOURCE_EQUIVALENT_HEAD\" HEAD"));
     }
 
     @Test
-    void stablePublisherVerifiesPublishedRcIdentityAndExactBinaryDigest() throws Exception {
+    void stablePublisherRejectsAuthorityOrOutOfScopeDrift() throws Exception {
         String source = Files.readString(RELEASE);
-        assertTrue(source.contains("git rev-list -n 1 \"$certified_rc_tag\""));
-        assertTrue(source.contains("git merge-base --is-ancestor \"$certified_rc_sha\" HEAD"));
-        assertTrue(source.contains("gh release view \"$certified_rc_tag\""));
-        assertTrue(source.contains(".isPrerelease == true"));
-        assertTrue(source.contains("gh release download \"$certified_rc_tag\""));
-        assertTrue(source.contains("certified_rc_jar_sha256"));
-        assertTrue(source.contains("sha256sum --check"));
+        assertTrue(source.contains("git diff --name-only \"$GUI_BASE_SHA\"..HEAD"));
+        assertTrue(source.contains("6.5 GUI-only stable scope violation"));
+        assertTrue(source.contains("6.5 GUI-only stable authority changed"));
+        assertTrue(source.contains("src/main/java/com/antondev/crates/service/OpeningService.java"));
+        assertTrue(source.contains("src/main/java/com/antondev/crates/service/ClaimService.java"));
+        assertTrue(source.contains("src/main/java/com/antondev/crates/database/DatabaseService.java"));
+        assertTrue(source.contains("src/main/java/com/antondev/crates/item/ItemSnapshotCodec.java"));
     }
 
     @Test
-    void stablePublisherRejectsProductionCodeDriftAfterCertifiedRc() throws Exception {
+    void stablePublisherRebuildsPublishesAndRedownloadsExactArtifact() throws Exception {
         String source = Files.readString(RELEASE);
-        assertTrue(source.contains("git diff --name-only \"$certified_rc_sha\"..HEAD"));
-        assertTrue(source.contains("pom.xml|\"releases/${PLUGIN_VERSION}.md\"|\"releases/${PLUGIN_VERSION}.runtime-certification.env\"|docs/REVAMP_5_1_IMPLEMENTATION_STATUS.md"));
-        assertTrue(source.contains("Stable candidate changed non-promotion path after certified RC"));
+        assertTrue(source.contains("mvn -B -ntp clean verify"));
+        assertTrue(source.contains("PlexonCrates-${PLUGIN_VERSION}.jar"));
+        assertTrue(source.contains("sha256sum --check SHA256SUMS.txt"));
+        assertTrue(source.contains("gh release create \"$RELEASE_TAG\""));
+        assertTrue(source.contains("--latest"));
+        assertTrue(source.contains("gh release download \"$RELEASE_TAG\""));
+        assertTrue(source.contains(".isPrerelease == false"));
     }
 
     @Test
-    void stableProvenanceRecordsCertifiedRcAndRuntimePass() throws Exception {
+    void stableProvenanceTruthfullyRecordsGuiOnlyVerificationWithoutInventingRuntimePass() throws Exception {
         String source = Files.readString(RELEASE);
-        assertTrue(source.contains("echo \"certified_rc_tag=$CERTIFIED_RC_TAG\""));
-        assertTrue(source.contains("echo \"certified_rc_sha=$CERTIFIED_RC_SHA\""));
-        assertTrue(source.contains("echo \"certified_rc_jar_sha256=$CERTIFIED_RC_JAR_SHA256\""));
-        assertTrue(source.contains("echo 'runtime_certification=PASS'"));
-        assertFalse(source.contains("echo 'runtime_certification=NOT_EXECUTED'"));
-        assertTrue(source.contains("grep -Fx 'runtime_certification=PASS' published/PROVENANCE.txt"));
+        assertTrue(source.contains("echo 'release_kind=STABLE'"));
+        assertTrue(source.contains("echo \"gui_base_tag=$GUI_BASE_TAG\""));
+        assertTrue(source.contains("echo \"gui_base_sha=$GUI_BASE_SHA\""));
+        assertTrue(source.contains("echo 'runtime_certification=NOT_EXECUTED_GUI_ONLY_RELEASE'"));
+        assertTrue(source.contains("grep -Fx 'runtime_certification=NOT_EXECUTED_GUI_ONLY_RELEASE' published/PROVENANCE.txt"));
+        assertFalse(source.contains("RUNTIME_CERTIFICATION=PASS"));
+        assertFalse(source.contains("runtime_certification=PASS"));
+        assertFalse(source.contains("CERTIFIED_RC_TAG"));
     }
 }
